@@ -1,0 +1,8 @@
+[timeouts]
+line_lost_ms = 2000
+gcs_link_lost_ms = 5000
+pixhawk_heartbeat_lost_ms = 2000
+mission_timeout_ms = 300000
+
+[battery]
+low_voltage_v = 10.5

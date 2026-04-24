@@ -1,0 +1,7 @@
+[serial]
+device = "/dev/serial0"
+baudrate = 115200
+
+[mavlink]
+system_id = 1
+component_id = 191

@@ -1,0 +1,8 @@
+[gcs]
+ip = "192.168.1.100"
+telemetry_port = 14550
+command_port = 14551
+video_port = 5600
+
+[telemetry]
+send_interval_ms = 1000

@@ -1,0 +1,8 @@
+[mission]
+grid_rows = 0
+grid_cols = 0
+marker_count = 0
+snake_start_direction = "east"
+
+[takeoff]
+target_altitude_m = 1.2

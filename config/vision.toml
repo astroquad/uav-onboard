@@ -1,0 +1,12 @@
+[camera]
+device = 0
+width = 640
+height = 480
+fps = 30
+
+[line]
+offset_normalized = false
+intersection_threshold = 0.8
+
+[aruco]
+dictionary = "DICT_4X4_50"
