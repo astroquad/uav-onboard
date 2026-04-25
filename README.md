@@ -18,6 +18,18 @@ GCS communication, safety handling, and headless logging.
 
 ## Build
 
+On a clean Raspberry Pi OS Lite 64-bit install, set up build dependencies first:
+
+```bash
+bash scripts/setup_rpi_dependencies.sh
+```
+
+Optional development tools:
+
+```bash
+bash scripts/setup_rpi_dependencies.sh --with-dev-tools
+```
+
 ```bash
 mkdir build
 cd build
