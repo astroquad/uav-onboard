@@ -6,18 +6,43 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+add_library(onboard_core STATIC
+    src/common/NetworkConfig.cpp
+    src/common/Time.cpp
+    src/network/UdpTelemetrySender.cpp
+    src/protocol/TelemetryMessage.cpp
+)
+
+target_include_directories(onboard_core PUBLIC
+    src
+)
+
+if(WIN32)
+    target_link_libraries(onboard_core PUBLIC ws2_32)
+endif()
+
 add_executable(uav_onboard
     src/main.cpp
 )
 
-target_include_directories(uav_onboard PRIVATE
-    src
-)
+target_link_libraries(uav_onboard PRIVATE onboard_core)
 
 option(BUILD_TOOLS "Build onboard development tools" ON)
 if(BUILD_TOOLS)
+    find_package(OpenCV QUIET COMPONENTS core imgcodecs videoio)
+
+    if(OpenCV_FOUND)
+        add_executable(camera_preview
+            tools/camera_preview.cpp
+            src/vision/OpenCvCameraSource.cpp
+        )
+        target_include_directories(camera_preview PRIVATE src)
+        target_link_libraries(camera_preview PRIVATE ${OpenCV_LIBS})
+    else()
+        message(WARNING "OpenCV was not found; camera_preview will not be built.")
+    endif()
+
     foreach(tool
-        camera_preview
         line_detector_tuner
         aruco_detector_tester
         replay_vision
