@@ -53,10 +53,19 @@ rpicam-still -t 1000 --nopreview -o test_data/images/camera_smoke.jpg
 
 ## Video Stream Bring-Up
 
-Start `uav_gcs_video` on the laptop first, then run the onboard streamer:
+Start `uav_gcs_video` on the laptop first, then run the onboard streamer.
+With the default broadcast address in `config/network.toml`, `video_streamer`
+listens for the GCS discovery beacon and then streams to the discovered laptop
+IP by unicast:
 
 ```bash
 ./build/video_streamer --source rpicam --config config
+```
+
+If discovery is blocked by the network, override the destination explicitly:
+
+```bash
+./build/video_streamer --source rpicam --config config --gcs-ip <laptop-ip>
 ```
 
 For a local sender smoke test without the Pi camera:
@@ -104,5 +113,6 @@ Use `--count 0` or omit `--count` to send telemetry until interrupted.
 3. On the Raspberry Pi, build `uav-onboard`.
 4. On the Raspberry Pi, validate the camera with `camera_preview`.
 5. On the laptop, start `uav_gcs_video`.
-6. On the Raspberry Pi, run `video_streamer` and confirm the camera feed appears.
+6. On the Raspberry Pi, run `video_streamer` and confirm it prints
+   `discovered GCS video receiver at <ip>:5600`.
 7. On the Raspberry Pi, run `uav_onboard` and confirm telemetry appears in GCS.
