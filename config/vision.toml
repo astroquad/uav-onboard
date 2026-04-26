@@ -4,6 +4,13 @@ width = 640
 height = 480
 fps = 30
 
+[video]
+width = 640
+height = 480
+fps = 15
+jpeg_quality = 70
+port = 5600
+
 [line]
 offset_normalized = false
 intersection_threshold = 0.8

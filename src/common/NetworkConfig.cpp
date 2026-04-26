@@ -1,37 +1,9 @@
 #include "common/NetworkConfig.hpp"
 
-#include <algorithm>
-#include <cctype>
-#include <fstream>
+#include <toml++/toml.hpp>
 
 namespace onboard::common {
 namespace {
-
-std::string trim(std::string value)
-{
-    const auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
-}
-
-std::string unquote(std::string value)
-{
-    value = trim(value);
-    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-        return value.substr(1, value.size() - 2);
-    }
-    return value;
-}
-
-int parseInt(const std::string& value, int fallback)
-{
-    try {
-        return std::stoi(trim(value));
-    } catch (...) {
-        return fallback;
-    }
-}
 
 std::string joinConfigPath(const std::string& config_dir)
 {
@@ -50,51 +22,27 @@ std::string joinConfigPath(const std::string& config_dir)
 NetworkConfig loadNetworkConfig(const std::string& config_dir)
 {
     NetworkConfig config;
-    std::ifstream file(joinConfigPath(config_dir));
-    if (!file) {
+
+    toml::table table;
+    try {
+        table = toml::parse_file(joinConfigPath(config_dir));
+    } catch (const toml::parse_error&) {
         return config;
     }
 
-    std::string section;
-    std::string line;
-    while (std::getline(file, line)) {
-        const auto comment = line.find('#');
-        if (comment != std::string::npos) {
-            line = line.substr(0, comment);
-        }
-        line = trim(line);
-        if (line.empty()) {
-            continue;
-        }
-        if (line.front() == '[' && line.back() == ']') {
-            section = trim(line.substr(1, line.size() - 2));
-            continue;
-        }
+    if (const auto gcs = table["gcs"]) {
+        config.gcs_ip = gcs["ip"].value_or(config.gcs_ip);
+        config.telemetry_port = static_cast<std::uint16_t>(
+            gcs["telemetry_port"].value_or(static_cast<int>(config.telemetry_port)));
+        config.command_port = static_cast<std::uint16_t>(
+            gcs["command_port"].value_or(static_cast<int>(config.command_port)));
+        config.video_port = static_cast<std::uint16_t>(
+            gcs["video_port"].value_or(static_cast<int>(config.video_port)));
+    }
 
-        const auto eq = line.find('=');
-        if (eq == std::string::npos) {
-            continue;
-        }
-
-        const std::string key = trim(line.substr(0, eq));
-        const std::string value = trim(line.substr(eq + 1));
-
-        if (section == "gcs") {
-            if (key == "ip") {
-                config.gcs_ip = unquote(value);
-            } else if (key == "telemetry_port") {
-                config.telemetry_port = static_cast<std::uint16_t>(
-                    parseInt(value, config.telemetry_port));
-            } else if (key == "command_port") {
-                config.command_port = static_cast<std::uint16_t>(
-                    parseInt(value, config.command_port));
-            } else if (key == "video_port") {
-                config.video_port = static_cast<std::uint16_t>(
-                    parseInt(value, config.video_port));
-            }
-        } else if (section == "telemetry" && key == "send_interval_ms") {
-            config.telemetry_interval_ms = parseInt(value, config.telemetry_interval_ms);
-        }
+    if (const auto telemetry = table["telemetry"]) {
+        config.telemetry_interval_ms =
+            telemetry["send_interval_ms"].value_or(config.telemetry_interval_ms);
     }
 
     return config;

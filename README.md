@@ -44,6 +44,31 @@ cmake --build build
 Expected output includes the captured frame size, measured FPS, and the saved
 image path.
 
+For Raspberry Pi CSI cameras, first verify the libcamera/rpicam path:
+
+```bash
+rpicam-hello --list-cameras
+rpicam-still -t 1000 --nopreview -o test_data/images/camera_smoke.jpg
+```
+
+## Video Stream Bring-Up
+
+Start `uav_gcs_video` on the laptop first, then run the onboard streamer:
+
+```bash
+./build/video_streamer --source rpicam --config config
+```
+
+For a local sender smoke test without the Pi camera:
+
+```bash
+./build/video_streamer --source test-pattern --gcs-ip 127.0.0.1 --port 5600 --count 30
+```
+
+`video_streamer` sends MJPEG frames over UDP in small chunks. It is a best-effort
+debug stream; dropped frames are acceptable so video output does not become part
+of the future mission-critical vision loop.
+
 ## Telemetry Bring-Up
 
 Start `uav-gcs` on the laptop first, then run:
@@ -78,4 +103,6 @@ Use `--count 0` or omit `--count` to send telemetry until interrupted.
 2. On the Raspberry Pi, run `bash scripts/setup_rpi_dependencies.sh`.
 3. On the Raspberry Pi, build `uav-onboard`.
 4. On the Raspberry Pi, validate the camera with `camera_preview`.
-5. On the Raspberry Pi, run `uav_onboard` and confirm telemetry appears in GCS.
+5. On the laptop, start `uav_gcs_video`.
+6. On the Raspberry Pi, run `video_streamer` and confirm the camera feed appears.
+7. On the Raspberry Pi, run `uav_onboard` and confirm telemetry appears in GCS.

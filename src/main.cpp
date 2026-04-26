@@ -104,7 +104,7 @@ int main(int argc, char** argv)
         onboard::protocol::BringupTelemetry telemetry;
         telemetry.seq = seq++;
         telemetry.timestamp_ms = onboard::common::unixTimestampMs();
-        telemetry.camera_status = "not_checked";
+        telemetry.camera.status = "not_checked";
         telemetry.note = "camera_preview is the dedicated camera bring-up tool";
 
         const std::string payload = onboard::protocol::buildTelemetryJson(telemetry);
