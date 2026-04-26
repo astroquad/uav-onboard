@@ -16,10 +16,13 @@
 namespace onboard::camera {
 namespace {
 
+constexpr const char* kRpicamStderrLog = "/tmp/astroquad_rpicam_vid.log";
+
 std::string buildCommand(const RpicamOptions& options)
 {
     std::ostringstream command;
     command << "rpicam-vid"
+            << " --verbose 0"
             << " -t 0"
             << " --nopreview"
             << " --codec mjpeg"
@@ -27,6 +30,9 @@ std::string buildCommand(const RpicamOptions& options)
             << " --height " << options.height
             << " --framerate " << options.fps
             << " -o -";
+#ifndef _WIN32
+    command << " 2>" << kRpicamStderrLog;
+#endif
     return command.str();
 }
 
@@ -78,9 +84,11 @@ bool RpicamMjpegSource::readFrame(CameraFrame& frame)
         const std::size_t read_count = std::fread(chunk.data(), 1, chunk.size(), pipe_);
         if (read_count == 0) {
             if (std::feof(pipe_)) {
-                last_error_ = "rpicam-vid ended";
+                last_error_ = "rpicam-vid ended; check ";
+                last_error_ += kRpicamStderrLog;
             } else {
-                last_error_ = "failed to read rpicam-vid output";
+                last_error_ = "failed to read rpicam-vid output; check ";
+                last_error_ += kRpicamStderrLog;
             }
             return false;
         }
