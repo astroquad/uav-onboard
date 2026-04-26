@@ -6,16 +6,37 @@
 #include "video/UdpMjpegStreamer.hpp"
 
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <cerrno>
+#include <cstring>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 namespace {
+
+constexpr std::uint16_t kGcsDiscoveryPort = 5601;
+constexpr int kGcsDiscoveryTimeoutMs = 3000;
 
 constexpr const char* kTinyTestJpegBase64 =
     "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoM"
@@ -146,6 +167,156 @@ bool isJpeg(const std::vector<std::uint8_t>& data)
            data[data.size() - 2] == 0xff && data[data.size() - 1] == 0xd9;
 }
 
+struct GcsDiscoveryResult {
+    std::string ip;
+    std::uint16_t video_port = 0;
+};
+
+bool isBroadcastAddress(const std::string& ip)
+{
+    return ip == "255.255.255.255" || ip == "0.0.0.0";
+}
+
+std::optional<std::uint16_t> parseBeaconVideoPort(const std::string& message)
+{
+    constexpr const char* key = "video_port=";
+    const auto position = message.find(key);
+    if (position == std::string::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t index = position + std::string(key).size();
+    std::string value;
+    while (index < message.size() && std::isdigit(static_cast<unsigned char>(message[index]))) {
+        value.push_back(message[index++]);
+    }
+    if (value.empty()) {
+        return std::nullopt;
+    }
+
+    const int port = parseInt(value, 0);
+    if (port <= 0 || port > 65535) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint16_t>(port);
+}
+
+std::optional<GcsDiscoveryResult> discoverGcsVideoTarget(std::uint16_t fallback_video_port)
+{
+#ifdef _WIN32
+    WSADATA data {};
+    WSAStartup(MAKEWORD(2, 2), &data);
+#endif
+
+    const auto raw_socket = socket(AF_INET, SOCK_DGRAM, 0);
+#ifdef _WIN32
+    if (raw_socket == INVALID_SOCKET) {
+        WSACleanup();
+        return std::nullopt;
+    }
+    const auto socket_handle = static_cast<SOCKET>(raw_socket);
+#else
+    if (raw_socket < 0) {
+        return std::nullopt;
+    }
+    const auto socket_handle = static_cast<int>(raw_socket);
+#endif
+
+    const int reuse = 1;
+    setsockopt(
+        socket_handle,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+#ifdef _WIN32
+        reinterpret_cast<const char*>(&reuse),
+#else
+        &reuse,
+#endif
+        sizeof(reuse));
+
+    sockaddr_in address {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(kGcsDiscoveryPort);
+    if (bind(socket_handle, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+#ifdef _WIN32
+        closesocket(socket_handle);
+        WSACleanup();
+#else
+        close(socket_handle);
+#endif
+        return std::nullopt;
+    }
+
+    const auto started_at = std::chrono::steady_clock::now();
+    while (true) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started_at);
+        const int remaining_ms = kGcsDiscoveryTimeoutMs - static_cast<int>(elapsed.count());
+        if (remaining_ms <= 0) {
+            break;
+        }
+
+        fd_set read_set;
+        FD_ZERO(&read_set);
+        FD_SET(socket_handle, &read_set);
+        timeval timeout {};
+        timeout.tv_sec = remaining_ms / 1000;
+        timeout.tv_usec = (remaining_ms % 1000) * 1000;
+        const int ready = select(static_cast<int>(socket_handle) + 1, &read_set, nullptr, nullptr, &timeout);
+        if (ready <= 0) {
+            break;
+        }
+
+        char buffer[128] {};
+        sockaddr_in sender {};
+#ifdef _WIN32
+        int sender_size = sizeof(sender);
+#else
+        socklen_t sender_size = sizeof(sender);
+#endif
+        const int received = recvfrom(
+            socket_handle,
+            buffer,
+            static_cast<int>(sizeof(buffer) - 1),
+            0,
+            reinterpret_cast<sockaddr*>(&sender),
+            &sender_size);
+        if (received <= 0) {
+            continue;
+        }
+
+        const std::string message(buffer, buffer + received);
+        if (message.rfind("AQGCS1", 0) != 0) {
+            continue;
+        }
+
+        char ip_buffer[INET_ADDRSTRLEN] {};
+        if (!inet_ntop(AF_INET, &sender.sin_addr, ip_buffer, sizeof(ip_buffer))) {
+            continue;
+        }
+
+        GcsDiscoveryResult result;
+        result.ip = ip_buffer;
+        result.video_port = parseBeaconVideoPort(message).value_or(fallback_video_port);
+#ifdef _WIN32
+        closesocket(socket_handle);
+        WSACleanup();
+#else
+        close(socket_handle);
+#endif
+        return result;
+    }
+
+#ifdef _WIN32
+    closesocket(socket_handle);
+    WSACleanup();
+#else
+    close(socket_handle);
+#endif
+    return std::nullopt;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -169,6 +340,22 @@ int main(int argc, char** argv)
     }
     if (options.fps_override > 0) {
         vision_config.video.fps = options.fps_override;
+    }
+
+    if (options.gcs_ip_override.empty() && isBroadcastAddress(network_config.gcs_ip)) {
+        std::cout << "discovering GCS video receiver for "
+                  << kGcsDiscoveryTimeoutMs << " ms...\n";
+        const auto discovered = discoverGcsVideoTarget(network_config.video_port);
+        if (discovered) {
+            network_config.gcs_ip = discovered->ip;
+            network_config.video_port = discovered->video_port;
+            vision_config.video.port = discovered->video_port;
+            std::cout << "discovered GCS video receiver at "
+                      << network_config.gcs_ip << ':' << network_config.video_port << "\n";
+        } else {
+            std::cout << "no GCS discovery beacon received; falling back to "
+                      << network_config.gcs_ip << ':' << network_config.video_port << "\n";
+        }
     }
 
     onboard::video::UdpMjpegStreamer streamer;
