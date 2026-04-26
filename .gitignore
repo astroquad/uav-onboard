@@ -1,0 +1,54 @@
+# CMake build directories
+build/
+cmake-build-*/
+out/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+install_manifest.txt
+
+# Compiled artifacts
+*.a
+*.dll
+*.dylib
+*.exe
+*.ilk
+*.lib
+*.o
+*.obj
+*.pdb
+*.so
+
+# Runtime logs
+logs/*
+!logs/.gitkeep
+*.log
+
+# Generated camera/test captures
+test_data/images/*
+!test_data/images/.gitkeep
+test_data/logs/*
+!test_data/logs/.gitkeep
+test_data/videos/*
+!test_data/videos/.gitkeep
+
+# Coverage and test outputs
+coverage/
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

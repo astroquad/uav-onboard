@@ -46,12 +46,23 @@ image path.
 
 ## Telemetry Bring-Up
 
-Before running, set `config/network.toml` so `[gcs].ip` matches the laptop's IP
-address. Start `uav-gcs` on the laptop first, then run:
+Start `uav-gcs` on the laptop first, then run:
 
 ```bash
 ./build/uav_onboard --config config --count 10
 ```
+
+By default, telemetry is sent to the IPv4 local broadcast address:
+
+```toml
+[gcs]
+ip = "255.255.255.255"
+telemetry_port = 14550
+```
+
+This avoids editing the onboard config whenever the laptop IP changes. Some
+guest Wi-Fi networks block local broadcast; if GCS receives nothing there, use
+the laptop's explicit IPv4 address with `--gcs-ip` or in `network.toml`.
 
 For a quick local loopback test, override the destination:
 

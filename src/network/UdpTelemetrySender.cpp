@@ -62,6 +62,11 @@ UdpTelemetrySender::~UdpTelemetrySender()
 
 bool UdpTelemetrySender::open(const std::string& ip, std::uint16_t port)
 {
+    if (ip.empty()) {
+        last_error_ = "no telemetry destination IP configured";
+        return false;
+    }
+
     ip_ = ip;
     port_ = port;
     const auto raw_socket = socket(AF_INET, SOCK_DGRAM, 0);
@@ -74,6 +79,27 @@ bool UdpTelemetrySender::open(const std::string& ip, std::uint16_t port)
         return false;
     }
     socket_ = static_cast<std::uintptr_t>(raw_socket);
+
+    const int enable_broadcast = 1;
+    if (setsockopt(
+#ifdef _WIN32
+            static_cast<SOCKET>(socket_),
+            SOL_SOCKET,
+            SO_BROADCAST,
+            reinterpret_cast<const char*>(&enable_broadcast),
+#else
+            static_cast<int>(socket_),
+            SOL_SOCKET,
+            SO_BROADCAST,
+            &enable_broadcast,
+#endif
+            sizeof(enable_broadcast)) < 0) {
+        last_error_ = socketErrorString();
+        closeSocket(socket_);
+        socket_ = 0;
+        return false;
+    }
+
     socket_open_ = true;
     return true;
 }
@@ -108,6 +134,7 @@ bool UdpTelemetrySender::send(const std::string& payload) const
         last_error_ = socketErrorString();
         return false;
     }
+    last_error_.clear();
     return true;
 }
 

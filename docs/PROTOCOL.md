@@ -516,7 +516,7 @@ GCS                             온보드
 
 ```toml
 [gcs]
-ip = "192.168.1.100"
+ip = "255.255.255.255"
 telemetry_port = 14550    # UDP 송신
 command_port   = 14551    # TCP 수신
 video_port     = 5600     # UDP 영상 송신

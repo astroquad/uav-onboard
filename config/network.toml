@@ -1,5 +1,6 @@
 [gcs]
-ip = "192.168.1.100"
+# UDP telemetry is broadcast so the laptop IP can change between networks.
+ip = "255.255.255.255"
 telemetry_port = 14550
 command_port = 14551
 video_port = 5600

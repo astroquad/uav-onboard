@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
-#include <sstream>
 
 namespace onboard::common {
 namespace {
