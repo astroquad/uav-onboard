@@ -13,6 +13,7 @@ struct RpicamOptions {
     int width = 640;
     int height = 480;
     int fps = 15;
+    int jpeg_quality = 50;
 };
 
 class RpicamMjpegSource {

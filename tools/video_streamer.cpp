@@ -192,6 +192,7 @@ int main(int argc, char** argv)
         rpicam_options.width = vision_config.video.width;
         rpicam_options.height = vision_config.video.height;
         rpicam_options.fps = vision_config.video.fps;
+        rpicam_options.jpeg_quality = vision_config.video.jpeg_quality;
         if (!source.open(rpicam_options)) {
             std::cerr << "failed to open rpicam source: " << source.lastError() << "\n";
             return 1;

@@ -8,7 +8,7 @@ fps = 30
 width = 640
 height = 480
 fps = 15
-jpeg_quality = 70
+jpeg_quality = 50
 port = 5600
 
 [line]

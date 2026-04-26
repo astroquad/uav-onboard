@@ -26,6 +26,7 @@ std::string buildCommand(const RpicamOptions& options)
             << " -t 0"
             << " --nopreview"
             << " --codec mjpeg"
+            << " --quality " << options.jpeg_quality
             << " --width " << options.width
             << " --height " << options.height
             << " --framerate " << options.fps
