@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <cstring>
 #include <sstream>
 
 #ifdef _WIN32
@@ -28,6 +30,15 @@ std::string buildCommand(const RpicamOptions& options)
     return command.str();
 }
 
+const char* pipeReadMode()
+{
+#ifdef _WIN32
+    return "rb";
+#else
+    return "r";
+#endif
+}
+
 } // namespace
 
 RpicamMjpegSource::~RpicamMjpegSource()
@@ -42,9 +53,10 @@ bool RpicamMjpegSource::open(const RpicamOptions& options)
     buffer_.clear();
 
     const std::string command = buildCommand(options);
-    pipe_ = popen(command.c_str(), "rb");
+    pipe_ = popen(command.c_str(), pipeReadMode());
     if (!pipe_) {
-        last_error_ = "failed to start rpicam-vid";
+        last_error_ = "failed to start rpicam-vid: ";
+        last_error_ += std::strerror(errno);
         return false;
     }
     return true;
