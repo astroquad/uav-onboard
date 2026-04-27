@@ -33,8 +33,8 @@ struct LineConfig {
     bool enabled = true;
     std::string mode = "auto";
     bool offset_normalized = false;
-    double roi_top_ratio = 0.35;
-    double lookahead_y_ratio = 0.70;
+    double roi_top_ratio = 0.08;
+    double lookahead_y_ratio = 0.55;
     int threshold = 0;
     int min_area_px = 250;
     int morph_kernel = 5;

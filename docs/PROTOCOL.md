@@ -119,7 +119,7 @@ Required top-level fields:
 | `vision.line.center_offset_px` | number | Horizontal offset from image center to `tracking_point_px`. |
 | `vision.line.angle_deg` | number | Image-plane line angle. |
 | `vision.line.confidence` | number | 0.0 to 1.0 confidence estimate from contour quality. |
-| `vision.line.contour_px` | array | Simplified contour/polyline in image pixel coordinates. GCS draws it in magenta. |
+| `vision.line.contour_px` | array | Simplified selected line-branch contour/polyline in image pixel coordinates. GCS draws it in magenta. Wide glare/intersection spans may be excluded from this contour. |
 | `vision.marker_detected` | `bool` | True when `markers` is not empty. |
 | `vision.marker_id` | `int` | First detected marker id, kept for backward compatibility. `-1` means none. |
 | `vision.marker_count` | `int` | Number of entries in `vision.markers`. |

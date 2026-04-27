@@ -128,6 +128,7 @@ Useful options:
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark
 ./build/vision_debug_node --config config --line-only --line-mode dark_on_light
 ./build/vision_debug_node --config config --line-only --line-threshold 160
+./build/vision_debug_node --config config --line-only --line-roi-top 0.08 --line-lookahead 0.55
 ```
 
 Line mode guidance:
@@ -138,6 +139,16 @@ Line mode guidance:
 - `dark_on_light`: use when the track line is darker than the floor.
 - `--line-threshold 0`: use automatic Otsu thresholding. A positive value uses
   that fixed grayscale threshold.
+- `--line-roi-top`: image ratio to ignore at the top. The default `0.08`
+  keeps most of the upper frame visible; raise it only if the camera sees
+  horizon or non-floor clutter.
+- `--line-lookahead`: vertical image ratio for the green tracking point. The
+  default `0.55` places it close to the frame center instead of the old lower
+  debug point.
+
+The line contour sent to GCS is filtered around the selected tracking branch.
+This keeps wide reflections or intersection bars from becoming the magenta
+tracing contour when the actual line-width branch is still visible.
 
 For image-file detector smoke tests:
 
@@ -145,7 +156,7 @@ For image-file detector smoke tests:
 ./build/aruco_detector_tester --config config --image test_data/images/marker.jpg
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode auto
-./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode light_on_dark --threshold 160 --roi-top 0.35
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode light_on_dark --threshold 160 --roi-top 0.08 --lookahead 0.55
 ```
 
 Expected GCS result:

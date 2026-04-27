@@ -38,6 +38,8 @@ struct Options {
     bool enable_line = true;
     std::string line_mode_override;
     int line_threshold_override = -1;
+    double line_roi_top_override = -1.0;
+    double line_lookahead_override = -1.0;
 };
 
 struct GcsDiscoveryResult {
@@ -62,6 +64,8 @@ void printUsage()
         << "  --line-only          Enable line detection and disable ArUco\n"
         << "  --line-mode <mode>   auto, light_on_dark, or dark_on_light\n"
         << "  --line-threshold <n> Override fixed threshold; 0 uses Otsu/auto\n"
+        << "  --line-roi-top <r>   Override ignored top image ratio, default 0.08\n"
+        << "  --line-lookahead <r> Override tracking point Y ratio, default 0.55\n"
         << "  -h, --help           Show this help\n";
 }
 
@@ -69,6 +73,15 @@ int parseInt(const std::string& value, int fallback)
 {
     try {
         return std::stoi(value);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+double parseDouble(const std::string& value, double fallback)
+{
+    try {
+        return std::stod(value);
     } catch (...) {
         return fallback;
     }
@@ -105,6 +118,10 @@ Options parseOptions(int argc, char** argv)
             options.line_mode_override = argv[++i];
         } else if (arg == "--line-threshold" && i + 1 < argc) {
             options.line_threshold_override = parseInt(argv[++i], options.line_threshold_override);
+        } else if (arg == "--line-roi-top" && i + 1 < argc) {
+            options.line_roi_top_override = parseDouble(argv[++i], options.line_roi_top_override);
+        } else if (arg == "--line-lookahead" && i + 1 < argc) {
+            options.line_lookahead_override = parseDouble(argv[++i], options.line_lookahead_override);
         } else if (arg == "-h" || arg == "--help") {
             printUsage();
             std::exit(0);
@@ -260,6 +277,12 @@ int main(int argc, char** argv)
     }
     if (options.line_threshold_override >= 0) {
         vision_config.line.threshold = options.line_threshold_override;
+    }
+    if (options.line_roi_top_override >= 0.0) {
+        vision_config.line.roi_top_ratio = options.line_roi_top_override;
+    }
+    if (options.line_lookahead_override >= 0.0) {
+        vision_config.line.lookahead_y_ratio = options.line_lookahead_override;
     }
     if (options.video_port_override > 0) {
         network_config.video_port = static_cast<std::uint16_t>(options.video_port_override);

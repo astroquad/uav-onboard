@@ -20,6 +20,21 @@ struct Candidate {
     double score = 0.0;
 };
 
+struct Run {
+    int start = 0;
+    int end = 0;
+
+    int width() const
+    {
+        return end - start + 1;
+    }
+
+    double center() const
+    {
+        return (start + end) / 2.0;
+    }
+};
+
 double clampRatio(double value, double fallback)
 {
     if (!std::isfinite(value)) {
@@ -116,6 +131,171 @@ void cleanMask(cv::Mat& mask, int morph_kernel)
     cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
 }
 
+std::vector<Run> findLineWidthRuns(
+    const std::uint8_t* row,
+    int width,
+    int min_line_width,
+    int max_line_width)
+{
+    std::vector<Run> runs;
+    int x = 0;
+    while (x < width) {
+        while (x < width && row[x] == 0) {
+            ++x;
+        }
+
+        const int start = x;
+        while (x < width && row[x] != 0) {
+            ++x;
+        }
+
+        if (start >= width) {
+            break;
+        }
+
+        const Run run {start, x - 1};
+        if (run.width() >= min_line_width && run.width() <= max_line_width) {
+            runs.push_back(run);
+        }
+    }
+    return runs;
+}
+
+std::optional<Run> nearestRun(
+    const std::uint8_t* row,
+    int width,
+    double expected_x,
+    int min_line_width,
+    int max_line_width)
+{
+    const auto runs = findLineWidthRuns(row, width, min_line_width, max_line_width);
+    if (runs.empty()) {
+        return std::nullopt;
+    }
+
+    const double max_jump = std::max(12.0, max_line_width * 1.25);
+    std::optional<Run> best;
+    double best_distance = std::numeric_limits<double>::max();
+    for (const auto& run : runs) {
+        const double distance = std::abs(run.center() - expected_x);
+        if (distance < best_distance) {
+            best = run;
+            best_distance = distance;
+        }
+    }
+
+    if (!best || best_distance > max_jump) {
+        return std::nullopt;
+    }
+    return best;
+}
+
+void drawRun(cv::Mat& mask, int y, const Run& run)
+{
+    auto* row = mask.ptr<std::uint8_t>(y);
+    std::fill(row + run.start, row + run.end + 1, static_cast<std::uint8_t>(255));
+}
+
+void traceLineBranch(
+    const cv::Mat& contour_mask,
+    cv::Mat& branch_mask,
+    int start_y,
+    int end_y,
+    int step,
+    double initial_x,
+    int min_line_width,
+    int max_line_width)
+{
+    double expected_x = initial_x;
+    for (int y = start_y;
+         (step < 0 && y >= end_y) || (step > 0 && y <= end_y);
+         y += step) {
+        const auto* row = contour_mask.ptr<std::uint8_t>(y);
+        auto run = nearestRun(row, contour_mask.cols, expected_x, min_line_width, max_line_width);
+        if (!run) {
+            continue;
+        }
+
+        drawRun(branch_mask, y, *run);
+        expected_x = run->center();
+    }
+}
+
+std::optional<std::vector<cv::Point>> extractLineBranchContour(
+    const cv::Mat& contour_mask,
+    int lookahead_y,
+    double tracking_x,
+    int min_line_width,
+    int max_line_width,
+    int morph_kernel)
+{
+    // Keep the line-width branch around the tracking row and drop wide glare or
+    // intersection spans that are attached to the same threshold component.
+    const int mask_y = std::clamp(lookahead_y, 0, contour_mask.rows - 1);
+    cv::Mat branch_mask = cv::Mat::zeros(contour_mask.size(), CV_8UC1);
+
+    traceLineBranch(
+        contour_mask,
+        branch_mask,
+        mask_y,
+        0,
+        -1,
+        tracking_x,
+        min_line_width,
+        max_line_width);
+    if (mask_y + 1 < contour_mask.rows) {
+        traceLineBranch(
+            contour_mask,
+            branch_mask,
+            mask_y + 1,
+            contour_mask.rows - 1,
+            1,
+            tracking_x,
+            min_line_width,
+            max_line_width);
+    }
+
+    if (cv::countNonZero(branch_mask) < min_line_width) {
+        return std::nullopt;
+    }
+
+    const int kernel_size = oddKernelSize(morph_kernel);
+    if (kernel_size > 1) {
+        const cv::Mat kernel = cv::getStructuringElement(
+            cv::MORPH_RECT,
+            cv::Size(3, kernel_size));
+        cv::morphologyEx(branch_mask, branch_mask, cv::MORPH_CLOSE, kernel);
+    }
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(branch_mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    if (contours.empty()) {
+        return std::nullopt;
+    }
+
+    std::optional<std::size_t> best_index;
+    double best_score = -1.0;
+    for (std::size_t index = 0; index < contours.size(); ++index) {
+        const auto bounds = cv::boundingRect(contours[index]);
+        if (lookahead_y < bounds.y || lookahead_y >= bounds.y + bounds.height) {
+            continue;
+        }
+
+        const double center_distance =
+            std::abs((bounds.x + bounds.width / 2.0) - tracking_x);
+        const double score = cv::contourArea(contours[index]) - center_distance;
+        if (score > best_score) {
+            best_score = score;
+            best_index = index;
+        }
+    }
+
+    if (!best_index) {
+        return std::nullopt;
+    }
+    return contours[*best_index];
+}
+
 std::vector<cv::Mat> buildMasks(const cv::Mat& gray, const common::LineConfig& config)
 {
     std::vector<cv::Mat> masks;
@@ -154,32 +334,45 @@ std::optional<Candidate> evaluateContour(
 
     const int mask_y = std::clamp(lookahead_y - roi.y, 0, contour_mask.rows - 1);
     const auto* row = contour_mask.ptr<std::uint8_t>(mask_y);
-    int min_x = image_width;
-    int max_x = -1;
-    for (int x = 0; x < image_width; ++x) {
-        if (row[x] != 0) {
-            min_x = std::min(min_x, x);
-            max_x = std::max(max_x, x);
-        }
-    }
-
-    if (max_x < min_x) {
-        return std::nullopt;
-    }
-
-    const int line_width = max_x - min_x + 1;
     const int max_line_width = std::max(
         config.min_line_width_px + 1,
         static_cast<int>(std::lround(image_width * clampRatio(config.max_line_width_ratio, 0.22))));
-    if (line_width < config.min_line_width_px || line_width > max_line_width) {
+    const auto row_runs = findLineWidthRuns(
+        row,
+        image_width,
+        config.min_line_width_px,
+        max_line_width);
+    if (row_runs.empty()) {
         return std::nullopt;
     }
 
-    std::vector<cv::Point> contour = roi_contour;
+    Run selected_run = row_runs.front();
+    double best_run_distance =
+        std::abs(selected_run.center() - image_width / 2.0);
+    for (const auto& run : row_runs) {
+        const double distance = std::abs(run.center() - image_width / 2.0);
+        if (distance < best_run_distance) {
+            selected_run = run;
+            best_run_distance = distance;
+        }
+    }
+
+    const int line_width = selected_run.width();
+    const double tracking_x = selected_run.center();
+    auto line_branch = extractLineBranchContour(
+        contour_mask,
+        mask_y,
+        tracking_x,
+        config.min_line_width_px,
+        max_line_width,
+        config.morph_kernel);
+
+    std::vector<cv::Point> contour = line_branch.value_or(roi_contour);
     for (auto& point : contour) {
         point.y += roi.y;
     }
 
+    const double selected_area = cv::contourArea(contour);
     const cv::Rect bounds = cv::boundingRect(contour);
     const int long_span = std::max(bounds.width, bounds.height);
     const double span_score = std::clamp(
@@ -189,7 +382,7 @@ std::optional<Candidate> evaluateContour(
 
     const double roi_area = static_cast<double>(roi.width) * roi.height;
     const double area_score = roi_area > 0.0
-        ? std::clamp(area / (roi_area * 0.08), 0.0, 1.0)
+        ? std::clamp(selected_area / (roi_area * 0.08), 0.0, 1.0)
         : 0.0;
 
     const double width_score = 1.0 - std::clamp(
@@ -198,7 +391,6 @@ std::optional<Candidate> evaluateContour(
         0.0,
         1.0);
 
-    const double tracking_x = (min_x + max_x) / 2.0;
     const double center_score = 1.0 - std::clamp(
         std::abs(tracking_x - image_width / 2.0) / std::max(1.0, image_width / 2.0),
         0.0,
@@ -258,7 +450,7 @@ LineDetection LineDetector::detect(const cv::Mat& image) const
     const int width = image.cols;
     const int height = image.rows;
     const int roi_top = std::clamp(
-        static_cast<int>(std::lround(height * clampRatio(config_.roi_top_ratio, 0.35))),
+        static_cast<int>(std::lround(height * clampRatio(config_.roi_top_ratio, 0.08))),
         0,
         std::max(0, height - 1));
     const cv::Rect roi(0, roi_top, width, height - roi_top);
@@ -275,7 +467,7 @@ LineDetection LineDetector::detect(const cv::Mat& image) const
     }
 
     const int lookahead_y = std::clamp(
-        static_cast<int>(std::lround(height * clampRatio(config_.lookahead_y_ratio, 0.70))),
+        static_cast<int>(std::lround(height * clampRatio(config_.lookahead_y_ratio, 0.55))),
         roi_top,
         height - 1);
 

@@ -16,6 +16,7 @@ struct Options {
     std::string mode;
     int threshold = -1;
     double roi_top_ratio = -1.0;
+    double lookahead_y_ratio = -1.0;
 };
 
 void printUsage()
@@ -28,6 +29,7 @@ void printUsage()
         << "  --mode <mode>        auto, light_on_dark, or dark_on_light\n"
         << "  --threshold <n>      Override line threshold 0..255\n"
         << "  --roi-top <ratio>    Override ROI top ratio 0.0..1.0\n"
+        << "  --lookahead <ratio>  Override tracking point Y ratio 0.0..1.0\n"
         << "  -h, --help           Show this help\n";
 }
 
@@ -64,6 +66,8 @@ Options parseOptions(int argc, char** argv)
             options.threshold = parseInt(argv[++i], options.threshold);
         } else if (arg == "--roi-top" && i + 1 < argc) {
             options.roi_top_ratio = parseDouble(argv[++i], options.roi_top_ratio);
+        } else if (arg == "--lookahead" && i + 1 < argc) {
+            options.lookahead_y_ratio = parseDouble(argv[++i], options.lookahead_y_ratio);
         } else if (arg == "-h" || arg == "--help") {
             printUsage();
             std::exit(0);
@@ -96,6 +100,9 @@ int main(int argc, char** argv)
     }
     if (options.roi_top_ratio >= 0.0) {
         config.line.roi_top_ratio = options.roi_top_ratio;
+    }
+    if (options.lookahead_y_ratio >= 0.0) {
+        config.line.lookahead_y_ratio = options.lookahead_y_ratio;
     }
 
     const cv::Mat image = cv::imread(options.image_path, cv::IMREAD_COLOR);
