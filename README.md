@@ -106,7 +106,8 @@ camera JPEG to GCS. It does not draw overlays on the Raspberry Pi.
 Current detectors:
 
 - ArUco marker detection.
-- Line tracing MVP using ROI threshold/mask/contour detection.
+- Line tracing MVP using resized ROI threshold/mask/contour detection plus
+  onboard EMA/hold filtering for sudden offset jumps.
 
 The debug video path is best-effort and non-critical. If GCS video streaming
 falls behind, old video frames are dropped and the vision loop keeps working on
@@ -133,9 +134,10 @@ Useful options:
 
 Line mode guidance:
 
-- `auto`: default. Tests both bright-line and dark-line masks and chooses the
+- `light_on_dark`: default for the current outdoor practice grid. Use when the
+  track line is brighter than the floor.
+- `auto`: tests both bright-line and dark-line masks and chooses the
   best line-shaped candidate.
-- `light_on_dark`: use when the track line is brighter than the floor.
 - `dark_on_light`: use when the track line is darker than the floor.
 - `--line-threshold 0`: use automatic Otsu thresholding. A positive value uses
   that fixed grayscale threshold.
@@ -150,6 +152,16 @@ The line contour sent to GCS is the simplified connected contour selected by
 the detector. This keeps cross-shaped intersections visible in the magenta
 overlay; tune `--line-threshold`, `--line-mode`, and camera angle if reflection
 or shadows become too aggressive.
+
+Latency and stability defaults are configured in `config/vision.toml`:
+
+- `line.process_width = 320`: line detection runs on a resized ROI to keep
+  Raspberry Pi CPU cost low.
+- `line.max_candidates = 8`: only the largest ranked contours are scored.
+- `line.filter_enabled = true`: raw line offset/angle spikes are masked with
+  EMA smoothing, short hold, and multi-frame reacquire logic.
+- The GCS vision log shows read/decode/ArUco/line/JSON/send/video timings,
+  contour counts, queue drops, and raw-vs-filtered line state.
 
 For image-file detector smoke tests:
 

@@ -20,6 +20,17 @@ struct Candidate {
     double score = 0.0;
 };
 
+struct WorkGeometry {
+    int source_width = 0;
+    int source_height = 0;
+    int roi_top = 0;
+    int roi_height = 0;
+    int work_width = 0;
+    int work_height = 0;
+    double scale_x = 1.0;
+    double scale_y = 1.0;
+};
+
 double clampRatio(double value, double fallback)
 {
     if (!std::isfinite(value)) {
@@ -36,12 +47,32 @@ int oddKernelSize(int value)
     return value % 2 == 0 ? value + 1 : value;
 }
 
-Point2f toPoint(const cv::Point& point)
+cv::Point toSourcePoint(const cv::Point& point, const WorkGeometry& geometry)
+{
+    return {
+        static_cast<int>(std::lround(point.x * geometry.scale_x)),
+        geometry.roi_top + static_cast<int>(std::lround(point.y * geometry.scale_y)),
+    };
+}
+
+Point2f toTelemetryPoint(const cv::Point& point)
 {
     return {
         static_cast<float>(point.x),
         static_cast<float>(point.y),
     };
+}
+
+std::vector<cv::Point> toSourceContour(
+    const std::vector<cv::Point>& contour,
+    const WorkGeometry& geometry)
+{
+    std::vector<cv::Point> output;
+    output.reserve(contour.size());
+    for (const auto& point : contour) {
+        output.push_back(toSourcePoint(point, geometry));
+    }
+    return output;
 }
 
 std::vector<Point2f> simplifyContour(
@@ -69,7 +100,7 @@ std::vector<Point2f> simplifyContour(
     std::vector<Point2f> output;
     output.reserve(simplified.size());
     for (const auto& point : simplified) {
-        output.push_back(toPoint(point));
+        output.push_back(toTelemetryPoint(point));
     }
     return output;
 }
@@ -116,7 +147,16 @@ void cleanMask(cv::Mat& mask, int morph_kernel)
     cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
 }
 
-std::vector<cv::Mat> buildMasks(const cv::Mat& gray, const common::LineConfig& config)
+int scaledMorphKernel(const common::LineConfig& config, const WorkGeometry& geometry)
+{
+    const double scale = std::max(1.0, std::max(geometry.scale_x, geometry.scale_y));
+    return oddKernelSize(static_cast<int>(std::lround(config.morph_kernel / scale)));
+}
+
+std::vector<cv::Mat> buildMasks(
+    const cv::Mat& gray,
+    const common::LineConfig& config,
+    const WorkGeometry& geometry)
 {
     std::vector<cv::Mat> masks;
     const std::string mode = config.mode;
@@ -130,33 +170,78 @@ std::vector<cv::Mat> buildMasks(const cv::Mat& gray, const common::LineConfig& c
     }
 
     for (auto& mask : masks) {
-        cleanMask(mask, config.morph_kernel);
+        cleanMask(mask, scaledMorphKernel(config, geometry));
     }
     return masks;
 }
 
+int scaledMinArea(const common::LineConfig& config, const WorkGeometry& geometry)
+{
+    const double scaled_area =
+        config.min_area_px / std::max(1.0, geometry.scale_x * geometry.scale_y);
+    return std::max(20, static_cast<int>(std::lround(scaled_area)));
+}
+
+int scaledMinLineWidth(const common::LineConfig& config, const WorkGeometry& geometry)
+{
+    const double scaled_width = config.min_line_width_px / std::max(1.0, geometry.scale_x);
+    return std::max(2, static_cast<int>(std::lround(scaled_width)));
+}
+
+std::vector<std::size_t> sortedCandidateIndexes(
+    const std::vector<std::vector<cv::Point>>& contours,
+    int min_area,
+    int max_candidates)
+{
+    std::vector<std::pair<double, std::size_t>> ranked;
+    ranked.reserve(contours.size());
+    for (std::size_t index = 0; index < contours.size(); ++index) {
+        const double area = cv::contourArea(contours[index]);
+        if (area >= min_area) {
+            ranked.push_back({area, index});
+        }
+    }
+
+    std::sort(
+        ranked.begin(),
+        ranked.end(),
+        [](const auto& lhs, const auto& rhs) {
+            return lhs.first > rhs.first;
+        });
+
+    if (max_candidates > 0 && static_cast<int>(ranked.size()) > max_candidates) {
+        ranked.resize(static_cast<std::size_t>(max_candidates));
+    }
+
+    std::vector<std::size_t> indexes;
+    indexes.reserve(ranked.size());
+    for (const auto& entry : ranked) {
+        indexes.push_back(entry.second);
+    }
+    return indexes;
+}
+
 std::optional<Candidate> evaluateContour(
-    const std::vector<cv::Point>& roi_contour,
+    const std::vector<cv::Point>& work_contour,
     const cv::Mat& mask,
     const common::LineConfig& config,
-    const cv::Rect& roi,
-    int image_width,
-    int lookahead_y)
+    const WorkGeometry& geometry,
+    int work_lookahead_y)
 {
-    const double area = cv::contourArea(roi_contour);
-    if (area < config.min_area_px) {
+    const double work_area = cv::contourArea(work_contour);
+    if (work_area < scaledMinArea(config, geometry)) {
         return std::nullopt;
     }
 
-    cv::Mat contour_mask = cv::Mat::zeros(mask.size(), CV_8UC1);
-    std::vector<std::vector<cv::Point>> draw_contours {roi_contour};
-    cv::drawContours(contour_mask, draw_contours, 0, cv::Scalar(255), cv::FILLED);
+    const cv::Rect bounds = cv::boundingRect(work_contour);
+    if (work_lookahead_y < bounds.y || work_lookahead_y >= bounds.y + bounds.height) {
+        return std::nullopt;
+    }
 
-    const int mask_y = std::clamp(lookahead_y - roi.y, 0, contour_mask.rows - 1);
-    const auto* row = contour_mask.ptr<std::uint8_t>(mask_y);
-    int min_x = image_width;
+    const auto* row = mask.ptr<std::uint8_t>(work_lookahead_y);
+    int min_x = bounds.x + bounds.width;
     int max_x = -1;
-    for (int x = 0; x < image_width; ++x) {
+    for (int x = bounds.x; x < bounds.x + bounds.width; ++x) {
         if (row[x] != 0) {
             min_x = std::min(min_x, x);
             max_x = std::max(max_x, x);
@@ -167,45 +252,50 @@ std::optional<Candidate> evaluateContour(
         return std::nullopt;
     }
 
-    const int line_width = max_x - min_x + 1;
-    const int max_line_width = std::max(
-        config.min_line_width_px + 1,
-        static_cast<int>(std::lround(image_width * clampRatio(config.max_line_width_ratio, 0.22))));
-    if (line_width < config.min_line_width_px) {
+    const int work_line_width = max_x - min_x + 1;
+    const int min_line_width = scaledMinLineWidth(config, geometry);
+    if (work_line_width < min_line_width) {
         return std::nullopt;
     }
 
-    const double tracking_x = (min_x + max_x) / 2.0;
-    std::vector<cv::Point> contour = roi_contour;
-    for (auto& point : contour) {
-        point.y += roi.y;
-    }
+    const int max_line_width = std::max(
+        min_line_width + 1,
+        static_cast<int>(std::lround(
+            geometry.work_width * clampRatio(config.max_line_width_ratio, 0.22))));
+    const double work_tracking_x = (min_x + max_x) / 2.0;
+    const double source_tracking_x = work_tracking_x * geometry.scale_x;
+    const double source_lookahead_y =
+        geometry.roi_top + work_lookahead_y * geometry.scale_y;
 
-    const cv::Rect bounds = cv::boundingRect(contour);
-    const int long_span = std::max(bounds.width, bounds.height);
+    const auto source_contour = toSourceContour(work_contour, geometry);
+    const cv::Rect source_bounds = cv::boundingRect(source_contour);
+    const int long_span = std::max(source_bounds.width, source_bounds.height);
     const double span_score = std::clamp(
-        long_span / static_cast<double>(std::max(1, roi.height)),
+        long_span / static_cast<double>(std::max(1, geometry.roi_height)),
         0.0,
         1.0);
 
-    const double roi_area = static_cast<double>(roi.width) * roi.height;
+    const double source_area = work_area * geometry.scale_x * geometry.scale_y;
+    const double roi_area = static_cast<double>(geometry.source_width) * geometry.roi_height;
     const double area_score = roi_area > 0.0
-        ? std::clamp(area / (roi_area * 0.08), 0.0, 1.0)
+        ? std::clamp(source_area / (roi_area * 0.08), 0.0, 1.0)
         : 0.0;
 
     const double width_score = 1.0 - std::clamp(
-        (line_width - static_cast<double>(config.min_line_width_px)) /
-            std::max(1.0, max_line_width - static_cast<double>(config.min_line_width_px)),
+        (work_line_width - static_cast<double>(min_line_width)) /
+            std::max(1.0, max_line_width - static_cast<double>(min_line_width)),
         0.0,
         1.0);
 
     const double center_score = 1.0 - std::clamp(
-        std::abs(tracking_x - image_width / 2.0) / std::max(1.0, image_width / 2.0),
+        std::abs(source_tracking_x - geometry.source_width / 2.0) /
+            std::max(1.0, geometry.source_width / 2.0),
         0.0,
         1.0);
 
     const bool touches_side =
-        bounds.x <= 2 || (bounds.x + bounds.width) >= image_width - 2;
+        source_bounds.x <= 2 ||
+        (source_bounds.x + source_bounds.width) >= geometry.source_width - 2;
     const double edge_penalty = touches_side ? 0.20 : 0.0;
 
     const double score =
@@ -220,20 +310,26 @@ std::optional<Candidate> evaluateContour(
 
     LineDetection line;
     line.detected = true;
-    line.tracking_point_px.x = static_cast<float>(tracking_x);
-    line.tracking_point_px.y = static_cast<float>(lookahead_y);
-    line.center_offset_px = line.tracking_point_px.x - static_cast<float>(image_width) / 2.0f;
-    line.angle_deg = lineAngleDeg(contour);
+    line.raw_detected = true;
+    line.tracking_point_px.x = static_cast<float>(source_tracking_x);
+    line.tracking_point_px.y = static_cast<float>(source_lookahead_y);
+    line.raw_tracking_point_px = line.tracking_point_px;
+    line.center_offset_px =
+        line.tracking_point_px.x - static_cast<float>(geometry.source_width) / 2.0f;
+    line.raw_center_offset_px = line.center_offset_px;
+    line.angle_deg = lineAngleDeg(source_contour);
+    line.raw_angle_deg = line.angle_deg;
     line.confidence = static_cast<float>(std::clamp(score, 0.0, 1.0));
-    line.contour_px = simplifyContour(contour, config.max_contour_points);
+    line.contour_px = simplifyContour(source_contour, config.max_contour_points);
+    line.selected_contour_points = static_cast<int>(line.contour_px.size());
 
-    cv::Moments moments = cv::moments(contour);
+    cv::Moments moments = cv::moments(source_contour);
     if (std::abs(moments.m00) > std::numeric_limits<double>::epsilon()) {
         line.centroid_px.x = static_cast<float>(moments.m10 / moments.m00);
         line.centroid_px.y = static_cast<float>(moments.m01 / moments.m00);
     } else {
-        line.centroid_px.x = static_cast<float>(bounds.x + bounds.width / 2.0);
-        line.centroid_px.y = static_cast<float>(bounds.y + bounds.height / 2.0);
+        line.centroid_px.x = static_cast<float>(source_bounds.x + source_bounds.width / 2.0);
+        line.centroid_px.y = static_cast<float>(source_bounds.y + source_bounds.height / 2.0);
     }
 
     Candidate candidate;
@@ -261,44 +357,93 @@ LineDetection LineDetector::detect(const cv::Mat& image) const
         static_cast<int>(std::lround(height * clampRatio(config_.roi_top_ratio, 0.08))),
         0,
         std::max(0, height - 1));
-    const cv::Rect roi(0, roi_top, width, height - roi_top);
-    if (roi.width <= 0 || roi.height <= 0) {
+    const cv::Rect source_roi(0, roi_top, width, height - roi_top);
+    if (source_roi.width <= 0 || source_roi.height <= 0) {
         return {};
     }
 
-    cv::Mat gray;
-    const cv::Mat roi_image = image(roi);
-    if (roi_image.channels() == 1) {
-        gray = roi_image;
+    WorkGeometry geometry;
+    geometry.source_width = width;
+    geometry.source_height = height;
+    geometry.roi_top = roi_top;
+    geometry.roi_height = source_roi.height;
+
+    const int requested_width = config_.process_width > 0 ? config_.process_width : width;
+    geometry.work_width = std::clamp(requested_width, 1, width);
+    if (geometry.work_width == width) {
+        geometry.work_height = source_roi.height;
     } else {
-        cv::cvtColor(roi_image, gray, cv::COLOR_BGR2GRAY);
+        const double scale = geometry.work_width / static_cast<double>(width);
+        geometry.work_height =
+            std::max(1, static_cast<int>(std::lround(source_roi.height * scale)));
+    }
+    geometry.scale_x = width / static_cast<double>(geometry.work_width);
+    geometry.scale_y = source_roi.height / static_cast<double>(geometry.work_height);
+
+    cv::Mat roi_image = image(source_roi);
+    cv::Mat work_image;
+    if (geometry.work_width == source_roi.width && geometry.work_height == source_roi.height) {
+        work_image = roi_image;
+    } else {
+        cv::resize(
+            roi_image,
+            work_image,
+            cv::Size(geometry.work_width, geometry.work_height),
+            0.0,
+            0.0,
+            cv::INTER_AREA);
     }
 
-    const int lookahead_y = std::clamp(
+    cv::Mat gray;
+    if (work_image.channels() == 1) {
+        gray = work_image;
+    } else {
+        cv::cvtColor(work_image, gray, cv::COLOR_BGR2GRAY);
+    }
+
+    const int source_lookahead_y = std::clamp(
         static_cast<int>(std::lround(height * clampRatio(config_.lookahead_y_ratio, 0.55))),
         roi_top,
         height - 1);
+    const int work_lookahead_y = std::clamp(
+        static_cast<int>(std::lround((source_lookahead_y - roi_top) / geometry.scale_y)),
+        0,
+        geometry.work_height - 1);
 
+    int total_contours = 0;
+    int candidates_evaluated = 0;
     std::optional<Candidate> best;
-    auto masks = buildMasks(gray, config_);
+    auto masks = buildMasks(gray, config_, geometry);
     for (const auto& mask : masks) {
         std::vector<std::vector<cv::Point>> contours;
         cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-        for (std::size_t index = 0; index < contours.size(); ++index) {
+        total_contours += static_cast<int>(contours.size());
+
+        const auto candidate_indexes = sortedCandidateIndexes(
+            contours,
+            scaledMinArea(config_, geometry),
+            config_.max_candidates);
+        for (const auto index : candidate_indexes) {
+            ++candidates_evaluated;
             auto candidate = evaluateContour(
                 contours[index],
                 mask,
                 config_,
-                roi,
-                width,
-                lookahead_y);
+                geometry,
+                work_lookahead_y);
             if (candidate && (!best || candidate->score > best->score)) {
                 best = std::move(candidate);
             }
         }
     }
 
-    return best ? best->line : LineDetection {};
+    LineDetection output = best ? best->line : LineDetection {};
+    output.mask_count = static_cast<int>(masks.size());
+    output.contours_found = total_contours;
+    output.candidates_evaluated = candidates_evaluated;
+    output.roi_pixels = geometry.work_width * geometry.work_height;
+    output.selected_contour_points = static_cast<int>(output.contour_px.size());
+    return output;
 }
 
 } // namespace onboard::vision

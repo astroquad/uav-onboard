@@ -21,10 +21,17 @@ struct MarkerTelemetry {
 
 struct LineTelemetry {
     bool detected = false;
+    bool raw_detected = false;
+    bool filtered = false;
+    bool held = false;
+    bool rejected_jump = false;
     Point2f tracking_point_px;
+    Point2f raw_tracking_point_px;
     Point2f centroid_px;
     double center_offset_px = 0.0;
+    double raw_center_offset_px = 0.0;
     double angle_deg = 0.0;
+    double raw_angle_deg = 0.0;
     double confidence = 0.0;
     std::vector<Point2f> contour_px;
 };
@@ -57,8 +64,22 @@ struct GridTelemetry {
 
 struct DebugTelemetry {
     double processing_latency_ms = 0.0;
+    double read_frame_ms = 0.0;
+    double jpeg_decode_ms = 0.0;
     double aruco_latency_ms = 0.0;
     double line_latency_ms = 0.0;
+    double telemetry_build_ms = 0.0;
+    double telemetry_send_ms = 0.0;
+    double video_submit_ms = 0.0;
+    std::uint64_t telemetry_bytes = 0;
+    std::uint64_t video_jpeg_bytes = 0;
+    std::uint64_t video_sent_frames = 0;
+    std::uint64_t video_dropped_frames = 0;
+    int line_mask_count = 0;
+    int line_contours_found = 0;
+    int line_candidates_evaluated = 0;
+    int line_roi_pixels = 0;
+    int line_selected_contour_points = 0;
 };
 
 struct BringupTelemetry {

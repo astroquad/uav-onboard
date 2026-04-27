@@ -89,6 +89,7 @@ if(BUILD_TOOLS)
         add_library(onboard_vision STATIC
             src/vision/ArucoDetector.cpp
             src/vision/LineDetector.cpp
+            src/vision/LineStabilizer.cpp
             src/vision/OpenCvCameraSource.cpp
         )
         target_include_directories(onboard_vision PUBLIC src)

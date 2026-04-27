@@ -31,17 +31,26 @@ struct ArucoConfig {
 
 struct LineConfig {
     bool enabled = true;
-    std::string mode = "auto";
+    std::string mode = "light_on_dark";
     bool offset_normalized = false;
     double roi_top_ratio = 0.08;
     double lookahead_y_ratio = 0.55;
     int threshold = 0;
     int min_area_px = 250;
     int morph_kernel = 5;
-    int max_contour_points = 80;
+    int max_contour_points = 48;
     double confidence_min = 0.20;
     int min_line_width_px = 8;
     double max_line_width_ratio = 0.22;
+    int process_width = 320;
+    int max_candidates = 8;
+    bool filter_enabled = true;
+    double filter_ema_alpha = 0.35;
+    double filter_min_confidence = 0.25;
+    double filter_max_offset_jump_ratio = 0.16;
+    double filter_max_angle_jump_deg = 35.0;
+    int filter_hold_frames = 3;
+    int filter_reacquire_frames = 3;
     double intersection_threshold = 0.8;
 };
 

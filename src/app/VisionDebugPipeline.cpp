@@ -6,6 +6,7 @@
 #include "video/UdpMjpegStreamer.hpp"
 #include "vision/ArucoDetector.hpp"
 #include "vision/LineDetector.hpp"
+#include "vision/LineStabilizer.hpp"
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -46,10 +47,17 @@ protocol::LineTelemetry toProtocolLine(const vision::LineDetection& line)
 {
     protocol::LineTelemetry output;
     output.detected = line.detected;
+    output.raw_detected = line.raw_detected;
+    output.filtered = line.filtered;
+    output.held = line.held;
+    output.rejected_jump = line.rejected_jump;
     output.tracking_point_px = toProtocolPoint(line.tracking_point_px);
+    output.raw_tracking_point_px = toProtocolPoint(line.raw_tracking_point_px);
     output.centroid_px = toProtocolPoint(line.centroid_px);
     output.center_offset_px = line.center_offset_px;
+    output.raw_center_offset_px = line.raw_center_offset_px;
     output.angle_deg = line.angle_deg;
+    output.raw_angle_deg = line.raw_angle_deg;
     output.confidence = line.confidence;
     output.contour_px.reserve(line.contour_px.size());
     for (const auto& point : line.contour_px) {
@@ -185,6 +193,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
     const vision::ArucoDetector aruco_detector(options.vision.aruco);
     const vision::LineDetector line_detector(options.vision.line);
+    vision::LineStabilizer line_stabilizer(options.vision.line);
 
     std::cout << "vision_debug_node\n"
               << "  destination: " << options.network.gcs_ip << "\n"
@@ -195,6 +204,9 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
               << "  aruco_dictionary: " << aruco_detector.dictionaryName() << "\n"
               << "  aruco: " << (options.enable_aruco ? "on" : "off") << "\n"
               << "  line: " << (options.enable_line && options.vision.line.enabled ? "on" : "off") << "\n"
+              << "  line_mode: " << options.vision.line.mode << "\n"
+              << "  line_process_width: " << options.vision.line.process_width << "\n"
+              << "  line_filter: " << (options.vision.line.filter_enabled ? "on" : "off") << "\n"
               << "  video: " << (options.send_video ? "on best-effort latest-frame" : "off") << "\n"
               << "  telemetry: " << (options.send_telemetry ? "on" : "off") << "\n"
               << "  count: " << (options.count == 0 ? std::string("forever") : std::to_string(options.count))
@@ -202,21 +214,35 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
     std::uint32_t telemetry_seq = 1;
     int processed_count = 0;
+    double last_telemetry_build_ms = 0.0;
+    double last_telemetry_send_ms = 0.0;
+    double last_video_submit_ms = 0.0;
+    std::uint64_t last_telemetry_bytes = 0;
     while (options.count == 0 || processed_count < options.count) {
         camera::CameraFrame frame;
+        const auto read_started = std::chrono::steady_clock::now();
         if (!camera.readFrame(frame)) {
             std::cerr << "failed to read rpicam frame: " << camera.lastError() << "\n";
             video_sender.stop();
             return 1;
         }
+        const auto read_finished = std::chrono::steady_clock::now();
+        const double read_frame_ms = std::chrono::duration<double, std::milli>(
+            read_finished - read_started).count();
+        const std::uint32_t frame_id = frame.frame_id;
+        const std::size_t jpeg_bytes = frame.jpeg_data.size();
 
         const auto processing_started = std::chrono::steady_clock::now();
+        const auto decode_started = std::chrono::steady_clock::now();
         const cv::Mat encoded(
             1,
             static_cast<int>(frame.jpeg_data.size()),
             CV_8UC1,
             frame.jpeg_data.data());
         const cv::Mat image = cv::imdecode(encoded, cv::IMREAD_COLOR);
+        const auto decode_finished = std::chrono::steady_clock::now();
+        const double jpeg_decode_ms = std::chrono::duration<double, std::milli>(
+            decode_finished - decode_started).count();
 
         vision::VisionResult result;
         result.frame_seq = frame.frame_id;
@@ -239,8 +265,9 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
             if (options.enable_line && options.vision.line.enabled) {
                 const auto line_started = std::chrono::steady_clock::now();
-                result.line = line_detector.detect(image);
+                const auto raw_line = line_detector.detect(image);
                 const auto line_finished = std::chrono::steady_clock::now();
+                result.line = line_stabilizer.update(raw_line, frame.width);
                 result.line_detected = result.line.detected;
                 line_latency_ms = std::chrono::duration<double, std::milli>(
                     line_finished - line_started).count();
@@ -248,6 +275,8 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         }
         const auto processing_finished = std::chrono::steady_clock::now();
 
+        double telemetry_build_ms = last_telemetry_build_ms;
+        double telemetry_send_ms = last_telemetry_send_ms;
         if (options.send_telemetry) {
             protocol::BringupTelemetry telemetry;
             telemetry.seq = telemetry_seq++;
@@ -270,17 +299,49 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
             telemetry.debug.line_latency_ms = line_latency_ms;
             telemetry.debug.processing_latency_ms = std::chrono::duration<double, std::milli>(
                 processing_finished - processing_started).count();
+            telemetry.debug.read_frame_ms = read_frame_ms;
+            telemetry.debug.jpeg_decode_ms = jpeg_decode_ms;
+            telemetry.debug.telemetry_build_ms = last_telemetry_build_ms;
+            telemetry.debug.telemetry_send_ms = last_telemetry_send_ms;
+            telemetry.debug.video_submit_ms = last_video_submit_ms;
+            telemetry.debug.telemetry_bytes = last_telemetry_bytes;
+            telemetry.debug.video_jpeg_bytes = jpeg_bytes;
+            telemetry.debug.video_sent_frames = video_sender.sentFrames();
+            telemetry.debug.video_dropped_frames = video_sender.droppedFrames();
+            telemetry.debug.line_mask_count = result.line.mask_count;
+            telemetry.debug.line_contours_found = result.line.contours_found;
+            telemetry.debug.line_candidates_evaluated = result.line.candidates_evaluated;
+            telemetry.debug.line_roi_pixels = result.line.roi_pixels;
+            telemetry.debug.line_selected_contour_points = result.line.selected_contour_points;
             telemetry.note = "vision_debug_node";
 
+            const auto telemetry_build_started = std::chrono::steady_clock::now();
             const std::string payload = protocol::buildTelemetryJson(telemetry);
+            const auto telemetry_build_finished = std::chrono::steady_clock::now();
+            telemetry_build_ms = std::chrono::duration<double, std::milli>(
+                telemetry_build_finished - telemetry_build_started).count();
+            last_telemetry_build_ms = telemetry_build_ms;
+            last_telemetry_bytes = payload.size();
+
+            const auto telemetry_send_started = std::chrono::steady_clock::now();
             if (!telemetry_sender.send(payload)) {
                 std::cerr << "telemetry send warning: "
                           << telemetry_sender.lastError() << "\n";
             }
+            const auto telemetry_send_finished = std::chrono::steady_clock::now();
+            telemetry_send_ms = std::chrono::duration<double, std::milli>(
+                telemetry_send_finished - telemetry_send_started).count();
+            last_telemetry_send_ms = telemetry_send_ms;
         }
 
+        double video_submit_ms = last_video_submit_ms;
         if (options.send_video) {
-            video_sender.submit(frame);
+            const auto video_submit_started = std::chrono::steady_clock::now();
+            video_sender.submit(std::move(frame));
+            const auto video_submit_finished = std::chrono::steady_clock::now();
+            video_submit_ms = std::chrono::duration<double, std::milli>(
+                video_submit_finished - video_submit_started).count();
+            last_video_submit_ms = video_submit_ms;
             const std::string video_error = video_sender.takeLastError();
             if (!video_error.empty()) {
                 std::cerr << "video send warning: " << video_error << "\n";
@@ -288,11 +349,23 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         }
 
         ++processed_count;
-        std::cout << "frame=" << frame.frame_id
+        std::cout << "frame=" << frame_id
                   << " markers=" << result.markers.size()
                   << " line=" << (result.line.detected ? "yes" : "no")
+                  << " raw_line=" << (result.line.raw_detected ? "yes" : "no")
+                  << " held=" << (result.line.held ? "yes" : "no")
+                  << " rejected_jump=" << (result.line.rejected_jump ? "yes" : "no")
                   << " line_conf=" << result.line.confidence
-                  << " jpeg_bytes=" << frame.jpeg_data.size()
+                  << " read_ms=" << read_frame_ms
+                  << " decode_ms=" << jpeg_decode_ms
+                  << " aruco_ms=" << aruco_latency_ms
+                  << " line_ms=" << line_latency_ms
+                  << " process_ms=" << std::chrono::duration<double, std::milli>(
+                         processing_finished - processing_started).count()
+                  << " json_ms=" << telemetry_build_ms
+                  << " tsend_ms=" << telemetry_send_ms
+                  << " vsubmit_ms=" << video_submit_ms
+                  << " jpeg_bytes=" << jpeg_bytes
                   << " video_sent=" << video_sender.sentFrames()
                   << " video_dropped=" << video_sender.droppedFrames()
                   << "\n";

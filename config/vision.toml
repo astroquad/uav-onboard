@@ -13,17 +13,26 @@ port = 5600
 
 [line]
 enabled = true
-mode = "auto"
+mode = "light_on_dark"
 offset_normalized = false
 roi_top_ratio = 0.08
 lookahead_y_ratio = 0.55
 threshold = 0
 min_area_px = 250
 morph_kernel = 5
-max_contour_points = 80
+max_contour_points = 48
 confidence_min = 0.20
 min_line_width_px = 8
 max_line_width_ratio = 0.22
+process_width = 320
+max_candidates = 8
+filter_enabled = true
+filter_ema_alpha = 0.35
+filter_min_confidence = 0.25
+filter_max_offset_jump_ratio = 0.16
+filter_max_angle_jump_deg = 35.0
+filter_hold_frames = 3
+filter_reacquire_frames = 3
 intersection_threshold = 0.8
 
 [aruco]

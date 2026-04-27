@@ -123,7 +123,11 @@ int main(int argc, char** argv)
               << "offset=" << line.center_offset_px << "px\n"
               << "angle=" << line.angle_deg << "deg\n"
               << "confidence=" << line.confidence << "\n"
-              << "contour_points=" << line.contour_px.size() << "\n";
+              << "contour_points=" << line.contour_px.size() << "\n"
+              << "mask_count=" << line.mask_count << "\n"
+              << "contours_found=" << line.contours_found << "\n"
+              << "candidates_evaluated=" << line.candidates_evaluated << "\n"
+              << "roi_pixels=" << line.roi_pixels << "\n";
 
     return line.detected ? 0 : 3;
 }

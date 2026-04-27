@@ -20,12 +20,24 @@ struct MarkerObservation {
 
 struct LineDetection {
     bool detected = false;
+    bool raw_detected = false;
+    bool filtered = false;
+    bool held = false;
+    bool rejected_jump = false;
     Point2f tracking_point_px;
+    Point2f raw_tracking_point_px;
     Point2f centroid_px;
     float center_offset_px = 0.0f;
+    float raw_center_offset_px = 0.0f;
     float angle_deg = 0.0f;
+    float raw_angle_deg = 0.0f;
     float confidence = 0.0f;
     std::vector<Point2f> contour_px;
+    int mask_count = 0;
+    int contours_found = 0;
+    int candidates_evaluated = 0;
+    int roi_pixels = 0;
+    int selected_contour_points = 0;
 };
 
 struct VisionResult {

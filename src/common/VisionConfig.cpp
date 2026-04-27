@@ -73,6 +73,19 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.line.confidence_min = line["confidence_min"].value_or(config.line.confidence_min);
         config.line.min_line_width_px = line["min_line_width_px"].value_or(config.line.min_line_width_px);
         config.line.max_line_width_ratio = line["max_line_width_ratio"].value_or(config.line.max_line_width_ratio);
+        config.line.process_width = line["process_width"].value_or(config.line.process_width);
+        config.line.max_candidates = line["max_candidates"].value_or(config.line.max_candidates);
+        config.line.filter_enabled = line["filter_enabled"].value_or(config.line.filter_enabled);
+        config.line.filter_ema_alpha = line["filter_ema_alpha"].value_or(config.line.filter_ema_alpha);
+        config.line.filter_min_confidence =
+            line["filter_min_confidence"].value_or(config.line.filter_min_confidence);
+        config.line.filter_max_offset_jump_ratio =
+            line["filter_max_offset_jump_ratio"].value_or(config.line.filter_max_offset_jump_ratio);
+        config.line.filter_max_angle_jump_deg =
+            line["filter_max_angle_jump_deg"].value_or(config.line.filter_max_angle_jump_deg);
+        config.line.filter_hold_frames = line["filter_hold_frames"].value_or(config.line.filter_hold_frames);
+        config.line.filter_reacquire_frames =
+            line["filter_reacquire_frames"].value_or(config.line.filter_reacquire_frames);
         config.line.intersection_threshold =
             line["intersection_threshold"].value_or(config.line.intersection_threshold);
     }

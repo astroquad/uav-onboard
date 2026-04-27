@@ -1,6 +1,6 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.2
+Version: v1.3
 Last updated: 2026-04-27
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
@@ -64,10 +64,17 @@ Required top-level fields:
     "line_angle": 0.0,
     "line": {
       "detected": false,
+      "raw_detected": false,
+      "filtered": false,
+      "held": false,
+      "rejected_jump": false,
       "tracking_point_px": { "x": 0.0, "y": 0.0 },
+      "raw_tracking_point_px": { "x": 0.0, "y": 0.0 },
       "centroid_px": { "x": 0.0, "y": 0.0 },
       "center_offset_px": 0.0,
+      "raw_center_offset_px": 0.0,
       "angle_deg": 0.0,
+      "raw_angle_deg": 0.0,
       "confidence": 0.0,
       "contour_px": []
     },
@@ -97,8 +104,22 @@ Required top-level fields:
   },
   "debug": {
     "processing_latency_ms": 12.4,
+    "read_frame_ms": 56.1,
+    "jpeg_decode_ms": 3.4,
     "aruco_latency_ms": 8.1,
     "line_latency_ms": 2.2,
+    "telemetry_build_ms": 0.3,
+    "telemetry_send_ms": 0.1,
+    "video_submit_ms": 0.1,
+    "telemetry_bytes": 980,
+    "video_jpeg_bytes": 24576,
+    "video_sent_frames": 357,
+    "video_dropped_frames": 2,
+    "line_mask_count": 1,
+    "line_contours_found": 4,
+    "line_candidates_evaluated": 3,
+    "line_roi_pixels": 141312,
+    "line_selected_contour_points": 48,
     "note": "vision_debug_node"
   }
 }
@@ -114,10 +135,17 @@ Required top-level fields:
 | `vision.line_offset` | number | Legacy summary field. Same value as `vision.line.center_offset_px`. |
 | `vision.line_angle` | number | Legacy summary field. Same value as `vision.line.angle_deg`. |
 | `vision.line.detected` | `bool` | True when a usable line contour/tracking point was found. |
+| `vision.line.raw_detected` | `bool` | True when the current raw detector frame found a candidate before smoothing/hold logic. |
+| `vision.line.filtered` | `bool` | True when the reported line has passed through the stabilizer. |
+| `vision.line.held` | `bool` | True when the stabilizer is temporarily holding the previous line because the current raw frame was missing or rejected. |
+| `vision.line.rejected_jump` | `bool` | True when the current raw candidate was suppressed as a sudden offset/angle jump. |
 | `vision.line.tracking_point_px` | object | Representative line point used for tracing. GCS draws it as a green point. |
+| `vision.line.raw_tracking_point_px` | object | Raw detector tracking point before EMA/hold filtering. |
 | `vision.line.centroid_px` | object | Contour centroid fallback/diagnostic point. |
 | `vision.line.center_offset_px` | number | Horizontal offset from image center to `tracking_point_px`. |
+| `vision.line.raw_center_offset_px` | number | Raw offset before stabilizer filtering. |
 | `vision.line.angle_deg` | number | Image-plane line angle. |
+| `vision.line.raw_angle_deg` | number | Raw detector angle before stabilizer filtering. |
 | `vision.line.confidence` | number | 0.0 to 1.0 confidence estimate from contour quality. |
 | `vision.line.contour_px` | array | Simplified connected line candidate contour/polyline in image pixel coordinates. GCS draws it in magenta, including cross-shaped intersections when they are part of the selected contour. |
 | `vision.marker_detected` | `bool` | True when `markers` is not empty. |
@@ -126,9 +154,23 @@ Required top-level fields:
 | `vision.markers[].center_px` | object | Marker center in image pixel coordinates. |
 | `vision.markers[].corners_px` | array | Four marker corners in image pixel coordinates, ordered as OpenCV returns them. |
 | `vision.markers[].orientation_deg` | number | Image-plane angle from corner 0 to corner 1. |
-| `debug.processing_latency_ms` | number | Total onboard frame processing latency measured in the vision debug loop. |
+| `debug.processing_latency_ms` | number | Onboard decode and detector processing latency after a camera frame has been read. |
+| `debug.read_frame_ms` | number | Time spent waiting for/reading one MJPEG camera frame. |
+| `debug.jpeg_decode_ms` | number | Time spent decoding the camera JPEG for onboard detectors. |
 | `debug.aruco_latency_ms` | number | ArUco detector latency for the frame. |
 | `debug.line_latency_ms` | number | Line detector latency for the frame. |
+| `debug.telemetry_build_ms` | number | Most recently measured telemetry JSON serialization latency. |
+| `debug.telemetry_send_ms` | number | Most recently measured UDP telemetry send call latency. |
+| `debug.video_submit_ms` | number | Most recently measured latest-frame video queue submit latency. |
+| `debug.telemetry_bytes` | `uint64` | Most recently serialized telemetry payload size. |
+| `debug.video_jpeg_bytes` | `uint64` | Raw camera JPEG byte size for this frame. |
+| `debug.video_sent_frames` | `uint64` | Number of frames sent by the onboard video worker. |
+| `debug.video_dropped_frames` | `uint64` | Number of stale frames replaced before the video worker could send them. |
+| `debug.line_mask_count` | `int` | Number of threshold masks evaluated by the line detector. |
+| `debug.line_contours_found` | `int` | Number of line candidate contours found before filtering. |
+| `debug.line_candidates_evaluated` | `int` | Number of ranked contours actually scored. |
+| `debug.line_roi_pixels` | `int` | Pixel count of the resized ROI processed by the line detector. |
+| `debug.line_selected_contour_points` | `int` | Number of simplified contour points sent in telemetry. |
 
 GCS overlay rendering uses only onboard vision metadata. It does not run marker or line detection locally.
 
@@ -199,3 +241,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.0 | 2026-04-24 | Initial JSON telemetry, command, and video protocol draft. |
 | v1.1 | 2026-04-27 | Added `vision.markers[]`, frame-synchronized marker telemetry, `debug.aruco_latency_ms`, and GCS discovery beacon details. |
 | v1.2 | 2026-04-27 | Added `vision.line`, `debug.line_latency_ms`, GCS line overlay metadata, and explicit best-effort debug video rules. |
+| v1.3 | 2026-04-27 | Added line stabilizer state, raw line diagnostics, latency breakdown, video queue counters, and line detector workload counters. |
