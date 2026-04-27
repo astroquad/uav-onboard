@@ -48,7 +48,7 @@ struct LineConfig {
     double filter_ema_alpha = 0.35;
     double filter_min_confidence = 0.25;
     double filter_max_offset_jump_ratio = 0.16;
-    double filter_max_angle_jump_deg = 35.0;
+    double filter_max_angle_jump_deg = 90.0;
     int filter_hold_frames = 3;
     int filter_reacquire_frames = 3;
     double intersection_threshold = 0.8;

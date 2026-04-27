@@ -160,6 +160,9 @@ Latency and stability defaults are configured in `config/vision.toml`:
 - `line.max_candidates = 8`: only the largest ranked contours are scored.
 - `line.filter_enabled = true`: raw line offset/angle spikes are masked with
   EMA smoothing, short hold, and multi-frame reacquire logic.
+- `line.filter_max_angle_jump_deg = 90.0`: angle-only jumps are treated
+  loosely because cross/grid contours can make `fitLine` angle noisy while the
+  tracking offset remains stable.
 - The GCS vision log shows read/decode/ArUco/line/JSON/send/video timings,
   contour counts, queue drops, and raw-vs-filtered line state.
 
