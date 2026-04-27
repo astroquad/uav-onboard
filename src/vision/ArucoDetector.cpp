@@ -10,9 +10,9 @@
 namespace onboard::vision {
 namespace {
 
-cv::aruco::PREDEFINED_DICTIONARY_NAME dictionaryFromName(const std::string& name)
+cv::aruco::PredefinedDictionaryType dictionaryFromName(const std::string& name)
 {
-    static const std::map<std::string, cv::aruco::PREDEFINED_DICTIONARY_NAME> dictionaries = {
+    static const std::map<std::string, cv::aruco::PredefinedDictionaryType> dictionaries = {
         {"DICT_4X4_50", cv::aruco::DICT_4X4_50},
         {"DICT_4X4_100", cv::aruco::DICT_4X4_100},
         {"DICT_4X4_250", cv::aruco::DICT_4X4_250},
