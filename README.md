@@ -78,6 +78,34 @@ For a local sender smoke test without the Pi camera:
 debug stream; dropped frames are acceptable so video output does not become part
 of the future mission-critical vision loop.
 
+## ArUco Vision Debug
+
+Start `uav_gcs_vision_debug` on the laptop first. Then run this on the
+Raspberry Pi:
+
+```bash
+./build/vision_debug_node --config config
+```
+
+This node captures Pi camera MJPEG frames, decodes each frame for onboard ArUco
+detection, sends marker metadata as telemetry, and sends the original camera
+JPEG to GCS. It does not draw marker overlays on the Raspberry Pi.
+
+Useful options:
+
+```bash
+./build/vision_debug_node --config config --count 100
+./build/vision_debug_node --config config --gcs-ip <laptop-ip>
+./build/vision_debug_node --config config --no-video
+./build/vision_debug_node --config config --no-telemetry
+```
+
+For image-file detector smoke tests:
+
+```bash
+./build/aruco_detector_tester --config config --image test_data/images/marker.jpg
+```
+
 ## Telemetry Bring-Up
 
 Start `uav-gcs` on the laptop first, then run:

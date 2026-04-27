@@ -83,22 +83,35 @@ target_link_libraries(uav_onboard PRIVATE onboard_core)
 
 option(BUILD_TOOLS "Build onboard development tools" ON)
 if(BUILD_TOOLS)
-    find_package(OpenCV QUIET COMPONENTS core imgcodecs videoio)
+    find_package(OpenCV QUIET COMPONENTS core imgcodecs imgproc videoio aruco)
 
     if(OpenCV_FOUND)
-        add_executable(camera_preview
-            tools/camera_preview.cpp
+        add_library(onboard_vision STATIC
+            src/vision/ArucoDetector.cpp
             src/vision/OpenCvCameraSource.cpp
         )
+        target_include_directories(onboard_vision PUBLIC src)
+        target_link_libraries(onboard_vision PUBLIC onboard_core ${OpenCV_LIBS})
+
+        add_executable(camera_preview
+            tools/camera_preview.cpp
+        )
         target_include_directories(camera_preview PRIVATE src)
-        target_link_libraries(camera_preview PRIVATE ${OpenCV_LIBS})
+        target_link_libraries(camera_preview PRIVATE onboard_vision)
+
+        add_executable(aruco_detector_tester tools/aruco_detector_tester.cpp)
+        target_include_directories(aruco_detector_tester PRIVATE src)
+        target_link_libraries(aruco_detector_tester PRIVATE onboard_vision)
+
+        add_executable(vision_debug_node tools/vision_debug_node.cpp)
+        target_include_directories(vision_debug_node PRIVATE src)
+        target_link_libraries(vision_debug_node PRIVATE onboard_core onboard_video onboard_vision)
     else()
-        message(WARNING "OpenCV was not found; camera_preview will not be built.")
+        message(WARNING "OpenCV with aruco was not found; camera_preview, aruco_detector_tester, and vision_debug_node will not be built.")
     endif()
 
     foreach(tool
         line_detector_tuner
-        aruco_detector_tester
         replay_vision
         mock_gcs_command
     )

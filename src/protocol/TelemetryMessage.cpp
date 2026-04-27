@@ -3,9 +3,34 @@
 #include <nlohmann/json.hpp>
 
 namespace onboard::protocol {
+namespace {
+
+nlohmann::json pointToJson(const Point2f& point)
+{
+    return {
+        {"x", point.x},
+        {"y", point.y},
+    };
+}
+
+} // namespace
 
 std::string buildTelemetryJson(const BringupTelemetry& telemetry)
 {
+    nlohmann::json markers = nlohmann::json::array();
+    for (const auto& marker : telemetry.vision.markers) {
+        nlohmann::json corners = nlohmann::json::array();
+        for (const auto& corner : marker.corners_px) {
+            corners.push_back(pointToJson(corner));
+        }
+        markers.push_back({
+            {"id", marker.id},
+            {"center_px", pointToJson(marker.center_px)},
+            {"corners_px", corners},
+            {"orientation_deg", marker.orientation_deg},
+        });
+    }
+
     nlohmann::json message;
     message["protocol_version"] = 1;
     message["type"] = "TELEMETRY";
@@ -30,6 +55,8 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
         {"intersection_score", telemetry.vision.intersection_score},
         {"marker_detected", telemetry.vision.marker_detected},
         {"marker_id", telemetry.vision.marker_id},
+        {"marker_count", telemetry.vision.markers.size()},
+        {"markers", markers},
     };
     message["grid"] = {
         {"row", telemetry.grid.row},
@@ -38,6 +65,7 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
     };
     message["debug"] = {
         {"processing_latency_ms", telemetry.debug.processing_latency_ms},
+        {"aruco_latency_ms", telemetry.debug.aruco_latency_ms},
         {"note", telemetry.note},
     };
 

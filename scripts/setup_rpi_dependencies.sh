@@ -92,6 +92,11 @@ if apt-cache show libcamera-dev >/dev/null 2>&1; then
     optional_camera_packages+=(libcamera-dev)
 fi
 
+optional_opencv_packages=()
+if apt-cache show libopencv-contrib-dev >/dev/null 2>&1; then
+    optional_opencv_packages+=(libopencv-contrib-dev)
+fi
+
 optional_dev_packages=()
 if [[ "${install_dev_tools}" == true ]]; then
     for pkg in clang-format shellcheck gdb rsync; do
@@ -101,7 +106,7 @@ if [[ "${install_dev_tools}" == true ]]; then
     done
 fi
 
-all_packages=("${required_packages[@]}" "${optional_camera_packages[@]}" "${optional_dev_packages[@]}")
+all_packages=("${required_packages[@]}" "${optional_camera_packages[@]}" "${optional_opencv_packages[@]}" "${optional_dev_packages[@]}")
 
 missing_packages=()
 for pkg in "${all_packages[@]}"; do

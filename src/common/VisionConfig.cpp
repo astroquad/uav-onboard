@@ -45,6 +45,21 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.video.port = video["port"].value_or(config.video.port);
     }
 
+    if (const auto aruco = table["aruco"]) {
+        config.aruco.dictionary = aruco["dictionary"].value_or(config.aruco.dictionary);
+        config.aruco.marker_size_mm = aruco["marker_size_mm"].value_or(config.aruco.marker_size_mm);
+        config.aruco.min_marker_perimeter_rate =
+            aruco["min_marker_perimeter_rate"].value_or(config.aruco.min_marker_perimeter_rate);
+        config.aruco.max_marker_perimeter_rate =
+            aruco["max_marker_perimeter_rate"].value_or(config.aruco.max_marker_perimeter_rate);
+        config.aruco.adaptive_thresh_win_size_min =
+            aruco["adaptive_thresh_win_size_min"].value_or(config.aruco.adaptive_thresh_win_size_min);
+        config.aruco.adaptive_thresh_win_size_max =
+            aruco["adaptive_thresh_win_size_max"].value_or(config.aruco.adaptive_thresh_win_size_max);
+        config.aruco.adaptive_thresh_win_size_step =
+            aruco["adaptive_thresh_win_size_step"].value_or(config.aruco.adaptive_thresh_win_size_step);
+    }
+
     return config;
 }
 

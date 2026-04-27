@@ -17,3 +17,9 @@ intersection_threshold = 0.8
 
 [aruco]
 dictionary = "DICT_4X4_50"
+marker_size_mm = 80.0
+min_marker_perimeter_rate = 0.03
+max_marker_perimeter_rate = 4.0
+adaptive_thresh_win_size_min = 3
+adaptive_thresh_win_size_max = 23
+adaptive_thresh_win_size_step = 10
