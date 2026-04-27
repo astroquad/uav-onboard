@@ -146,9 +146,10 @@ Line mode guidance:
   default `0.55` places it close to the frame center instead of the old lower
   debug point.
 
-The line contour sent to GCS is filtered around the selected tracking branch.
-This keeps wide reflections or intersection bars from becoming the magenta
-tracing contour when the actual line-width branch is still visible.
+The line contour sent to GCS is the simplified connected contour selected by
+the detector. This keeps cross-shaped intersections visible in the magenta
+overlay; tune `--line-threshold`, `--line-mode`, and camera angle if reflection
+or shadows become too aggressive.
 
 For image-file detector smoke tests:
 
