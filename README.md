@@ -124,14 +124,28 @@ Useful options:
 ./build/vision_debug_node --config config --line-only
 ./build/vision_debug_node --config config --disable-line
 ./build/vision_debug_node --config config --disable-aruco
+./build/vision_debug_node --config config --line-only --line-mode auto
+./build/vision_debug_node --config config --line-only --line-mode light_on_dark
+./build/vision_debug_node --config config --line-only --line-mode dark_on_light
+./build/vision_debug_node --config config --line-only --line-threshold 160
 ```
+
+Line mode guidance:
+
+- `auto`: default. Tests both bright-line and dark-line masks and chooses the
+  best line-shaped candidate.
+- `light_on_dark`: use when the track line is brighter than the floor.
+- `dark_on_light`: use when the track line is darker than the floor.
+- `--line-threshold 0`: use automatic Otsu thresholding. A positive value uses
+  that fixed grayscale threshold.
 
 For image-file detector smoke tests:
 
 ```bash
 ./build/aruco_detector_tester --config config --image test_data/images/marker.jpg
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg
-./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --threshold 90 --roi-top 0.35
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode auto
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode light_on_dark --threshold 160 --roi-top 0.35
 ```
 
 Expected GCS result:

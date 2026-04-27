@@ -71,6 +71,8 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.line.morph_kernel = line["morph_kernel"].value_or(config.line.morph_kernel);
         config.line.max_contour_points = line["max_contour_points"].value_or(config.line.max_contour_points);
         config.line.confidence_min = line["confidence_min"].value_or(config.line.confidence_min);
+        config.line.min_line_width_px = line["min_line_width_px"].value_or(config.line.min_line_width_px);
+        config.line.max_line_width_ratio = line["max_line_width_ratio"].value_or(config.line.max_line_width_ratio);
         config.line.intersection_threshold =
             line["intersection_threshold"].value_or(config.line.intersection_threshold);
     }

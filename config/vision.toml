@@ -13,15 +13,17 @@ port = 5600
 
 [line]
 enabled = true
-mode = "dark_on_light"
+mode = "auto"
 offset_normalized = false
 roi_top_ratio = 0.35
 lookahead_y_ratio = 0.70
-threshold = 90
+threshold = 0
 min_area_px = 250
 morph_kernel = 5
 max_contour_points = 80
-confidence_min = 0.05
+confidence_min = 0.20
+min_line_width_px = 8
+max_line_width_ratio = 0.22
 intersection_threshold = 0.8
 
 [aruco]

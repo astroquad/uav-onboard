@@ -36,6 +36,8 @@ struct Options {
     bool send_telemetry = true;
     bool enable_aruco = true;
     bool enable_line = true;
+    std::string line_mode_override;
+    int line_threshold_override = -1;
 };
 
 struct GcsDiscoveryResult {
@@ -58,6 +60,8 @@ void printUsage()
         << "  --disable-line       Disable line detection\n"
         << "  --aruco-only         Enable ArUco and disable line detection\n"
         << "  --line-only          Enable line detection and disable ArUco\n"
+        << "  --line-mode <mode>   auto, light_on_dark, or dark_on_light\n"
+        << "  --line-threshold <n> Override fixed threshold; 0 uses Otsu/auto\n"
         << "  -h, --help           Show this help\n";
 }
 
@@ -97,6 +101,10 @@ Options parseOptions(int argc, char** argv)
         } else if (arg == "--line-only") {
             options.enable_aruco = false;
             options.enable_line = true;
+        } else if (arg == "--line-mode" && i + 1 < argc) {
+            options.line_mode_override = argv[++i];
+        } else if (arg == "--line-threshold" && i + 1 < argc) {
+            options.line_threshold_override = parseInt(argv[++i], options.line_threshold_override);
         } else if (arg == "-h" || arg == "--help") {
             printUsage();
             std::exit(0);
@@ -246,6 +254,12 @@ int main(int argc, char** argv)
 
     if (!options.gcs_ip_override.empty()) {
         network_config.gcs_ip = options.gcs_ip_override;
+    }
+    if (!options.line_mode_override.empty()) {
+        vision_config.line.mode = options.line_mode_override;
+    }
+    if (options.line_threshold_override >= 0) {
+        vision_config.line.threshold = options.line_threshold_override;
     }
     if (options.video_port_override > 0) {
         network_config.video_port = static_cast<std::uint16_t>(options.video_port_override);

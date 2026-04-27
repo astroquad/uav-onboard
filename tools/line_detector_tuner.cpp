@@ -13,6 +13,7 @@ namespace {
 struct Options {
     std::string config_dir = "config";
     std::string image_path;
+    std::string mode;
     int threshold = -1;
     double roi_top_ratio = -1.0;
 };
@@ -24,6 +25,7 @@ void printUsage()
         << "Options:\n"
         << "  --config <dir>       Config directory, default config\n"
         << "  --image <path>       Input image path\n"
+        << "  --mode <mode>        auto, light_on_dark, or dark_on_light\n"
         << "  --threshold <n>      Override line threshold 0..255\n"
         << "  --roi-top <ratio>    Override ROI top ratio 0.0..1.0\n"
         << "  -h, --help           Show this help\n";
@@ -56,6 +58,8 @@ Options parseOptions(int argc, char** argv)
             options.config_dir = argv[++i];
         } else if (arg == "--image" && i + 1 < argc) {
             options.image_path = argv[++i];
+        } else if (arg == "--mode" && i + 1 < argc) {
+            options.mode = argv[++i];
         } else if (arg == "--threshold" && i + 1 < argc) {
             options.threshold = parseInt(argv[++i], options.threshold);
         } else if (arg == "--roi-top" && i + 1 < argc) {
@@ -84,6 +88,9 @@ int main(int argc, char** argv)
     }
 
     auto config = onboard::common::loadVisionConfig(options.config_dir);
+    if (!options.mode.empty()) {
+        config.line.mode = options.mode;
+    }
     if (options.threshold >= 0) {
         config.line.threshold = options.threshold;
     }
