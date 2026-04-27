@@ -60,6 +60,21 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             aruco["adaptive_thresh_win_size_step"].value_or(config.aruco.adaptive_thresh_win_size_step);
     }
 
+    if (const auto line = table["line"]) {
+        config.line.enabled = line["enabled"].value_or(config.line.enabled);
+        config.line.mode = line["mode"].value_or(config.line.mode);
+        config.line.offset_normalized = line["offset_normalized"].value_or(config.line.offset_normalized);
+        config.line.roi_top_ratio = line["roi_top_ratio"].value_or(config.line.roi_top_ratio);
+        config.line.lookahead_y_ratio = line["lookahead_y_ratio"].value_or(config.line.lookahead_y_ratio);
+        config.line.threshold = line["threshold"].value_or(config.line.threshold);
+        config.line.min_area_px = line["min_area_px"].value_or(config.line.min_area_px);
+        config.line.morph_kernel = line["morph_kernel"].value_or(config.line.morph_kernel);
+        config.line.max_contour_points = line["max_contour_points"].value_or(config.line.max_contour_points);
+        config.line.confidence_min = line["confidence_min"].value_or(config.line.confidence_min);
+        config.line.intersection_threshold =
+            line["intersection_threshold"].value_or(config.line.intersection_threshold);
+    }
+
     return config;
 }
 

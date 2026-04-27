@@ -18,12 +18,23 @@ struct MarkerObservation {
     float orientation_deg = 0.0f;
 };
 
+struct LineDetection {
+    bool detected = false;
+    Point2f tracking_point_px;
+    Point2f centroid_px;
+    float center_offset_px = 0.0f;
+    float angle_deg = 0.0f;
+    float confidence = 0.0f;
+    std::vector<Point2f> contour_px;
+};
+
 struct VisionResult {
     std::uint32_t frame_seq = 0;
     std::int64_t timestamp_ms = 0;
     int width = 0;
     int height = 0;
     std::vector<MarkerObservation> markers;
+    LineDetection line;
 
     bool line_detected = false;
     bool intersection_detected = false;

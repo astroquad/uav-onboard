@@ -78,7 +78,19 @@ For a local sender smoke test without the Pi camera:
 debug stream; dropped frames are acceptable so video output does not become part
 of the future mission-critical vision loop.
 
-## ArUco Vision Debug
+## Tests
+
+Configure with tests enabled:
+
+```bash
+cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+cmake --build build-tests
+ctest --test-dir build-tests --output-on-failure
+```
+
+Current focused tests cover telemetry JSON generation for `vision.line`.
+
+## Vision Debug: ArUco and Line Tracing
 
 Start `uav_gcs_vision_debug` on the laptop first. Then run this on the
 Raspberry Pi:
@@ -87,9 +99,19 @@ Raspberry Pi:
 ./build/vision_debug_node --config config
 ```
 
-This node captures Pi camera MJPEG frames, decodes each frame for onboard ArUco
-detection, sends marker metadata as telemetry, and sends the original camera
-JPEG to GCS. It does not draw marker overlays on the Raspberry Pi.
+This node captures Pi camera MJPEG frames, decodes each frame once, runs enabled
+onboard detectors, sends vision metadata as telemetry, and sends the original
+camera JPEG to GCS. It does not draw overlays on the Raspberry Pi.
+
+Current detectors:
+
+- ArUco marker detection.
+- Line tracing MVP using ROI threshold/mask/contour detection.
+
+The debug video path is best-effort and non-critical. If GCS video streaming
+falls behind, old video frames are dropped and the vision loop keeps working on
+the latest camera frame/result. Future mission decision and control output must
+stay on the critical path; GCS video is only an observation aid.
 
 Useful options:
 
@@ -98,13 +120,27 @@ Useful options:
 ./build/vision_debug_node --config config --gcs-ip <laptop-ip>
 ./build/vision_debug_node --config config --no-video
 ./build/vision_debug_node --config config --no-telemetry
+./build/vision_debug_node --config config --aruco-only
+./build/vision_debug_node --config config --line-only
+./build/vision_debug_node --config config --disable-line
+./build/vision_debug_node --config config --disable-aruco
 ```
 
 For image-file detector smoke tests:
 
 ```bash
 ./build/aruco_detector_tester --config config --image test_data/images/marker.jpg
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --threshold 90 --roi-top 0.35
 ```
+
+Expected GCS result:
+
+- ArUco markers are overlaid by GCS as marker boxes, center points, direction
+  arrows, and labels.
+- Detected line contour/border is overlaid by GCS in magenta.
+- The line tracking point is overlaid by GCS in green.
+- The onboard JPEG stream remains raw camera video with no drawn overlay.
 
 ## Telemetry Bring-Up
 

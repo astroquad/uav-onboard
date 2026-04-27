@@ -29,10 +29,25 @@ struct ArucoConfig {
     int adaptive_thresh_win_size_step = 10;
 };
 
+struct LineConfig {
+    bool enabled = true;
+    std::string mode = "dark_on_light";
+    bool offset_normalized = false;
+    double roi_top_ratio = 0.35;
+    double lookahead_y_ratio = 0.70;
+    int threshold = 90;
+    int min_area_px = 250;
+    int morph_kernel = 5;
+    int max_contour_points = 80;
+    double confidence_min = 0.05;
+    double intersection_threshold = 0.8;
+};
+
 struct VisionConfig {
     CameraConfig camera;
     VideoStreamConfig video;
     ArucoConfig aruco;
+    LineConfig line;
 };
 
 VisionConfig loadVisionConfig(const std::string& config_dir);

@@ -88,6 +88,7 @@ if(BUILD_TOOLS)
     if(OpenCV_FOUND)
         add_library(onboard_vision STATIC
             src/vision/ArucoDetector.cpp
+            src/vision/LineDetector.cpp
             src/vision/OpenCvCameraSource.cpp
         )
         target_include_directories(onboard_vision PUBLIC src)
@@ -103,7 +104,14 @@ if(BUILD_TOOLS)
         target_include_directories(aruco_detector_tester PRIVATE src)
         target_link_libraries(aruco_detector_tester PRIVATE onboard_vision)
 
-        add_executable(vision_debug_node tools/vision_debug_node.cpp)
+        add_executable(line_detector_tuner tools/line_detector_tuner.cpp)
+        target_include_directories(line_detector_tuner PRIVATE src)
+        target_link_libraries(line_detector_tuner PRIVATE onboard_vision)
+
+        add_executable(vision_debug_node
+            tools/vision_debug_node.cpp
+            src/app/VisionDebugPipeline.cpp
+        )
         target_include_directories(vision_debug_node PRIVATE src)
         target_link_libraries(vision_debug_node PRIVATE onboard_core onboard_video onboard_vision)
     else()
@@ -111,7 +119,6 @@ if(BUILD_TOOLS)
     endif()
 
     foreach(tool
-        line_detector_tuner
         replay_vision
         mock_gcs_command
     )

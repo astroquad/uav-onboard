@@ -17,6 +17,11 @@ nlohmann::json pointToJson(const Point2f& point)
 
 std::string buildTelemetryJson(const BringupTelemetry& telemetry)
 {
+    nlohmann::json contour = nlohmann::json::array();
+    for (const auto& point : telemetry.vision.line.contour_px) {
+        contour.push_back(pointToJson(point));
+    }
+
     nlohmann::json markers = nlohmann::json::array();
     for (const auto& marker : telemetry.vision.markers) {
         nlohmann::json corners = nlohmann::json::array();
@@ -51,6 +56,15 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
         {"line_detected", telemetry.vision.line_detected},
         {"line_offset", telemetry.vision.line_offset},
         {"line_angle", telemetry.vision.line_angle},
+        {"line", {
+            {"detected", telemetry.vision.line.detected},
+            {"tracking_point_px", pointToJson(telemetry.vision.line.tracking_point_px)},
+            {"centroid_px", pointToJson(telemetry.vision.line.centroid_px)},
+            {"center_offset_px", telemetry.vision.line.center_offset_px},
+            {"angle_deg", telemetry.vision.line.angle_deg},
+            {"confidence", telemetry.vision.line.confidence},
+            {"contour_px", contour},
+        }},
         {"intersection_detected", telemetry.vision.intersection_detected},
         {"intersection_score", telemetry.vision.intersection_score},
         {"marker_detected", telemetry.vision.marker_detected},
@@ -66,6 +80,7 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
     message["debug"] = {
         {"processing_latency_ms", telemetry.debug.processing_latency_ms},
         {"aruco_latency_ms", telemetry.debug.aruco_latency_ms},
+        {"line_latency_ms", telemetry.debug.line_latency_ms},
         {"note", telemetry.note},
     };
 

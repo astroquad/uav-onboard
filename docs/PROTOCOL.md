@@ -1,6 +1,6 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.1
+Version: v1.2
 Last updated: 2026-04-27
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
@@ -22,10 +22,11 @@ Ports and destination addresses are configured in each repo's `config/network.to
 - Receivers should drop malformed JSON without terminating the process.
 - `protocol_version` is currently `1`.
 - UDP telemetry and video are best-effort. Missing packets must not block mission logic.
+- Debug video streaming is never mission-critical. If video sending falls behind, onboard drops old frames and keeps the latest frame/result for vision and telemetry.
 
 ## 3. Telemetry JSON
 
-Telemetry packets are sent from onboard to GCS over UDP. During vision debugging, onboard sends one telemetry packet per processed camera frame so GCS can match marker metadata to the video frame.
+Telemetry packets are sent from onboard to GCS over UDP. During vision debugging, onboard sends one telemetry packet per processed camera frame so GCS can match marker and line metadata to the video frame.
 
 Required top-level fields:
 
@@ -61,6 +62,15 @@ Required top-level fields:
     "line_detected": false,
     "line_offset": 0.0,
     "line_angle": 0.0,
+    "line": {
+      "detected": false,
+      "tracking_point_px": { "x": 0.0, "y": 0.0 },
+      "centroid_px": { "x": 0.0, "y": 0.0 },
+      "center_offset_px": 0.0,
+      "angle_deg": 0.0,
+      "confidence": 0.0,
+      "contour_px": []
+    },
     "intersection_detected": false,
     "intersection_score": 0.0,
     "marker_detected": true,
@@ -88,6 +98,7 @@ Required top-level fields:
   "debug": {
     "processing_latency_ms": 12.4,
     "aruco_latency_ms": 8.1,
+    "line_latency_ms": 2.2,
     "note": "vision_debug_node"
   }
 }
@@ -99,6 +110,16 @@ Required top-level fields:
 |---|---|---|
 | `camera.frame_seq` | `uint32` | Must match the MJPEG video `frame_id` for the same camera frame. |
 | `camera.timestamp_ms` | `int64` | Not currently a nested field. Use top-level `timestamp_ms` as frame capture time. |
+| `vision.line_detected` | `bool` | Legacy summary field. True when the detailed line object is detected. |
+| `vision.line_offset` | number | Legacy summary field. Same value as `vision.line.center_offset_px`. |
+| `vision.line_angle` | number | Legacy summary field. Same value as `vision.line.angle_deg`. |
+| `vision.line.detected` | `bool` | True when a usable line contour/tracking point was found. |
+| `vision.line.tracking_point_px` | object | Representative line point used for tracing. GCS draws it as a green point. |
+| `vision.line.centroid_px` | object | Contour centroid fallback/diagnostic point. |
+| `vision.line.center_offset_px` | number | Horizontal offset from image center to `tracking_point_px`. |
+| `vision.line.angle_deg` | number | Image-plane line angle. |
+| `vision.line.confidence` | number | 0.0 to 1.0 confidence estimate from contour quality. |
+| `vision.line.contour_px` | array | Simplified contour/polyline in image pixel coordinates. GCS draws it in magenta. |
 | `vision.marker_detected` | `bool` | True when `markers` is not empty. |
 | `vision.marker_id` | `int` | First detected marker id, kept for backward compatibility. `-1` means none. |
 | `vision.marker_count` | `int` | Number of entries in `vision.markers`. |
@@ -107,8 +128,9 @@ Required top-level fields:
 | `vision.markers[].orientation_deg` | number | Image-plane angle from corner 0 to corner 1. |
 | `debug.processing_latency_ms` | number | Total onboard frame processing latency measured in the vision debug loop. |
 | `debug.aruco_latency_ms` | number | ArUco detector latency for the frame. |
+| `debug.line_latency_ms` | number | Line detector latency for the frame. |
 
-GCS overlay rendering uses only onboard marker metadata. It does not run marker detection locally.
+GCS overlay rendering uses only onboard vision metadata. It does not run marker or line detection locally.
 
 ## 4. Video Stream
 
@@ -165,10 +187,10 @@ Command messages will use JSON with the same common top-level fields and will re
 |---|---|---|
 | `uav_onboard` | onboard | Basic telemetry bring-up sender. |
 | `video_streamer` | onboard | Raw MJPEG streaming smoke tool. |
-| `vision_debug_node` | onboard | Pi camera capture, ArUco detection, raw video send, marker telemetry send. |
+| `vision_debug_node` | onboard | Pi camera capture, ArUco/line detection, raw video send, vision telemetry send. |
 | `uav_gcs` | GCS | Basic telemetry receiver. |
 | `uav_gcs_video` | GCS | Raw MJPEG video viewer. |
-| `uav_gcs_vision_debug` | GCS | MJPEG video viewer with marker telemetry logs and GCS-side overlay. |
+| `uav_gcs_vision_debug` | GCS | MJPEG video viewer with vision log window and GCS-side marker/line overlay. |
 
 ## 8. Change Log
 
@@ -176,3 +198,4 @@ Command messages will use JSON with the same common top-level fields and will re
 |---|---|---|
 | v1.0 | 2026-04-24 | Initial JSON telemetry, command, and video protocol draft. |
 | v1.1 | 2026-04-27 | Added `vision.markers[]`, frame-synchronized marker telemetry, `debug.aruco_latency_ms`, and GCS discovery beacon details. |
+| v1.2 | 2026-04-27 | Added `vision.line`, `debug.line_latency_ms`, GCS line overlay metadata, and explicit best-effort debug video rules. |
