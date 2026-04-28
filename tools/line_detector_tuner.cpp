@@ -14,9 +14,12 @@ struct Options {
     std::string config_dir = "config";
     std::string image_path;
     std::string mode;
+    std::string mask_strategy;
     int threshold = -1;
+    int process_width = -1;
     double roi_top_ratio = -1.0;
     double lookahead_y_ratio = -1.0;
+    double lookahead_band_ratio = -1.0;
 };
 
 void printUsage()
@@ -27,9 +30,12 @@ void printUsage()
         << "  --config <dir>       Config directory, default config\n"
         << "  --image <path>       Input image path\n"
         << "  --mode <mode>        auto, light_on_dark, or dark_on_light\n"
+        << "  --mask <strategy>    global, local_contrast, white_local_contrast\n"
         << "  --threshold <n>      Override line threshold 0..255\n"
+        << "  --process-width <n>  Override resized processing width\n"
         << "  --roi-top <ratio>    Override ROI top ratio 0.0..1.0\n"
         << "  --lookahead <ratio>  Override tracking point Y ratio 0.0..1.0\n"
+        << "  --band <ratio>       Override lookahead band height ratio 0.0..1.0\n"
         << "  -h, --help           Show this help\n";
 }
 
@@ -62,12 +68,18 @@ Options parseOptions(int argc, char** argv)
             options.image_path = argv[++i];
         } else if (arg == "--mode" && i + 1 < argc) {
             options.mode = argv[++i];
+        } else if (arg == "--mask" && i + 1 < argc) {
+            options.mask_strategy = argv[++i];
         } else if (arg == "--threshold" && i + 1 < argc) {
             options.threshold = parseInt(argv[++i], options.threshold);
+        } else if (arg == "--process-width" && i + 1 < argc) {
+            options.process_width = parseInt(argv[++i], options.process_width);
         } else if (arg == "--roi-top" && i + 1 < argc) {
             options.roi_top_ratio = parseDouble(argv[++i], options.roi_top_ratio);
         } else if (arg == "--lookahead" && i + 1 < argc) {
             options.lookahead_y_ratio = parseDouble(argv[++i], options.lookahead_y_ratio);
+        } else if (arg == "--band" && i + 1 < argc) {
+            options.lookahead_band_ratio = parseDouble(argv[++i], options.lookahead_band_ratio);
         } else if (arg == "-h" || arg == "--help") {
             printUsage();
             std::exit(0);
@@ -95,14 +107,23 @@ int main(int argc, char** argv)
     if (!options.mode.empty()) {
         config.line.mode = options.mode;
     }
+    if (!options.mask_strategy.empty()) {
+        config.line.mask_strategy = options.mask_strategy;
+    }
     if (options.threshold >= 0) {
         config.line.threshold = options.threshold;
+    }
+    if (options.process_width > 0) {
+        config.line.process_width = options.process_width;
     }
     if (options.roi_top_ratio >= 0.0) {
         config.line.roi_top_ratio = options.roi_top_ratio;
     }
     if (options.lookahead_y_ratio >= 0.0) {
         config.line.lookahead_y_ratio = options.lookahead_y_ratio;
+    }
+    if (options.lookahead_band_ratio >= 0.0) {
+        config.line.lookahead_band_ratio = options.lookahead_band_ratio;
     }
 
     const cv::Mat image = cv::imread(options.image_path, cv::IMREAD_COLOR);

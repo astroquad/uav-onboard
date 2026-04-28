@@ -60,11 +60,13 @@ LineDetection LineStabilizer::update(const LineDetection& raw, int image_width)
         return raw;
     }
 
-    const double alpha = std::clamp(config_.filter_ema_alpha, 0.05, 1.0);
+    const double base_alpha = std::clamp(config_.filter_ema_alpha, 0.05, 1.0);
     const int hold_frames = std::max(0, config_.filter_hold_frames);
     const int reacquire_frames = std::max(1, config_.filter_reacquire_frames);
     const double max_offset_jump =
         std::max(8.0, image_width * clampRatio(config_.filter_max_offset_jump_ratio, 0.16));
+    const double max_offset_velocity =
+        std::max(4.0, image_width * clampRatio(config_.filter_max_offset_velocity_ratio, 0.08));
     const double max_angle_jump = std::max(1.0, config_.filter_max_angle_jump_deg);
 
     if (!raw.detected || raw.confidence < config_.filter_min_confidence) {
@@ -130,9 +132,19 @@ LineDetection LineStabilizer::update(const LineDetection& raw, int image_width)
     accepted.filtered = true;
     accepted.held = false;
     accepted.rejected_jump = false;
+    const double confidence_scale = std::clamp(
+        (raw.confidence - config_.filter_min_confidence) /
+            std::max(0.01, 1.0 - config_.filter_min_confidence),
+        std::clamp(config_.filter_confidence_alpha_min, 0.05, 1.0),
+        1.0);
+    const double alpha = base_alpha * confidence_scale;
+    const float velocity_limited_x = static_cast<float>(std::clamp(
+        static_cast<double>(raw.tracking_point_px.x),
+        filtered_.tracking_point_px.x - max_offset_velocity,
+        filtered_.tracking_point_px.x + max_offset_velocity));
     accepted.tracking_point_px.x = lerp(
         filtered_.tracking_point_px.x,
-        raw.tracking_point_px.x,
+        velocity_limited_x,
         alpha);
     accepted.tracking_point_px.y = lerp(
         filtered_.tracking_point_px.y,

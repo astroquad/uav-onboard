@@ -63,10 +63,17 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
     if (const auto line = table["line"]) {
         config.line.enabled = line["enabled"].value_or(config.line.enabled);
         config.line.mode = line["mode"].value_or(config.line.mode);
+        config.line.mask_strategy = line["mask_strategy"].value_or(config.line.mask_strategy);
         config.line.offset_normalized = line["offset_normalized"].value_or(config.line.offset_normalized);
         config.line.roi_top_ratio = line["roi_top_ratio"].value_or(config.line.roi_top_ratio);
         config.line.lookahead_y_ratio = line["lookahead_y_ratio"].value_or(config.line.lookahead_y_ratio);
+        config.line.lookahead_band_ratio =
+            line["lookahead_band_ratio"].value_or(config.line.lookahead_band_ratio);
         config.line.threshold = line["threshold"].value_or(config.line.threshold);
+        config.line.local_contrast_blur =
+            line["local_contrast_blur"].value_or(config.line.local_contrast_blur);
+        config.line.local_contrast_threshold =
+            line["local_contrast_threshold"].value_or(config.line.local_contrast_threshold);
         config.line.min_area_px = line["min_area_px"].value_or(config.line.min_area_px);
         config.line.morph_kernel = line["morph_kernel"].value_or(config.line.morph_kernel);
         config.line.max_contour_points = line["max_contour_points"].value_or(config.line.max_contour_points);
@@ -77,10 +84,14 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.line.max_candidates = line["max_candidates"].value_or(config.line.max_candidates);
         config.line.filter_enabled = line["filter_enabled"].value_or(config.line.filter_enabled);
         config.line.filter_ema_alpha = line["filter_ema_alpha"].value_or(config.line.filter_ema_alpha);
+        config.line.filter_confidence_alpha_min =
+            line["filter_confidence_alpha_min"].value_or(config.line.filter_confidence_alpha_min);
         config.line.filter_min_confidence =
             line["filter_min_confidence"].value_or(config.line.filter_min_confidence);
         config.line.filter_max_offset_jump_ratio =
             line["filter_max_offset_jump_ratio"].value_or(config.line.filter_max_offset_jump_ratio);
+        config.line.filter_max_offset_velocity_ratio =
+            line["filter_max_offset_velocity_ratio"].value_or(config.line.filter_max_offset_velocity_ratio);
         config.line.filter_max_angle_jump_deg =
             line["filter_max_angle_jump_deg"].value_or(config.line.filter_max_angle_jump_deg);
         config.line.filter_hold_frames = line["filter_hold_frames"].value_or(config.line.filter_hold_frames);

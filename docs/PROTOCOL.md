@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
 Version: v1.3
-Last updated: 2026-04-27
+Last updated: 2026-04-28
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 ## 1. Channels
@@ -242,3 +242,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.1 | 2026-04-27 | Added `vision.markers[]`, frame-synchronized marker telemetry, `debug.aruco_latency_ms`, and GCS discovery beacon details. |
 | v1.2 | 2026-04-27 | Added `vision.line`, `debug.line_latency_ms`, GCS line overlay metadata, and explicit best-effort debug video rules. |
 | v1.3 | 2026-04-27 | Added line stabilizer state, raw line diagnostics, latency breakdown, video queue counters, and line detector workload counters. |
+| v1.3 | 2026-04-28 | No schema change; high-altitude line detector/stabilizer tuning continues to use the existing `vision.line.*` and `debug.line_*` fields. |

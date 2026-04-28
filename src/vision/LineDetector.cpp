@@ -31,6 +31,12 @@ struct WorkGeometry {
     double scale_y = 1.0;
 };
 
+struct ProjectionRun {
+    int start_x = 0;
+    int end_x = 0;
+    int weight = 0;
+};
+
 double clampRatio(double value, double fallback)
 {
     if (!std::isfinite(value)) {
@@ -45,6 +51,16 @@ int oddKernelSize(int value)
         return 1;
     }
     return value % 2 == 0 ? value + 1 : value;
+}
+
+int boundedOddKernelSize(int value, const cv::Size& size)
+{
+    const int max_size = std::max(1, std::min(size.width, size.height));
+    int kernel_size = std::min(oddKernelSize(value), max_size);
+    if (kernel_size % 2 == 0) {
+        --kernel_size;
+    }
+    return std::max(1, kernel_size);
 }
 
 cv::Point toSourcePoint(const cv::Point& point, const WorkGeometry& geometry)
@@ -133,6 +149,46 @@ cv::Mat thresholdMask(const cv::Mat& gray, bool light_line, int configured_thres
     return mask;
 }
 
+cv::Mat localContrastMask(
+    const cv::Mat& gray,
+    bool light_line,
+    const common::LineConfig& config)
+{
+    const int blur_kernel = boundedOddKernelSize(config.local_contrast_blur, gray.size());
+    if (blur_kernel <= 1) {
+        return thresholdMask(gray, light_line, config.threshold);
+    }
+
+    cv::Mat background;
+    cv::GaussianBlur(
+        gray,
+        background,
+        cv::Size(blur_kernel, blur_kernel),
+        0.0,
+        0.0,
+        cv::BORDER_REPLICATE);
+
+    cv::Mat contrast;
+    if (light_line) {
+        cv::subtract(gray, background, contrast);
+    } else {
+        cv::subtract(background, gray, contrast);
+    }
+
+    cv::Mat mask;
+    if (config.local_contrast_threshold <= 0) {
+        cv::threshold(contrast, mask, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+    } else {
+        cv::threshold(
+            contrast,
+            mask,
+            std::clamp(config.local_contrast_threshold, 0, 255),
+            255,
+            cv::THRESH_BINARY);
+    }
+    return mask;
+}
+
 void cleanMask(cv::Mat& mask, int morph_kernel)
 {
     const int kernel_size = oddKernelSize(morph_kernel);
@@ -160,13 +216,23 @@ std::vector<cv::Mat> buildMasks(
 {
     std::vector<cv::Mat> masks;
     const std::string mode = config.mode;
+    const bool use_local_contrast =
+        config.mask_strategy == "local_contrast" ||
+        config.mask_strategy == "white_local_contrast" ||
+        config.mask_strategy == "light_on_dark_v2";
+    const auto make_mask = [&](bool light_line) {
+        return use_local_contrast
+            ? localContrastMask(gray, light_line, config)
+            : thresholdMask(gray, light_line, config.threshold);
+    };
+
     if (mode == "auto") {
-        masks.push_back(thresholdMask(gray, true, 0));
-        masks.push_back(thresholdMask(gray, false, 0));
+        masks.push_back(make_mask(true));
+        masks.push_back(make_mask(false));
     } else if (mode == "light_on_dark") {
-        masks.push_back(thresholdMask(gray, true, config.threshold));
+        masks.push_back(make_mask(true));
     } else {
-        masks.push_back(thresholdMask(gray, false, config.threshold));
+        masks.push_back(make_mask(false));
     }
 
     for (auto& mask : masks) {
@@ -221,6 +287,115 @@ std::vector<std::size_t> sortedCandidateIndexes(
     return indexes;
 }
 
+std::vector<ProjectionRun> projectionRuns(
+    const cv::Mat& mask,
+    const cv::Rect& bounds,
+    int y0,
+    int y1)
+{
+    const int band_height = std::max(1, y1 - y0);
+    const int min_count = std::max(1, band_height / 4);
+    std::vector<int> projection(static_cast<std::size_t>(bounds.width), 0);
+
+    for (int y = y0; y < y1; ++y) {
+        const auto* row = mask.ptr<std::uint8_t>(y);
+        for (int x = bounds.x; x < bounds.x + bounds.width; ++x) {
+            if (row[x] != 0) {
+                ++projection[static_cast<std::size_t>(x - bounds.x)];
+            }
+        }
+    }
+
+    std::vector<ProjectionRun> runs;
+    int start = -1;
+    int weight = 0;
+    for (int i = 0; i < bounds.width; ++i) {
+        const int count = projection[static_cast<std::size_t>(i)];
+        if (count >= min_count) {
+            if (start < 0) {
+                start = i;
+                weight = 0;
+            }
+            weight += count;
+        } else if (start >= 0) {
+            runs.push_back({bounds.x + start, bounds.x + i - 1, weight});
+            start = -1;
+            weight = 0;
+        }
+    }
+    if (start >= 0) {
+        runs.push_back({bounds.x + start, bounds.x + bounds.width - 1, weight});
+    }
+
+    return runs;
+}
+
+std::optional<ProjectionRun> bestProjectionRun(
+    const std::vector<ProjectionRun>& runs,
+    int band_height,
+    int min_line_width,
+    int max_line_width,
+    int work_width)
+{
+    if (runs.empty()) {
+        return std::nullopt;
+    }
+
+    std::optional<ProjectionRun> best;
+    double best_score = -1.0;
+    const double half_width = std::max(1.0, work_width / 2.0);
+
+    for (std::size_t start_index = 0; start_index < runs.size(); ++start_index) {
+        int weight = 0;
+        int active_columns = 0;
+        for (std::size_t end_index = start_index; end_index < runs.size(); ++end_index) {
+            const int start_x = runs[start_index].start_x;
+            const int end_x = runs[end_index].end_x;
+            const int width = end_x - start_x + 1;
+            if (width > max_line_width) {
+                break;
+            }
+
+            weight += runs[end_index].weight;
+            active_columns += runs[end_index].end_x - runs[end_index].start_x + 1;
+            if (width < min_line_width) {
+                continue;
+            }
+
+            const double center = (start_x + end_x) / 2.0;
+            const double center_score = 1.0 - std::clamp(
+                std::abs(center - work_width / 2.0) / half_width,
+                0.0,
+                1.0);
+            const double width_score = 1.0 - std::clamp(
+                std::abs(width - (min_line_width + max_line_width) / 3.0) /
+                    std::max(1.0, max_line_width - static_cast<double>(min_line_width)),
+                0.0,
+                1.0);
+            const double density_score = std::clamp(
+                weight / std::max(1.0, width * static_cast<double>(band_height)),
+                0.0,
+                1.0);
+            const double coverage_score = std::clamp(
+                active_columns / static_cast<double>(std::max(1, width)),
+                0.0,
+                1.0);
+            const double score =
+                0.35 * center_score +
+                0.30 * width_score +
+                0.20 * density_score +
+                0.15 * coverage_score;
+
+            if (score > best_score) {
+                best = ProjectionRun {start_x, end_x, weight};
+                best_score = score;
+            }
+        }
+    }
+
+    return best;
+}
+
 std::optional<Candidate> evaluateContour(
     const std::vector<cv::Point>& work_contour,
     const cv::Mat& mask,
@@ -234,35 +409,47 @@ std::optional<Candidate> evaluateContour(
     }
 
     const cv::Rect bounds = cv::boundingRect(work_contour);
-    if (work_lookahead_y < bounds.y || work_lookahead_y >= bounds.y + bounds.height) {
+    const double band_ratio = clampRatio(config.lookahead_band_ratio, 0.06);
+    const int band_height = std::max(
+        3,
+        static_cast<int>(std::lround(geometry.work_height * band_ratio)));
+    const int band_y0 = std::clamp(
+        work_lookahead_y - band_height / 2,
+        0,
+        std::max(0, geometry.work_height - 1));
+    const int band_y1 = std::clamp(
+        band_y0 + band_height,
+        band_y0 + 1,
+        geometry.work_height);
+    const int scan_y0 = std::max(band_y0, bounds.y);
+    const int scan_y1 = std::min(band_y1, bounds.y + bounds.height);
+    if (scan_y0 >= scan_y1) {
         return std::nullopt;
     }
 
-    const auto* row = mask.ptr<std::uint8_t>(work_lookahead_y);
-    int min_x = bounds.x + bounds.width;
-    int max_x = -1;
-    for (int x = bounds.x; x < bounds.x + bounds.width; ++x) {
-        if (row[x] != 0) {
-            min_x = std::min(min_x, x);
-            max_x = std::max(max_x, x);
-        }
-    }
-
-    if (max_x < min_x) {
-        return std::nullopt;
-    }
-
-    const int work_line_width = max_x - min_x + 1;
     const int min_line_width = scaledMinLineWidth(config, geometry);
-    if (work_line_width < min_line_width) {
-        return std::nullopt;
-    }
-
     const int max_line_width = std::max(
         min_line_width + 1,
         static_cast<int>(std::lround(
             geometry.work_width * clampRatio(config.max_line_width_ratio, 0.22))));
-    const double work_tracking_x = (min_x + max_x) / 2.0;
+    const auto runs = projectionRuns(mask, bounds, scan_y0, scan_y1);
+    const auto projection_run = bestProjectionRun(
+        runs,
+        scan_y1 - scan_y0,
+        min_line_width,
+        max_line_width,
+        geometry.work_width);
+    if (!projection_run) {
+        return std::nullopt;
+    }
+
+    const int work_line_width = projection_run->end_x - projection_run->start_x + 1;
+    if (work_line_width < min_line_width) {
+        return std::nullopt;
+    }
+
+    const double work_tracking_x =
+        (projection_run->start_x + projection_run->end_x) / 2.0;
     const double source_tracking_x = work_tracking_x * geometry.scale_x;
     const double source_lookahead_y =
         geometry.roi_top + work_lookahead_y * geometry.scale_y;
@@ -286,6 +473,11 @@ std::optional<Candidate> evaluateContour(
             std::max(1.0, max_line_width - static_cast<double>(min_line_width)),
         0.0,
         1.0);
+    const double band_density_score = std::clamp(
+        projection_run->weight /
+            std::max(1.0, work_line_width * static_cast<double>(scan_y1 - scan_y0)),
+        0.0,
+        1.0);
 
     const double center_score = 1.0 - std::clamp(
         std::abs(source_tracking_x - geometry.source_width / 2.0) /
@@ -299,10 +491,11 @@ std::optional<Candidate> evaluateContour(
     const double edge_penalty = touches_side ? 0.20 : 0.0;
 
     const double score =
-        0.30 * span_score +
-        0.25 * area_score +
-        0.25 * width_score +
-        0.20 * center_score -
+        0.15 * span_score +
+        0.10 * area_score +
+        0.35 * width_score +
+        0.25 * center_score +
+        0.15 * band_density_score -
         edge_penalty;
     if (score < config.confidence_min) {
         return std::nullopt;

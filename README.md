@@ -106,8 +106,9 @@ camera JPEG to GCS. It does not draw overlays on the Raspberry Pi.
 Current detectors:
 
 - ArUco marker detection.
-- Line tracing MVP using resized ROI threshold/mask/contour detection plus
-  onboard EMA/hold filtering for sudden offset jumps.
+- Line tracing MVP using resized ROI local-contrast masking, lookahead-band
+  projection, contour scoring, and onboard EMA/hold filtering for sudden
+  offset jumps.
 
 The debug video path is best-effort and non-critical. If GCS video streaming
 falls behind, old video frames are dropped and the vision loop keeps working on
@@ -140,7 +141,8 @@ Line mode guidance:
   best line-shaped candidate.
 - `dark_on_light`: use when the track line is darker than the floor.
 - `--line-threshold 0`: use automatic Otsu thresholding. A positive value uses
-  that fixed grayscale threshold.
+  that fixed grayscale threshold. With the default `local_contrast` mask,
+  `line.local_contrast_threshold` is used instead.
 - `--line-roi-top`: image ratio to ignore at the top. The default `0.08`
   keeps most of the upper frame visible; raise it only if the camera sees
   horizon or non-floor clutter.
@@ -149,17 +151,25 @@ Line mode guidance:
   debug point.
 
 The line contour sent to GCS is the simplified connected contour selected by
-the detector. This keeps cross-shaped intersections visible in the magenta
-overlay; tune `--line-threshold`, `--line-mode`, and camera angle if reflection
-or shadows become too aggressive.
+the detector. The green tracking point is calculated from a narrow lookahead
+band inside that contour rather than from the whole contour centroid, so broad
+floor blobs and cross-shaped contours are less likely to pull the control point
+away from the actual line center.
 
 Latency and stability defaults are configured in `config/vision.toml`:
 
-- `line.process_width = 320`: line detection runs on a resized ROI to keep
-  Raspberry Pi CPU cost low.
+- `line.process_width = 480`: line detection keeps more high-altitude line
+  pixels than the previous 320px setting while still running on a resized ROI.
+- `line.mask_strategy = "local_contrast"`: detects bright line structures by
+  comparing each pixel to its local background instead of relying only on a
+  global grayscale threshold.
+- `line.lookahead_band_ratio = 0.06`: the tracking point is measured from a
+  short horizontal band around the configured lookahead Y coordinate.
 - `line.max_candidates = 8`: only the largest ranked contours are scored.
 - `line.filter_enabled = true`: raw line offset/angle spikes are masked with
   EMA smoothing, short hold, and multi-frame reacquire logic.
+- `line.filter_max_offset_velocity_ratio = 0.08`: accepted measurements are
+  still rate-limited so one noisy frame cannot move the green point too far.
 - `line.filter_max_angle_jump_deg = 90.0`: angle-only jumps are treated
   loosely because cross/grid contours can make `fitLine` angle noisy while the
   tracking offset remains stable.
@@ -172,6 +182,7 @@ For image-file detector smoke tests:
 ./build/aruco_detector_tester --config config --image test_data/images/marker.jpg
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode auto
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mask local_contrast --process-width 480 --band 0.06
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode light_on_dark --threshold 160 --roi-top 0.08 --lookahead 0.55
 ```
 
