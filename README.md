@@ -151,6 +151,7 @@ old video frames are dropped and the vision loop keeps working on the latest
 camera frame/result. Future mission decision and control output must stay on
 the critical path; GCS video is only an observation aid. The Pi 4 + IMX519
 default captures at 960x720 12 FPS.
+GCS video receiver discovery is skipped unless debug video is enabled.
 
 Useful options:
 

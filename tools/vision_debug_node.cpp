@@ -294,7 +294,10 @@ int main(int argc, char** argv)
         network_config.video_port = static_cast<std::uint16_t>(options.video_port_override);
     }
 
-    if (options.gcs_ip_override.empty() && isBroadcastAddress(network_config.gcs_ip)) {
+    const bool send_video =
+        options.send_video_overridden ? options.send_video : vision_config.debug_video.enabled;
+
+    if (send_video && options.gcs_ip_override.empty() && isBroadcastAddress(network_config.gcs_ip)) {
         std::cout << "discovering GCS video receiver for "
                   << kGcsDiscoveryTimeoutMs << " ms...\n";
         const auto discovered = discoverGcsVideoTarget(network_config.video_port);
@@ -313,8 +316,7 @@ int main(int argc, char** argv)
     pipeline_options.network = network_config;
     pipeline_options.vision = vision_config;
     pipeline_options.count = options.count;
-    pipeline_options.send_video =
-        options.send_video_overridden ? options.send_video : vision_config.debug_video.enabled;
+    pipeline_options.send_video = send_video;
     pipeline_options.send_telemetry = options.send_telemetry;
     pipeline_options.enable_aruco = options.enable_aruco;
     pipeline_options.enable_line = options.enable_line;
