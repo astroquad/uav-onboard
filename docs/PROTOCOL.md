@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
 Version: v1.5
-Last updated: 2026-04-28
+Last updated: 2026-04-29
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 ## 1. Channels
@@ -308,3 +308,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.3 | 2026-04-28 | No schema change; high-altitude line detector/stabilizer tuning continues to use the existing `vision.line.*` and `debug.line_*` fields. |
 | v1.4 | 2026-04-28 | Added debug video chunk/send/skip counters and optional Pi CPU temperature telemetry for diagnosing frame drops and thermal throttling. |
 | v1.5 | 2026-04-28 | Added Raspberry Pi 4 + IMX519 camera/system telemetry, capture/processing FPS, debug video pacing config, and video send failure counters. |
+| v1.5 | 2026-04-29 | No schema change; synchronized example defaults to the performance profile: 960x720 camera, 5 FPS opt-in debug video, and 150us chunk pacing. |
