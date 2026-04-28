@@ -1,6 +1,6 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.4
+Version: v1.5
 Last updated: 2026-04-28
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
@@ -51,12 +51,33 @@ Required top-level fields:
     "state": "IDLE",
     "elapsed_ms": 0
   },
+  "system": {
+    "board_model": "Raspberry Pi 4 Model B Rev 1.5",
+    "os_release": "Raspberry Pi OS GNU/Linux 12 (bookworm)",
+    "uptime_s": 1234.0,
+    "cpu_temp_c": 58.2,
+    "throttled_raw": "throttled=0x0",
+    "cpu_load_1m": 0.72,
+    "mem_available_kb": 3120000,
+    "wifi_signal_dbm": -48.0,
+    "wifi_tx_bitrate_mbps": 72.2
+  },
   "camera": {
     "status": "streaming",
-    "width": 640,
-    "height": 480,
-    "fps": 15.0,
-    "frame_seq": 358
+    "sensor_model": "imx519",
+    "camera_index": 0,
+    "width": 960,
+    "height": 720,
+    "fps": 12.0,
+    "configured_fps": 12.0,
+    "measured_capture_fps": 11.8,
+    "frame_seq": 358,
+    "autofocus_mode": "manual",
+    "lens_position": 0.67,
+    "exposure_mode": "sport",
+    "shutter_us": 0,
+    "gain": 0.0,
+    "awb": "auto"
   },
   "vision": {
     "line_detected": false,
@@ -112,6 +133,10 @@ Required top-level fields:
     "telemetry_send_ms": 0.1,
     "video_submit_ms": 0.1,
     "video_send_ms": 3.8,
+    "capture_fps": 11.8,
+    "processing_fps": 11.7,
+    "debug_video_send_fps": 8.0,
+    "video_chunk_pacing_us": 150,
     "cpu_temp_c": 62.5,
     "telemetry_bytes": 980,
     "video_jpeg_bytes": 24576,
@@ -119,6 +144,7 @@ Required top-level fields:
     "video_dropped_frames": 2,
     "video_skipped_frames": 12,
     "video_chunks_sent": 4284,
+    "video_send_failures": 0,
     "video_chunk_count": 21,
     "line_mask_count": 1,
     "line_contours_found": 4,
@@ -134,8 +160,27 @@ Required top-level fields:
 
 | Field | Type | Meaning |
 |---|---|---|
+| `system.board_model` | string | Onboard Linux board model, usually from device tree. |
+| `system.os_release` | string | Onboard OS pretty name when available. |
+| `system.uptime_s` | number | Onboard OS uptime in seconds. |
+| `system.cpu_temp_c` | number | Pi CPU temperature in Celsius when available. |
+| `system.throttled_raw` | string | Raw `vcgencmd get_throttled` output, for example `throttled=0x0`. |
+| `system.cpu_load_1m` | number | 1-minute Linux load average. |
+| `system.mem_available_kb` | `uint64` | Linux `MemAvailable` from `/proc/meminfo`. |
+| `system.wifi_signal_dbm` | number | Wi-Fi signal level from `/proc/net/wireless` when available. |
+| `system.wifi_tx_bitrate_mbps` | number | Wi-Fi tx bitrate from `iw dev wlan0 link` when available. |
+| `camera.sensor_model` | string | Configured sensor model, currently expected to be `imx519` for the Pi 4 upgrade. |
+| `camera.camera_index` | int | rpicam camera index passed with `--camera`. |
 | `camera.frame_seq` | `uint32` | Must match the MJPEG video `frame_id` for the same camera frame. |
 | `camera.timestamp_ms` | `int64` | Not currently a nested field. Use top-level `timestamp_ms` as frame capture time. |
+| `camera.configured_fps` | number | Configured rpicam capture FPS. |
+| `camera.measured_capture_fps` | number | Rolling measured onboard capture/read FPS. |
+| `camera.autofocus_mode` | string | Configured rpicam autofocus mode. |
+| `camera.lens_position` | number | Configured manual lens position/dioptre when used. |
+| `camera.exposure_mode` | string | Configured rpicam exposure mode. |
+| `camera.shutter_us` | int | Configured fixed shutter in microseconds; `0` means automatic/default. |
+| `camera.gain` | number | Configured analogue gain; `0.0` means automatic/default. |
+| `camera.awb` | string | Configured auto white balance mode. |
 | `vision.line_detected` | `bool` | Legacy summary field. True when the detailed line object is detected. |
 | `vision.line_offset` | number | Legacy summary field. Same value as `vision.line.center_offset_px`. |
 | `vision.line_angle` | number | Legacy summary field. Same value as `vision.line.angle_deg`. |
@@ -168,6 +213,10 @@ Required top-level fields:
 | `debug.telemetry_send_ms` | number | Most recently measured UDP telemetry send call latency. |
 | `debug.video_submit_ms` | number | Most recently measured latest-frame video queue submit latency. |
 | `debug.video_send_ms` | number | Most recently measured onboard UDP MJPEG chunk send latency in the video worker. |
+| `debug.capture_fps` | number | Rolling measured camera read FPS. |
+| `debug.processing_fps` | number | Rolling measured detector loop FPS. |
+| `debug.debug_video_send_fps` | number | Configured best-effort debug video send cap. |
+| `debug.video_chunk_pacing_us` | int | Configured delay between UDP video chunks. |
 | `debug.cpu_temp_c` | number | Raspberry Pi CPU temperature in Celsius when available; `0.0` when unavailable. |
 | `debug.telemetry_bytes` | `uint64` | Most recently serialized telemetry payload size. |
 | `debug.video_jpeg_bytes` | `uint64` | Raw camera JPEG byte size for this frame. |
@@ -175,6 +224,7 @@ Required top-level fields:
 | `debug.video_dropped_frames` | `uint64` | Number of stale frames replaced before the video worker could send them. |
 | `debug.video_skipped_frames` | `uint64` | Number of camera frames intentionally not submitted to video because debug video send FPS is capped. |
 | `debug.video_chunks_sent` | `uint64` | Total number of UDP video chunks sent by the onboard video worker. |
+| `debug.video_send_failures` | `uint64` | Number of failed UDP video frame send attempts in the onboard video worker. |
 | `debug.video_chunk_count` | `int` | Number of UDP chunks in the most recently sent MJPEG frame. |
 | `debug.line_mask_count` | `int` | Number of threshold masks evaluated by the line detector. |
 | `debug.line_contours_found` | `int` | Number of line candidate contours found before filtering. |
@@ -254,3 +304,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.3 | 2026-04-27 | Added line stabilizer state, raw line diagnostics, latency breakdown, video queue counters, and line detector workload counters. |
 | v1.3 | 2026-04-28 | No schema change; high-altitude line detector/stabilizer tuning continues to use the existing `vision.line.*` and `debug.line_*` fields. |
 | v1.4 | 2026-04-28 | Added debug video chunk/send/skip counters and optional Pi CPU temperature telemetry for diagnosing frame drops and thermal throttling. |
+| v1.5 | 2026-04-28 | Added Raspberry Pi 4 + IMX519 camera/system telemetry, capture/processing FPS, debug video pacing config, and video send failure counters. |

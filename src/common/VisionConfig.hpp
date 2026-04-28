@@ -6,9 +6,34 @@ namespace onboard::common {
 
 struct CameraConfig {
     int device = 0;
-    int width = 640;
-    int height = 480;
-    int fps = 30;
+    int width = 960;
+    int height = 720;
+    int fps = 12;
+    int jpeg_quality = 45;
+    std::string sensor_model = "imx519";
+    std::string codec = "mjpeg";
+    std::string autofocus_mode = "manual";
+    std::string autofocus_range = "normal";
+    std::string autofocus_speed = "normal";
+    std::string autofocus_window;
+    double lens_position = 0.67;
+    std::string exposure = "sport";
+    int shutter_us = 0;
+    double gain = 0.0;
+    double ev = 0.0;
+    std::string awb = "auto";
+    std::string awbgains;
+    std::string metering;
+    std::string denoise = "cdn_fast";
+    double sharpness = 0.0;
+    double contrast = 0.0;
+    double brightness = 0.0;
+    double saturation = 0.0;
+    std::string roi;
+    std::string tuning_file;
+    bool hflip = false;
+    bool vflip = false;
+    int rotation = 0;
 };
 
 struct VideoStreamConfig {
@@ -19,6 +44,15 @@ struct VideoStreamConfig {
     int send_fps = 10;
     int chunk_pacing_us = 150;
     int port = 5600;
+};
+
+struct DebugVideoConfig {
+    bool enabled = true;
+    int send_fps = 8;
+    int jpeg_quality = 40;
+    int chunk_pacing_us = 150;
+    int send_width = 0;
+    int send_height = 0;
 };
 
 struct ArucoConfig {
@@ -69,6 +103,7 @@ struct LineConfig {
 struct VisionConfig {
     CameraConfig camera;
     VideoStreamConfig video;
+    DebugVideoConfig debug_video;
     ArucoConfig aruco;
     LineConfig line;
 };

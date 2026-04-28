@@ -73,6 +73,7 @@ required_packages=(
     libv4l-dev
     v4l-utils
     ffmpeg
+    iw
     nlohmann-json3-dev
     libtomlplusplus-dev
     libgtest-dev
@@ -130,8 +131,15 @@ Dependency setup complete.
 Notes:
 - MAVLink C headers are intentionally not installed here. Vendor or generate
   them later under the project when the exact dialect/version is selected.
+- For Raspberry Pi 4 + IMX519-78 bring-up, verify the rpicam path before
+  running Astroquad:
+    rpicam-hello --version
+    rpicam-hello --list-cameras
+    rpicam-still -t 1000 --nopreview -o test_data/images/imx519_smoke.jpg
 - If camera access fails, enable the camera interface and reboot:
     sudo raspi-config
+- If IMX519 is still not listed, check the OS/kernel/rpicam version and the
+  camera vendor driver instructions before changing Astroquad code.
 - Build check:
     cmake -S . -B build -DBUILD_TESTS=OFF
     cmake --build build

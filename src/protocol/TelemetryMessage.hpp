@@ -38,10 +38,20 @@ struct LineTelemetry {
 
 struct CameraTelemetry {
     std::string status = "not_checked";
+    std::string sensor_model;
+    int camera_index = 0;
     int width = 0;
     int height = 0;
     double fps = 0.0;
+    double configured_fps = 0.0;
+    double measured_capture_fps = 0.0;
     std::uint32_t frame_seq = 0;
+    std::string autofocus_mode;
+    double lens_position = 0.0;
+    std::string exposure_mode;
+    int shutter_us = 0;
+    double gain = 0.0;
+    std::string awb;
 };
 
 struct VisionTelemetry {
@@ -72,6 +82,10 @@ struct DebugTelemetry {
     double telemetry_send_ms = 0.0;
     double video_submit_ms = 0.0;
     double video_send_ms = 0.0;
+    double capture_fps = 0.0;
+    double processing_fps = 0.0;
+    double debug_video_send_fps = 0.0;
+    int video_chunk_pacing_us = 0;
     double cpu_temp_c = 0.0;
     std::uint64_t telemetry_bytes = 0;
     std::uint64_t video_jpeg_bytes = 0;
@@ -79,6 +93,7 @@ struct DebugTelemetry {
     std::uint64_t video_dropped_frames = 0;
     std::uint64_t video_skipped_frames = 0;
     std::uint64_t video_chunks_sent = 0;
+    std::uint64_t video_send_failures = 0;
     int video_chunk_count = 0;
     int line_mask_count = 0;
     int line_contours_found = 0;
@@ -87,9 +102,22 @@ struct DebugTelemetry {
     int line_selected_contour_points = 0;
 };
 
+struct SystemTelemetry {
+    std::string board_model;
+    std::string os_release;
+    double uptime_s = 0.0;
+    double cpu_temp_c = 0.0;
+    std::string throttled_raw;
+    double cpu_load_1m = 0.0;
+    std::uint64_t mem_available_kb = 0;
+    double wifi_signal_dbm = 0.0;
+    double wifi_tx_bitrate_mbps = 0.0;
+};
+
 struct BringupTelemetry {
     std::uint32_t seq = 0;
     std::int64_t timestamp_ms = 0;
+    SystemTelemetry system;
     CameraTelemetry camera;
     VisionTelemetry vision;
     GridTelemetry grid;

@@ -333,13 +333,13 @@ int main(int argc, char** argv)
         vision_config.video.port = options.port_override;
     }
     if (options.width_override > 0) {
-        vision_config.video.width = options.width_override;
+        vision_config.camera.width = options.width_override;
     }
     if (options.height_override > 0) {
-        vision_config.video.height = options.height_override;
+        vision_config.camera.height = options.height_override;
     }
     if (options.fps_override > 0) {
-        vision_config.video.fps = options.fps_override;
+        vision_config.camera.fps = options.fps_override;
     }
 
     if (options.gcs_ip_override.empty() && isBroadcastAddress(network_config.gcs_ip)) {
@@ -367,8 +367,8 @@ int main(int argc, char** argv)
     std::cout << "video_streamer\n"
               << "  source: " << options.source << "\n"
               << "  destination: " << network_config.gcs_ip << ':' << network_config.video_port << "\n"
-              << "  size: " << vision_config.video.width << 'x' << vision_config.video.height << "\n"
-              << "  fps: " << vision_config.video.fps << "\n"
+              << "  size: " << vision_config.camera.width << 'x' << vision_config.camera.height << "\n"
+              << "  fps: " << vision_config.camera.fps << "\n"
               << "  count: " << (options.count == 0 ? std::string("forever") : std::to_string(options.count))
               << "\n";
 
@@ -376,10 +376,34 @@ int main(int argc, char** argv)
     if (options.source == "rpicam") {
         onboard::camera::RpicamMjpegSource source;
         onboard::camera::RpicamOptions rpicam_options;
-        rpicam_options.width = vision_config.video.width;
-        rpicam_options.height = vision_config.video.height;
-        rpicam_options.fps = vision_config.video.fps;
-        rpicam_options.jpeg_quality = vision_config.video.jpeg_quality;
+        rpicam_options.camera_index = vision_config.camera.device;
+        rpicam_options.width = vision_config.camera.width;
+        rpicam_options.height = vision_config.camera.height;
+        rpicam_options.fps = vision_config.camera.fps;
+        rpicam_options.jpeg_quality = vision_config.camera.jpeg_quality;
+        rpicam_options.codec = vision_config.camera.codec;
+        rpicam_options.autofocus_mode = vision_config.camera.autofocus_mode;
+        rpicam_options.autofocus_range = vision_config.camera.autofocus_range;
+        rpicam_options.autofocus_speed = vision_config.camera.autofocus_speed;
+        rpicam_options.autofocus_window = vision_config.camera.autofocus_window;
+        rpicam_options.lens_position = vision_config.camera.lens_position;
+        rpicam_options.exposure = vision_config.camera.exposure;
+        rpicam_options.shutter_us = vision_config.camera.shutter_us;
+        rpicam_options.gain = vision_config.camera.gain;
+        rpicam_options.ev = vision_config.camera.ev;
+        rpicam_options.awb = vision_config.camera.awb;
+        rpicam_options.awbgains = vision_config.camera.awbgains;
+        rpicam_options.metering = vision_config.camera.metering;
+        rpicam_options.denoise = vision_config.camera.denoise;
+        rpicam_options.sharpness = vision_config.camera.sharpness;
+        rpicam_options.contrast = vision_config.camera.contrast;
+        rpicam_options.brightness = vision_config.camera.brightness;
+        rpicam_options.saturation = vision_config.camera.saturation;
+        rpicam_options.roi = vision_config.camera.roi;
+        rpicam_options.tuning_file = vision_config.camera.tuning_file;
+        rpicam_options.hflip = vision_config.camera.hflip;
+        rpicam_options.vflip = vision_config.camera.vflip;
+        rpicam_options.rotation = vision_config.camera.rotation;
         if (!source.open(rpicam_options)) {
             std::cerr << "failed to open rpicam source: " << source.lastError() << "\n";
             return 1;
@@ -421,13 +445,13 @@ int main(int argc, char** argv)
     }
 
     const auto frame_interval = std::chrono::milliseconds(
-        vision_config.video.fps > 0 ? 1000 / vision_config.video.fps : 66);
+        vision_config.camera.fps > 0 ? 1000 / vision_config.camera.fps : 66);
     while (options.count == 0 || static_cast<int>(sent_count) < options.count) {
         onboard::camera::CameraFrame frame;
         frame.frame_id = sent_count + 1;
         frame.timestamp_ms = onboard::common::unixTimestampMs();
-        frame.width = vision_config.video.width;
-        frame.height = vision_config.video.height;
+        frame.width = vision_config.camera.width;
+        frame.height = vision_config.camera.height;
         frame.jpeg_data = jpeg;
         if (!streamer.sendFrame(frame)) {
             std::cerr << "failed to send video frame: " << streamer.lastError() << "\n";

@@ -6,6 +6,7 @@
 #include <array>
 #include <cerrno>
 #include <cstring>
+#include <iomanip>
 #include <sstream>
 
 #ifdef _WIN32
@@ -18,6 +19,34 @@ namespace {
 
 constexpr const char* kRpicamStderrLog = "/tmp/astroquad_rpicam_vid.log";
 
+std::string shellQuote(const std::string& value)
+{
+    std::string quoted = "'";
+    for (const char ch : value) {
+        if (ch == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted += ch;
+        }
+    }
+    quoted += "'";
+    return quoted;
+}
+
+void appendStringOption(std::ostringstream& command, const char* name, const std::string& value)
+{
+    if (!value.empty()) {
+        command << ' ' << name << ' ' << shellQuote(value);
+    }
+}
+
+void appendDoubleOption(std::ostringstream& command, const char* name, double value)
+{
+    if (value != 0.0) {
+        command << ' ' << name << ' ' << std::setprecision(6) << value;
+    }
+}
+
 std::string buildCommand(const RpicamOptions& options)
 {
     std::ostringstream command;
@@ -25,12 +54,47 @@ std::string buildCommand(const RpicamOptions& options)
             << " --verbose 0"
             << " -t 0"
             << " --nopreview"
-            << " --codec mjpeg"
+            << " --camera " << options.camera_index
+            << " --codec " << (options.codec.empty() ? "mjpeg" : options.codec)
             << " --quality " << options.jpeg_quality
             << " --width " << options.width
             << " --height " << options.height
             << " --framerate " << options.fps
             << " -o -";
+
+    appendStringOption(command, "--autofocus-mode", options.autofocus_mode);
+    appendStringOption(command, "--autofocus-range", options.autofocus_range);
+    appendStringOption(command, "--autofocus-speed", options.autofocus_speed);
+    appendStringOption(command, "--autofocus-window", options.autofocus_window);
+    if (options.lens_position >= 0.0 &&
+        (options.autofocus_mode.empty() || options.autofocus_mode == "manual")) {
+        command << " --lens-position " << std::setprecision(6) << options.lens_position;
+    }
+    appendStringOption(command, "--exposure", options.exposure);
+    if (options.shutter_us > 0) {
+        command << " --shutter " << options.shutter_us;
+    }
+    appendDoubleOption(command, "--gain", options.gain);
+    appendDoubleOption(command, "--ev", options.ev);
+    appendStringOption(command, "--awb", options.awb);
+    appendStringOption(command, "--awbgains", options.awbgains);
+    appendStringOption(command, "--metering", options.metering);
+    appendStringOption(command, "--denoise", options.denoise);
+    appendDoubleOption(command, "--sharpness", options.sharpness);
+    appendDoubleOption(command, "--contrast", options.contrast);
+    appendDoubleOption(command, "--brightness", options.brightness);
+    appendDoubleOption(command, "--saturation", options.saturation);
+    appendStringOption(command, "--roi", options.roi);
+    appendStringOption(command, "--tuning-file", options.tuning_file);
+    if (options.hflip) {
+        command << " --hflip";
+    }
+    if (options.vflip) {
+        command << " --vflip";
+    }
+    if (options.rotation != 0) {
+        command << " --rotation " << options.rotation;
+    }
 #ifndef _WIN32
     command << " 2>" << kRpicamStderrLog;
 #endif

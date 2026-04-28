@@ -5,6 +5,10 @@ Onboard software for the indoor UAV search mission.
 This project owns camera processing, mission state management, MAVLink control,
 GCS communication, safety handling, and headless logging.
 
+Current target hardware is Raspberry Pi 4 + IMX519-78 16MP AF CSI camera.
+The previous Raspberry Pi Zero 2 W/ZeroCam path is kept conceptually supported,
+but new camera defaults and bring-up notes assume the Pi 4 IMX519 setup.
+
 ## Layout
 
 - `config/`: runtime TOML configuration
@@ -37,6 +41,30 @@ cmake --build build
 
 ## Camera Bring-Up
 
+For Raspberry Pi 4 + IMX519-78, verify the rpicam/libcamera path first:
+
+```bash
+rpicam-hello --version
+rpicam-hello --list-cameras
+rpicam-still -t 1000 --nopreview -o test_data/images/imx519_smoke.jpg
+rpicam-vid -t 5000 --nopreview --codec mjpeg --width 640 --height 480 --framerate 12 -o /tmp/imx519_test.mjpeg
+```
+
+Focus smoke tests:
+
+```bash
+rpicam-still -t 1000 --nopreview --autofocus-mode continuous -o test_data/images/focus_continuous.jpg
+rpicam-still -t 1000 --nopreview --autofocus-mode auto -o test_data/images/focus_auto.jpg
+rpicam-still -t 1000 --nopreview --autofocus-mode manual --lens-position 0.67 -o test_data/images/focus_manual_067.jpg
+```
+
+Mission-like runs should prefer stable camera settings over continuous visual
+beauty. Continuous autofocus can hunt while the UAV is moving; manual lens
+position or one-shot autofocus should be compared at the actual flight height.
+
+The older OpenCV camera smoke tool is still available, but CSI cameras on
+Raspberry Pi OS are validated primarily through `rpicam-*`:
+
 ```bash
 ./build/camera_preview --device 0 --frames 30 --save test_data/images/camera_smoke.jpg
 ```
@@ -44,7 +72,7 @@ cmake --build build
 Expected output includes the captured frame size, measured FPS, and the saved
 image path.
 
-For Raspberry Pi CSI cameras, first verify the libcamera/rpicam path:
+For any Raspberry Pi CSI camera, the same rpicam checks remain the source of truth:
 
 ```bash
 rpicam-hello --list-cameras
@@ -103,6 +131,12 @@ This node captures Pi camera MJPEG frames, decodes each frame once, runs enabled
 onboard detectors, sends vision metadata as telemetry, and sends the original
 camera JPEG to GCS. It does not draw overlays on the Raspberry Pi.
 
+The onboard side still sends only metadata for ArUco markers and line tracing.
+All marker boxes, line contours, labels, and tracking-point overlays are drawn
+by GCS. Keep this separation: onboard CPU time is reserved for future mission
+logic and MAVLink control, and debug video may be disabled entirely for final
+mission runs.
+
 Current detectors:
 
 - ArUco marker detection.
@@ -113,9 +147,9 @@ Current detectors:
 The debug video path is best-effort and non-critical. If GCS video streaming
 falls behind, old video frames are dropped and the vision loop keeps working on
 the latest camera frame/result. Future mission decision and control output must
-stay on the critical path; GCS video is only an observation aid. The default
-debug stream now captures at 12 FPS, submits video at 10 FPS, and paces UDP
-chunks to reduce Wi-Fi burst loss.
+stay on the critical path; GCS video is only an observation aid. The Pi 4 +
+IMX519 default captures at 960x720 12 FPS, submits best-effort debug video at
+8 FPS, and paces UDP chunks to reduce Wi-Fi burst loss.
 
 Useful options:
 
@@ -160,6 +194,14 @@ away from the actual line center.
 
 Latency and stability defaults are configured in `config/vision.toml`:
 
+- `camera.sensor_model = "imx519"`: Pi 4 + IMX519-78 is the current default
+  camera target.
+- `camera.width = 960`, `camera.height = 720`, `camera.fps = 12`: capture uses
+  a higher input resolution than the old 640x480 baseline while keeping the
+  detector loop conservative.
+- `camera.autofocus_mode = "manual"`, `camera.lens_position = 0.67`: initial
+  mission-like focus default near 1.5m. Tune this at the real flight height.
+- `camera.exposure = "sport"`: initial setting to reduce motion blur.
 - `line.process_width = 480`: line detection keeps more high-altitude line
   pixels than the previous 320px setting while still running on a resized ROI.
 - `line.mask_strategy = "local_contrast"`: detects bright line structures by
@@ -180,10 +222,11 @@ Latency and stability defaults are configured in `config/vision.toml`:
 - `line.filter_max_angle_jump_deg = 90.0`: angle-only jumps are treated
   loosely because cross/grid contours can make `fitLine` angle noisy while the
   tracking offset remains stable.
-- `video.send_fps = 10`, `video.chunk_pacing_us = 150`: debug video is
+- `debug_video.send_fps = 8`, `debug_video.chunk_pacing_us = 150`: debug video is
   decimated and paced separately from the detector frame loop.
 - The GCS vision log shows read/decode/ArUco/line/JSON/send/video timings,
-  video chunk/skip counters, CPU temperature when available, contour counts,
+  capture/processing FPS, video chunk/skip/failure counters, Pi board/OS/load/
+  memory/throttling/Wi-Fi state, camera focus/exposure config, contour counts,
   queue drops, and raw-vs-filtered line state.
 
 For image-file detector smoke tests:
@@ -238,7 +281,8 @@ Use `--count 0` or omit `--count` to send telemetry until interrupted.
 1. On the laptop, build and start `uav-gcs` telemetry receiver.
 2. On the Raspberry Pi, run `bash scripts/setup_rpi_dependencies.sh`.
 3. On the Raspberry Pi, build `uav-onboard`.
-4. On the Raspberry Pi, validate the camera with `camera_preview`.
+4. On the Raspberry Pi, validate the camera with `rpicam-hello`, `rpicam-still`,
+   and an MJPEG `rpicam-vid` smoke test.
 5. On the laptop, start `uav_gcs_video`.
 6. On the Raspberry Pi, run `video_streamer` and confirm it prints
    `discovered GCS video receiver at <ip>:5600`.

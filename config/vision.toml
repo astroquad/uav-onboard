@@ -1,10 +1,38 @@
 [camera]
+index = 0
 device = 0
-width = 640
-height = 480
-fps = 30
+sensor_model = "imx519"
+width = 960
+height = 720
+fps = 12
+codec = "mjpeg"
+jpeg_quality = 45
+autofocus_mode = "manual"
+autofocus_range = "normal"
+autofocus_speed = "normal"
+lens_position = 0.67
+exposure = "sport"
+shutter_us = 0
+gain = 0.0
+ev = 0.0
+awb = "auto"
+awbgains = ""
+metering = ""
+denoise = "cdn_fast"
+sharpness = 0.0
+contrast = 0.0
+brightness = 0.0
+saturation = 0.0
+roi = ""
+tuning_file = ""
+hflip = false
+vflip = false
+rotation = 0
 
 [video]
+# Legacy video defaults kept for older tooling/config compatibility.
+# Current rpicam capture uses [camera], and best-effort GCS debug video pacing
+# uses [debug_video].
 width = 640
 height = 480
 fps = 12
@@ -12,6 +40,14 @@ jpeg_quality = 45
 send_fps = 10
 chunk_pacing_us = 150
 port = 5600
+
+[debug_video]
+enabled = true
+send_fps = 8
+jpeg_quality = 40
+chunk_pacing_us = 150
+send_width = 0
+send_height = 0
 
 [line]
 enabled = true

@@ -32,9 +32,40 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
 
     if (const auto camera = table["camera"]) {
         config.camera.device = camera["device"].value_or(config.camera.device);
+        config.camera.device = camera["index"].value_or(config.camera.device);
         config.camera.width = camera["width"].value_or(config.camera.width);
         config.camera.height = camera["height"].value_or(config.camera.height);
         config.camera.fps = camera["fps"].value_or(config.camera.fps);
+        config.camera.jpeg_quality = camera["jpeg_quality"].value_or(config.camera.jpeg_quality);
+        config.camera.sensor_model = camera["sensor_model"].value_or(config.camera.sensor_model);
+        config.camera.codec = camera["codec"].value_or(config.camera.codec);
+        config.camera.autofocus_mode =
+            camera["autofocus_mode"].value_or(config.camera.autofocus_mode);
+        config.camera.autofocus_range =
+            camera["autofocus_range"].value_or(config.camera.autofocus_range);
+        config.camera.autofocus_speed =
+            camera["autofocus_speed"].value_or(config.camera.autofocus_speed);
+        config.camera.autofocus_window =
+            camera["autofocus_window"].value_or(config.camera.autofocus_window);
+        config.camera.lens_position =
+            camera["lens_position"].value_or(config.camera.lens_position);
+        config.camera.exposure = camera["exposure"].value_or(config.camera.exposure);
+        config.camera.shutter_us = camera["shutter_us"].value_or(config.camera.shutter_us);
+        config.camera.gain = camera["gain"].value_or(config.camera.gain);
+        config.camera.ev = camera["ev"].value_or(config.camera.ev);
+        config.camera.awb = camera["awb"].value_or(config.camera.awb);
+        config.camera.awbgains = camera["awbgains"].value_or(config.camera.awbgains);
+        config.camera.metering = camera["metering"].value_or(config.camera.metering);
+        config.camera.denoise = camera["denoise"].value_or(config.camera.denoise);
+        config.camera.sharpness = camera["sharpness"].value_or(config.camera.sharpness);
+        config.camera.contrast = camera["contrast"].value_or(config.camera.contrast);
+        config.camera.brightness = camera["brightness"].value_or(config.camera.brightness);
+        config.camera.saturation = camera["saturation"].value_or(config.camera.saturation);
+        config.camera.roi = camera["roi"].value_or(config.camera.roi);
+        config.camera.tuning_file = camera["tuning_file"].value_or(config.camera.tuning_file);
+        config.camera.hflip = camera["hflip"].value_or(config.camera.hflip);
+        config.camera.vflip = camera["vflip"].value_or(config.camera.vflip);
+        config.camera.rotation = camera["rotation"].value_or(config.camera.rotation);
     }
 
     if (const auto video = table["video"]) {
@@ -45,6 +76,27 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.video.send_fps = video["send_fps"].value_or(config.video.send_fps);
         config.video.chunk_pacing_us = video["chunk_pacing_us"].value_or(config.video.chunk_pacing_us);
         config.video.port = video["port"].value_or(config.video.port);
+
+        config.debug_video.send_fps = video["send_fps"].value_or(config.debug_video.send_fps);
+        config.debug_video.jpeg_quality =
+            video["jpeg_quality"].value_or(config.debug_video.jpeg_quality);
+        config.debug_video.chunk_pacing_us =
+            video["chunk_pacing_us"].value_or(config.debug_video.chunk_pacing_us);
+    }
+
+    if (const auto debug_video = table["debug_video"]) {
+        config.debug_video.enabled =
+            debug_video["enabled"].value_or(config.debug_video.enabled);
+        config.debug_video.send_fps =
+            debug_video["send_fps"].value_or(config.debug_video.send_fps);
+        config.debug_video.jpeg_quality =
+            debug_video["jpeg_quality"].value_or(config.debug_video.jpeg_quality);
+        config.debug_video.chunk_pacing_us =
+            debug_video["chunk_pacing_us"].value_or(config.debug_video.chunk_pacing_us);
+        config.debug_video.send_width =
+            debug_video["send_width"].value_or(config.debug_video.send_width);
+        config.debug_video.send_height =
+            debug_video["send_height"].value_or(config.debug_video.send_height);
     }
 
     if (const auto aruco = table["aruco"]) {

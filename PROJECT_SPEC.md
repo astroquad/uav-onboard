@@ -42,9 +42,9 @@ GPS 없는 실내 환경에서, 하향 카메라 기반 라인트레이싱과 Ar
 
 | 항목 | 내용 |
 |------|------|
-| Companion Computer | Raspberry Pi Zero 2 W |
+| Companion Computer | Raspberry Pi 4 Model B |
 | OS | Raspberry Pi OS Lite 64-bit |
-| Camera | Pi Camera (기본 1개, 추후 확장 가능) |
+| Camera | IMX519-78 16MP AF CSI Camera |
 | Flight Controller | Pixhawk 1 / 2.4.8 |
 | Autopilot | ArduPilot (ArduCopter) |
 | 통신 | Pi ↔ Pixhawk: UART MAVLink / Pi ↔ GCS: UDP 소켓 |
@@ -268,7 +268,7 @@ enum class MissionState {
 
 ### 프로토콜
 - **전송 계층**: UDP (Wi-Fi)
-- **직렬화**: 경량 바이너리 직렬화 또는 JSON (Pi Zero 성능 고려 시 바이너리 우선)
+- **직렬화**: 초기에는 JSON, 성능 또는 대역폭이 부족하면 경량 바이너리 형식 검토
 - **포트**: 설정 파일(`config/network.yaml` 또는 `.toml`)로 관리
 
 ### 온보드 → GCS (텔레메트리 송신)

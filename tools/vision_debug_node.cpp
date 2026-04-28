@@ -307,7 +307,7 @@ int main(int argc, char** argv)
     pipeline_options.network = network_config;
     pipeline_options.vision = vision_config;
     pipeline_options.count = options.count;
-    pipeline_options.send_video = options.send_video;
+    pipeline_options.send_video = options.send_video && vision_config.debug_video.enabled;
     pipeline_options.send_telemetry = options.send_telemetry;
     pipeline_options.enable_aruco = options.enable_aruco;
     pipeline_options.enable_line = options.enable_line;

@@ -11,15 +11,19 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -80,6 +84,211 @@ double readCpuTempC()
     return milli_celsius / 1000.0;
 #endif
 }
+
+std::string trimText(std::string value)
+{
+    value.erase(
+        std::remove(value.begin(), value.end(), '\0'),
+        value.end());
+    while (!value.empty() &&
+           (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' || value.back() == '\t')) {
+        value.pop_back();
+    }
+    std::size_t first = 0;
+    while (first < value.size() && (value[first] == ' ' || value[first] == '\t')) {
+        ++first;
+    }
+    if (first > 0) {
+        value.erase(0, first);
+    }
+    return value;
+}
+
+std::string readFirstLine(const std::string& path)
+{
+    std::ifstream input(path);
+    std::string line;
+    if (!std::getline(input, line)) {
+        return {};
+    }
+    return trimText(line);
+}
+
+std::string readPrettyOsRelease()
+{
+#ifdef _WIN32
+    return {};
+#else
+    std::ifstream input("/etc/os-release");
+    std::string line;
+    while (std::getline(input, line)) {
+        constexpr const char* key = "PRETTY_NAME=";
+        if (line.rfind(key, 0) != 0) {
+            continue;
+        }
+        std::string value = line.substr(std::string(key).size());
+        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+            value = value.substr(1, value.size() - 2);
+        }
+        return trimText(value);
+    }
+    return {};
+#endif
+}
+
+std::string runCommandFirstLine(const std::string& command)
+{
+#ifdef _WIN32
+    (void)command;
+    return {};
+#else
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr) {
+        return {};
+    }
+    char buffer[256] {};
+    std::string line;
+    if (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        line = buffer;
+    }
+    pclose(pipe);
+    return trimText(line);
+#endif
+}
+
+double readUptimeS()
+{
+#ifdef _WIN32
+    return 0.0;
+#else
+    std::ifstream input("/proc/uptime");
+    double uptime = 0.0;
+    input >> uptime;
+    return uptime;
+#endif
+}
+
+double readLoad1m()
+{
+#ifdef _WIN32
+    return 0.0;
+#else
+    std::ifstream input("/proc/loadavg");
+    double load = 0.0;
+    input >> load;
+    return load;
+#endif
+}
+
+std::uint64_t readMemAvailableKb()
+{
+#ifdef _WIN32
+    return 0;
+#else
+    std::ifstream input("/proc/meminfo");
+    std::string key;
+    std::uint64_t value = 0;
+    std::string unit;
+    while (input >> key >> value >> unit) {
+        if (key == "MemAvailable:") {
+            return value;
+        }
+    }
+    return 0;
+#endif
+}
+
+double readWifiSignalDbm()
+{
+#ifdef _WIN32
+    return 0.0;
+#else
+    std::ifstream input("/proc/net/wireless");
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.find(':') == std::string::npos) {
+            continue;
+        }
+        std::istringstream stream(line);
+        std::string iface;
+        std::string status;
+        double link = 0.0;
+        double level = 0.0;
+        stream >> iface >> status >> link >> level;
+        if (stream && iface.rfind("wlan", 0) == 0) {
+            return level;
+        }
+    }
+    return 0.0;
+#endif
+}
+
+double readWifiTxBitrateMbps()
+{
+#ifdef _WIN32
+    return 0.0;
+#else
+    const std::string output = runCommandFirstLine("iw dev wlan0 link 2>/dev/null | grep 'tx bitrate' || true");
+    const auto position = output.find("tx bitrate:");
+    if (position == std::string::npos) {
+        return 0.0;
+    }
+    std::istringstream stream(output.substr(position + std::string("tx bitrate:").size()));
+    double bitrate = 0.0;
+    stream >> bitrate;
+    return bitrate;
+#endif
+}
+
+protocol::SystemTelemetry readSystemTelemetry()
+{
+    protocol::SystemTelemetry telemetry;
+#ifdef _WIN32
+    return telemetry;
+#else
+    telemetry.board_model = readFirstLine("/proc/device-tree/model");
+    if (telemetry.board_model.empty()) {
+        telemetry.board_model = readFirstLine("/sys/firmware/devicetree/base/model");
+    }
+    telemetry.os_release = readPrettyOsRelease();
+    telemetry.uptime_s = readUptimeS();
+    telemetry.cpu_temp_c = readCpuTempC();
+    telemetry.throttled_raw = runCommandFirstLine("vcgencmd get_throttled 2>/dev/null || true");
+    telemetry.cpu_load_1m = readLoad1m();
+    telemetry.mem_available_kb = readMemAvailableKb();
+    telemetry.wifi_signal_dbm = readWifiSignalDbm();
+    telemetry.wifi_tx_bitrate_mbps = readWifiTxBitrateMbps();
+    return telemetry;
+#endif
+}
+
+class RateMeter {
+public:
+    double note(std::chrono::steady_clock::time_point now)
+    {
+        if (window_start_.time_since_epoch().count() == 0) {
+            window_start_ = now;
+        }
+        ++count_;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - window_start_);
+        if (elapsed.count() >= 1000) {
+            rate_ = count_ * 1000.0 / std::max(1, static_cast<int>(elapsed.count()));
+            count_ = 0;
+            window_start_ = now;
+        }
+        return rate_;
+    }
+
+    double rate() const
+    {
+        return rate_;
+    }
+
+private:
+    std::chrono::steady_clock::time_point window_start_ {};
+    int count_ = 0;
+    double rate_ = 0.0;
+};
 
 class LatestVideoSender {
 public:
@@ -154,6 +363,11 @@ public:
         return chunks_sent_.load();
     }
 
+    std::uint64_t sendFailures() const
+    {
+        return send_failures_.load();
+    }
+
     int lastChunkCount() const
     {
         return last_chunk_count_.load();
@@ -198,6 +412,7 @@ private:
                     continue;
                 }
 
+                send_failures_.fetch_add(1);
                 std::lock_guard<std::mutex> lock(mutex_);
                 last_error_ = streamer_.lastError();
             }
@@ -215,6 +430,7 @@ private:
     std::atomic<std::uint64_t> sent_frames_ {0};
     std::atomic<std::uint64_t> skipped_frames_ {0};
     std::atomic<std::uint64_t> chunks_sent_ {0};
+    std::atomic<std::uint64_t> send_failures_ {0};
     std::atomic<int> last_chunk_count_ {0};
     mutable std::mutex stats_mutex_;
     double last_send_ms_ = 0.0;
@@ -229,7 +445,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         !video_sender.start(
             options.network.gcs_ip,
             options.network.video_port,
-            options.vision.video.chunk_pacing_us)) {
+            options.vision.debug_video.chunk_pacing_us)) {
         std::cerr << "failed to open UDP video streamer: "
                   << video_sender.takeLastError() << "\n";
         return 1;
@@ -246,10 +462,34 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
     camera::RpicamMjpegSource camera;
     camera::RpicamOptions camera_options;
-    camera_options.width = options.vision.video.width;
-    camera_options.height = options.vision.video.height;
-    camera_options.fps = options.vision.video.fps;
-    camera_options.jpeg_quality = options.vision.video.jpeg_quality;
+    camera_options.camera_index = options.vision.camera.device;
+    camera_options.width = options.vision.camera.width;
+    camera_options.height = options.vision.camera.height;
+    camera_options.fps = options.vision.camera.fps;
+    camera_options.jpeg_quality = options.vision.camera.jpeg_quality;
+    camera_options.codec = options.vision.camera.codec;
+    camera_options.autofocus_mode = options.vision.camera.autofocus_mode;
+    camera_options.autofocus_range = options.vision.camera.autofocus_range;
+    camera_options.autofocus_speed = options.vision.camera.autofocus_speed;
+    camera_options.autofocus_window = options.vision.camera.autofocus_window;
+    camera_options.lens_position = options.vision.camera.lens_position;
+    camera_options.exposure = options.vision.camera.exposure;
+    camera_options.shutter_us = options.vision.camera.shutter_us;
+    camera_options.gain = options.vision.camera.gain;
+    camera_options.ev = options.vision.camera.ev;
+    camera_options.awb = options.vision.camera.awb;
+    camera_options.awbgains = options.vision.camera.awbgains;
+    camera_options.metering = options.vision.camera.metering;
+    camera_options.denoise = options.vision.camera.denoise;
+    camera_options.sharpness = options.vision.camera.sharpness;
+    camera_options.contrast = options.vision.camera.contrast;
+    camera_options.brightness = options.vision.camera.brightness;
+    camera_options.saturation = options.vision.camera.saturation;
+    camera_options.roi = options.vision.camera.roi;
+    camera_options.tuning_file = options.vision.camera.tuning_file;
+    camera_options.hflip = options.vision.camera.hflip;
+    camera_options.vflip = options.vision.camera.vflip;
+    camera_options.rotation = options.vision.camera.rotation;
     if (!camera.open(camera_options)) {
         std::cerr << "failed to open rpicam source: " << camera.lastError() << "\n";
         video_sender.stop();
@@ -264,10 +504,16 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
               << "  destination: " << options.network.gcs_ip << "\n"
               << "  telemetry UDP port: " << options.network.telemetry_port << "\n"
               << "  video UDP port: " << options.network.video_port << "\n"
-              << "  size: " << options.vision.video.width << 'x' << options.vision.video.height << "\n"
-              << "  fps: " << options.vision.video.fps << "\n"
-              << "  video_send_fps: " << options.vision.video.send_fps << "\n"
-              << "  video_chunk_pacing_us: " << options.vision.video.chunk_pacing_us << "\n"
+              << "  camera: " << options.vision.camera.sensor_model
+              << " index=" << options.vision.camera.device << "\n"
+              << "  size: " << options.vision.camera.width << 'x' << options.vision.camera.height << "\n"
+              << "  fps: " << options.vision.camera.fps << "\n"
+              << "  jpeg_quality: " << options.vision.camera.jpeg_quality << "\n"
+              << "  autofocus_mode: " << options.vision.camera.autofocus_mode << "\n"
+              << "  lens_position: " << options.vision.camera.lens_position << "\n"
+              << "  exposure: " << options.vision.camera.exposure << "\n"
+              << "  video_send_fps: " << options.vision.debug_video.send_fps << "\n"
+              << "  video_chunk_pacing_us: " << options.vision.debug_video.chunk_pacing_us << "\n"
               << "  aruco_dictionary: " << aruco_detector.dictionaryName() << "\n"
               << "  aruco: " << (options.enable_aruco ? "on" : "off") << "\n"
               << "  line: " << (options.enable_line && options.vision.line.enabled ? "on" : "off") << "\n"
@@ -285,7 +531,9 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     double last_telemetry_send_ms = 0.0;
     double last_video_submit_ms = 0.0;
     std::uint64_t last_telemetry_bytes = 0;
-    double last_cpu_temp_c = readCpuTempC();
+    protocol::SystemTelemetry last_system = readSystemTelemetry();
+    RateMeter capture_rate;
+    RateMeter processing_rate;
     auto last_video_sent_time = std::chrono::steady_clock::time_point {};
     while (options.count == 0 || processed_count < options.count) {
         camera::CameraFrame frame;
@@ -298,6 +546,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         const auto read_finished = std::chrono::steady_clock::now();
         const double read_frame_ms = std::chrono::duration<double, std::milli>(
             read_finished - read_started).count();
+        const double capture_fps = capture_rate.note(read_finished);
         const std::uint32_t frame_id = frame.frame_id;
         const std::size_t jpeg_bytes = frame.jpeg_data.size();
 
@@ -343,21 +592,33 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
             }
         }
         const auto processing_finished = std::chrono::steady_clock::now();
+        const double processing_fps = processing_rate.note(processing_finished);
 
         double telemetry_build_ms = last_telemetry_build_ms;
         double telemetry_send_ms = last_telemetry_send_ms;
         if (options.send_telemetry) {
             if (processed_count % 30 == 0) {
-                last_cpu_temp_c = readCpuTempC();
+                last_system = readSystemTelemetry();
             }
             protocol::BringupTelemetry telemetry;
             telemetry.seq = telemetry_seq++;
             telemetry.timestamp_ms = frame.timestamp_ms;
+            telemetry.system = last_system;
             telemetry.camera.status = image.empty() ? "decode_failed" : "streaming";
+            telemetry.camera.sensor_model = options.vision.camera.sensor_model;
+            telemetry.camera.camera_index = options.vision.camera.device;
             telemetry.camera.width = frame.width;
             telemetry.camera.height = frame.height;
-            telemetry.camera.fps = options.vision.video.fps;
+            telemetry.camera.fps = options.vision.camera.fps;
+            telemetry.camera.configured_fps = options.vision.camera.fps;
+            telemetry.camera.measured_capture_fps = capture_fps;
             telemetry.camera.frame_seq = frame.frame_id;
+            telemetry.camera.autofocus_mode = options.vision.camera.autofocus_mode;
+            telemetry.camera.lens_position = options.vision.camera.lens_position;
+            telemetry.camera.exposure_mode = options.vision.camera.exposure;
+            telemetry.camera.shutter_us = options.vision.camera.shutter_us;
+            telemetry.camera.gain = options.vision.camera.gain;
+            telemetry.camera.awb = options.vision.camera.awb;
             telemetry.vision.marker_detected = !result.markers.empty();
             telemetry.vision.marker_id = result.markers.empty() ? -1 : result.markers.front().id;
             for (const auto& marker : result.markers) {
@@ -377,13 +638,18 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
             telemetry.debug.telemetry_send_ms = last_telemetry_send_ms;
             telemetry.debug.video_submit_ms = last_video_submit_ms;
             telemetry.debug.video_send_ms = video_sender.lastSendMs();
-            telemetry.debug.cpu_temp_c = last_cpu_temp_c;
+            telemetry.debug.capture_fps = capture_fps;
+            telemetry.debug.processing_fps = processing_fps;
+            telemetry.debug.debug_video_send_fps = options.vision.debug_video.send_fps;
+            telemetry.debug.video_chunk_pacing_us = options.vision.debug_video.chunk_pacing_us;
+            telemetry.debug.cpu_temp_c = last_system.cpu_temp_c;
             telemetry.debug.telemetry_bytes = last_telemetry_bytes;
             telemetry.debug.video_jpeg_bytes = jpeg_bytes;
             telemetry.debug.video_sent_frames = video_sender.sentFrames();
             telemetry.debug.video_dropped_frames = video_sender.droppedFrames();
             telemetry.debug.video_skipped_frames = video_sender.skippedFrames();
             telemetry.debug.video_chunks_sent = video_sender.chunksSent();
+            telemetry.debug.video_send_failures = video_sender.sendFailures();
             telemetry.debug.video_chunk_count = video_sender.lastChunkCount();
             telemetry.debug.line_mask_count = result.line.mask_count;
             telemetry.debug.line_contours_found = result.line.contours_found;
@@ -413,7 +679,10 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
         double video_submit_ms = last_video_submit_ms;
         if (options.send_video) {
-            const int send_fps = std::clamp(options.vision.video.send_fps, 1, options.vision.video.fps);
+            const int send_fps = std::clamp(
+                options.vision.debug_video.send_fps,
+                1,
+                std::max(1, options.vision.camera.fps));
             const auto now = std::chrono::steady_clock::now();
             const auto min_period = std::chrono::microseconds(1000000 / send_fps);
             const bool should_send =
