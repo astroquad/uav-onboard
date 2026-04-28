@@ -42,7 +42,7 @@ chunk_pacing_us = 150
 port = 5600
 
 [debug_video]
-enabled = true
+enabled = false
 send_fps = 8
 jpeg_quality = 40
 chunk_pacing_us = 150

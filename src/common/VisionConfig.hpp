@@ -47,7 +47,7 @@ struct VideoStreamConfig {
 };
 
 struct DebugVideoConfig {
-    bool enabled = true;
+    bool enabled = false;
     int send_fps = 8;
     int jpeg_quality = 40;
     int chunk_pacing_us = 150;

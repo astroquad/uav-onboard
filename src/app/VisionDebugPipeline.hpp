@@ -9,7 +9,7 @@ struct VisionDebugPipelineOptions {
     common::NetworkConfig network;
     common::VisionConfig vision;
     int count = 0;
-    bool send_video = true;
+    bool send_video = false;
     bool send_telemetry = true;
     bool enable_aruco = true;
     bool enable_line = true;

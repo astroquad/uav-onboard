@@ -32,7 +32,8 @@ struct Options {
     std::string gcs_ip_override;
     int count = 0;
     int video_port_override = 0;
-    bool send_video = true;
+    bool send_video = false;
+    bool send_video_overridden = false;
     bool send_telemetry = true;
     bool enable_aruco = true;
     bool enable_line = true;
@@ -56,7 +57,8 @@ void printUsage()
         << "  --gcs-ip <ip>        Override GCS destination IP\n"
         << "  --port <n>           Override video destination UDP port\n"
         << "  --count <n>          Process n frames, 0 means forever\n"
-        << "  --no-video           Disable best-effort MJPEG video streaming\n"
+        << "  --video              Enable opt-in best-effort MJPEG debug streaming\n"
+        << "  --no-video           Disable best-effort MJPEG debug streaming\n"
         << "  --no-telemetry       Disable vision telemetry streaming\n"
         << "  --disable-aruco      Disable ArUco detection\n"
         << "  --disable-line       Disable line detection\n"
@@ -100,8 +102,12 @@ Options parseOptions(int argc, char** argv)
             options.video_port_override = parseInt(argv[++i], options.video_port_override);
         } else if (arg == "--count" && i + 1 < argc) {
             options.count = parseInt(argv[++i], options.count);
+        } else if (arg == "--video") {
+            options.send_video = true;
+            options.send_video_overridden = true;
         } else if (arg == "--no-video") {
             options.send_video = false;
+            options.send_video_overridden = true;
         } else if (arg == "--no-telemetry") {
             options.send_telemetry = false;
         } else if (arg == "--disable-aruco") {
@@ -307,7 +313,8 @@ int main(int argc, char** argv)
     pipeline_options.network = network_config;
     pipeline_options.vision = vision_config;
     pipeline_options.count = options.count;
-    pipeline_options.send_video = options.send_video && vision_config.debug_video.enabled;
+    pipeline_options.send_video =
+        options.send_video_overridden ? options.send_video : vision_config.debug_video.enabled;
     pipeline_options.send_telemetry = options.send_telemetry;
     pipeline_options.enable_aruco = options.enable_aruco;
     pipeline_options.enable_line = options.enable_line;

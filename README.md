@@ -144,18 +144,20 @@ Current detectors:
   projection, contour scoring, and onboard EMA/hold filtering for sudden
   offset jumps.
 
-The debug video path is best-effort and non-critical. If GCS video streaming
-falls behind, old video frames are dropped and the vision loop keeps working on
-the latest camera frame/result. Future mission decision and control output must
-stay on the critical path; GCS video is only an observation aid. The Pi 4 +
-IMX519 default captures at 960x720 12 FPS, submits best-effort debug video at
-8 FPS, and paces UDP chunks to reduce Wi-Fi burst loss.
+The debug video path is opt-in, best-effort, and non-critical. By default the
+onboard process captures camera frames only to compute ArUco/line metadata and
+system telemetry. If GCS video streaming is explicitly enabled and falls behind,
+old video frames are dropped and the vision loop keeps working on the latest
+camera frame/result. Future mission decision and control output must stay on
+the critical path; GCS video is only an observation aid. The Pi 4 + IMX519
+default captures at 960x720 12 FPS.
 
 Useful options:
 
 ```bash
 ./build/vision_debug_node --config config --count 100
 ./build/vision_debug_node --config config --gcs-ip <laptop-ip>
+./build/vision_debug_node --config config --video
 ./build/vision_debug_node --config config --no-video
 ./build/vision_debug_node --config config --no-telemetry
 ./build/vision_debug_node --config config --aruco-only
@@ -222,8 +224,11 @@ Latency and stability defaults are configured in `config/vision.toml`:
 - `line.filter_max_angle_jump_deg = 90.0`: angle-only jumps are treated
   loosely because cross/grid contours can make `fitLine` angle noisy while the
   tracking offset remains stable.
-- `debug_video.send_fps = 8`, `debug_video.chunk_pacing_us = 150`: debug video is
-  decimated and paced separately from the detector frame loop.
+- `debug_video.enabled = false`: GCS MJPEG streaming is disabled by default so
+  normal onboard runs send metadata only.
+- `debug_video.send_fps = 8`, `debug_video.chunk_pacing_us = 150`: when debug
+  video is enabled for visual tuning, it is decimated and paced separately from
+  the detector frame loop.
 - The GCS vision log shows read/decode/ArUco/line/JSON/send/video timings,
   capture/processing FPS, video chunk/skip/failure counters, Pi board/OS/load/
   memory/throttling/Wi-Fi state, camera focus/exposure config, contour counts,
@@ -246,7 +251,8 @@ Expected GCS result:
   arrows, and labels.
 - Detected line contour/border is overlaid by GCS in magenta.
 - The line tracking point is overlaid by GCS in green.
-- The onboard JPEG stream remains raw camera video with no drawn overlay.
+- If the opt-in onboard JPEG stream is enabled, it remains raw camera video with
+  no drawn overlay.
 
 ## Telemetry Bring-Up
 
