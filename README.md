@@ -153,12 +153,11 @@ the critical path; GCS video is only an observation aid. The Pi 4 + IMX519
 default captures at 960x720 12 FPS.
 GCS video receiver discovery is skipped unless debug video is enabled.
 
-Useful options:
+Mission-style metadata-only examples:
 
 ```bash
 ./build/vision_debug_node --config config --count 100
 ./build/vision_debug_node --config config --gcs-ip <laptop-ip>
-./build/vision_debug_node --config config --video
 ./build/vision_debug_node --config config --no-video
 ./build/vision_debug_node --config config --no-telemetry
 ./build/vision_debug_node --config config --aruco-only
@@ -171,6 +170,19 @@ Useful options:
 ./build/vision_debug_node --config config --line-only --line-threshold 160
 ./build/vision_debug_node --config config --line-only --line-roi-top 0.08 --line-lookahead 0.55
 ```
+
+GCS raw camera/overlay visual tuning examples:
+
+```bash
+./build/vision_debug_node --config config --video
+./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
+./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video --gcs-ip <laptop-ip>
+```
+
+If the GCS camera window says `waiting for video stream...`, check the onboard
+startup line. `video: off` means the run is telemetry-only and the GCS log will
+show `video_sent=0`, `chunks_last=0`, and `last_bytes=0`. Add `--video` for
+visual debugging.
 
 Line mode guidance:
 
