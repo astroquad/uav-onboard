@@ -66,8 +66,8 @@ Required top-level fields:
     "status": "streaming",
     "sensor_model": "imx519",
     "camera_index": 0,
-    "width": 960,
-    "height": 720,
+    "width": 1280,
+    "height": 960,
     "fps": 12.0,
     "configured_fps": 12.0,
     "measured_capture_fps": 11.8,
@@ -135,8 +135,8 @@ Required top-level fields:
     "video_send_ms": 3.8,
     "capture_fps": 11.8,
     "processing_fps": 11.7,
-    "debug_video_send_fps": 8.0,
-    "video_chunk_pacing_us": 150,
+    "debug_video_send_fps": 5.0,
+    "video_chunk_pacing_us": 250,
     "cpu_temp_c": 62.5,
     "telemetry_bytes": 980,
     "video_jpeg_bytes": 24576,
@@ -257,7 +257,10 @@ Rules:
 - GCS reassembles a JPEG frame only after all chunks for the same `frame_id` arrive.
 - Incomplete frames are dropped.
 - GCS keeps displaying the last complete frame if the next UDP frame is incomplete.
-- `timestamp_ms` is the capture timestamp and is used for latency display and telemetry fallback matching.
+- `timestamp_ms` is the onboard capture timestamp. It is useful for telemetry
+  correlation when clocks are synchronized, but GCS video UI displays local
+  frame age from receive/reassembly time so unsynchronized clocks cannot create
+  negative latency values.
 
 ## 5. GCS Discovery Beacon
 

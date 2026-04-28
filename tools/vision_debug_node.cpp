@@ -32,6 +32,12 @@ struct Options {
     std::string gcs_ip_override;
     int count = 0;
     int video_port_override = 0;
+    int camera_width_override = 0;
+    int camera_height_override = 0;
+    int camera_fps_override = 0;
+    int camera_quality_override = 0;
+    double lens_position_override = -1.0;
+    std::string autofocus_mode_override;
     bool send_video = false;
     bool send_video_overridden = false;
     bool send_telemetry = true;
@@ -57,6 +63,12 @@ void printUsage()
         << "  --gcs-ip <ip>        Override GCS destination IP\n"
         << "  --port <n>           Override video destination UDP port\n"
         << "  --count <n>          Process n frames, 0 means forever\n"
+        << "  --camera-width <n>   Override rpicam capture width\n"
+        << "  --camera-height <n>  Override rpicam capture height\n"
+        << "  --camera-fps <n>     Override rpicam capture FPS\n"
+        << "  --camera-quality <n> Override rpicam MJPEG quality, 1-100\n"
+        << "  --autofocus-mode <m> Override autofocus mode, e.g. manual/auto/continuous\n"
+        << "  --lens-position <d>  Override manual lens position in dioptres\n"
         << "  --video              Enable opt-in best-effort MJPEG debug streaming\n"
         << "  --no-video           Disable best-effort MJPEG debug streaming\n"
         << "  --no-telemetry       Disable vision telemetry streaming\n"
@@ -102,6 +114,18 @@ Options parseOptions(int argc, char** argv)
             options.video_port_override = parseInt(argv[++i], options.video_port_override);
         } else if (arg == "--count" && i + 1 < argc) {
             options.count = parseInt(argv[++i], options.count);
+        } else if (arg == "--camera-width" && i + 1 < argc) {
+            options.camera_width_override = parseInt(argv[++i], options.camera_width_override);
+        } else if (arg == "--camera-height" && i + 1 < argc) {
+            options.camera_height_override = parseInt(argv[++i], options.camera_height_override);
+        } else if (arg == "--camera-fps" && i + 1 < argc) {
+            options.camera_fps_override = parseInt(argv[++i], options.camera_fps_override);
+        } else if (arg == "--camera-quality" && i + 1 < argc) {
+            options.camera_quality_override = parseInt(argv[++i], options.camera_quality_override);
+        } else if (arg == "--autofocus-mode" && i + 1 < argc) {
+            options.autofocus_mode_override = argv[++i];
+        } else if (arg == "--lens-position" && i + 1 < argc) {
+            options.lens_position_override = parseDouble(argv[++i], options.lens_position_override);
         } else if (arg == "--video") {
             options.send_video = true;
             options.send_video_overridden = true;
@@ -292,6 +316,24 @@ int main(int argc, char** argv)
     }
     if (options.video_port_override > 0) {
         network_config.video_port = static_cast<std::uint16_t>(options.video_port_override);
+    }
+    if (options.camera_width_override > 0) {
+        vision_config.camera.width = options.camera_width_override;
+    }
+    if (options.camera_height_override > 0) {
+        vision_config.camera.height = options.camera_height_override;
+    }
+    if (options.camera_fps_override > 0) {
+        vision_config.camera.fps = options.camera_fps_override;
+    }
+    if (options.camera_quality_override > 0) {
+        vision_config.camera.jpeg_quality = options.camera_quality_override;
+    }
+    if (!options.autofocus_mode_override.empty()) {
+        vision_config.camera.autofocus_mode = options.autofocus_mode_override;
+    }
+    if (options.lens_position_override >= 0.0) {
+        vision_config.camera.lens_position = options.lens_position_override;
     }
 
     const bool send_video =
