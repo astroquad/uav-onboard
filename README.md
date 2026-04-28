@@ -150,8 +150,8 @@ system telemetry. If GCS video streaming is explicitly enabled and falls behind,
 old video frames are dropped and the vision loop keeps working on the latest
 camera frame/result. Future mission decision and control output must stay on
 the critical path; GCS video is only an observation aid. The Pi 4 + IMX519
-default captures at 1280x960 12 FPS with MJPEG quality 85 so ArUco markers keep
-more edge detail than the earlier 960x720 quality-45 baseline.
+default captures at 960x720 12 FPS with MJPEG quality 45 to keep onboard
+decode, detector, and optional UDP video overhead conservative.
 GCS video receiver discovery is skipped unless debug video is enabled.
 
 Mission-style metadata-only examples:
@@ -214,11 +214,12 @@ Latency and stability defaults are configured in `config/vision.toml`:
 
 - `camera.sensor_model = "imx519"`: Pi 4 + IMX519-78 is the current default
   camera target.
-- `camera.width = 1280`, `camera.height = 960`, `camera.fps = 12`: capture uses
-  a 4:3 frame with more marker pixels than the old 960x720 baseline while
-  keeping the detector loop conservative on Pi 4.
-- `camera.jpeg_quality = 85`: the camera MJPEG is less compressed so ArUco
-  marker edges survive better. This also affects opt-in raw GCS video size.
+- `camera.width = 960`, `camera.height = 720`, `camera.fps = 12`: capture keeps
+  more marker pixels than the original Zero 2 W 640x480 baseline while keeping
+  the detector loop conservative on Pi 4.
+- `camera.jpeg_quality = 45`: MJPEG compression is intentionally moderate
+  because the competition marker is large enough for detection at the planned
+  2m altitude, and lower JPEG size reduces decode and optional UDP video cost.
 - `camera.autofocus_mode = "manual"`, `camera.lens_position = 0.67`: initial
   mission-like focus default near 1.5m. For bench ArUco tests, override with
   `--lens-position <1/distance_m>` or edit `config/vision.toml`.
@@ -245,9 +246,9 @@ Latency and stability defaults are configured in `config/vision.toml`:
   tracking offset remains stable.
 - `debug_video.enabled = false`: GCS MJPEG streaming is disabled by default so
   normal onboard runs send metadata only.
-- `debug_video.send_fps = 5`, `debug_video.chunk_pacing_us = 250`: when debug
+- `debug_video.send_fps = 5`, `debug_video.chunk_pacing_us = 150`: when debug
   video is enabled for visual tuning, it is decimated and paced separately from
-  the detector frame loop to offset larger high-quality JPEG frames.
+  the detector frame loop so GCS observation does not compete with mission work.
 - The GCS vision log shows read/decode/ArUco/line/JSON/send/video timings,
   capture/processing FPS, video chunk/skip/failure counters, Pi board/OS/load/
   memory/throttling/Wi-Fi state, camera focus/exposure config, contour counts,

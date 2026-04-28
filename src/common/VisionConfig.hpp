@@ -6,10 +6,10 @@ namespace onboard::common {
 
 struct CameraConfig {
     int device = 0;
-    int width = 1280;
-    int height = 960;
+    int width = 960;
+    int height = 720;
     int fps = 12;
-    int jpeg_quality = 85;
+    int jpeg_quality = 45;
     std::string sensor_model = "imx519";
     std::string codec = "mjpeg";
     std::string autofocus_mode = "manual";
@@ -37,20 +37,20 @@ struct CameraConfig {
 };
 
 struct VideoStreamConfig {
-    int width = 1280;
-    int height = 960;
+    int width = 640;
+    int height = 480;
     int fps = 12;
-    int jpeg_quality = 85;
+    int jpeg_quality = 45;
     int send_fps = 5;
-    int chunk_pacing_us = 250;
+    int chunk_pacing_us = 150;
     int port = 5600;
 };
 
 struct DebugVideoConfig {
     bool enabled = false;
     int send_fps = 5;
-    int jpeg_quality = 85;
-    int chunk_pacing_us = 250;
+    int jpeg_quality = 40;
+    int chunk_pacing_us = 150;
     int send_width = 0;
     int send_height = 0;
 };
