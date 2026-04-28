@@ -1,6 +1,6 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.3
+Version: v1.4
 Last updated: 2026-04-28
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
@@ -111,10 +111,15 @@ Required top-level fields:
     "telemetry_build_ms": 0.3,
     "telemetry_send_ms": 0.1,
     "video_submit_ms": 0.1,
+    "video_send_ms": 3.8,
+    "cpu_temp_c": 62.5,
     "telemetry_bytes": 980,
     "video_jpeg_bytes": 24576,
     "video_sent_frames": 357,
     "video_dropped_frames": 2,
+    "video_skipped_frames": 12,
+    "video_chunks_sent": 4284,
+    "video_chunk_count": 21,
     "line_mask_count": 1,
     "line_contours_found": 4,
     "line_candidates_evaluated": 3,
@@ -162,10 +167,15 @@ Required top-level fields:
 | `debug.telemetry_build_ms` | number | Most recently measured telemetry JSON serialization latency. |
 | `debug.telemetry_send_ms` | number | Most recently measured UDP telemetry send call latency. |
 | `debug.video_submit_ms` | number | Most recently measured latest-frame video queue submit latency. |
+| `debug.video_send_ms` | number | Most recently measured onboard UDP MJPEG chunk send latency in the video worker. |
+| `debug.cpu_temp_c` | number | Raspberry Pi CPU temperature in Celsius when available; `0.0` when unavailable. |
 | `debug.telemetry_bytes` | `uint64` | Most recently serialized telemetry payload size. |
 | `debug.video_jpeg_bytes` | `uint64` | Raw camera JPEG byte size for this frame. |
 | `debug.video_sent_frames` | `uint64` | Number of frames sent by the onboard video worker. |
 | `debug.video_dropped_frames` | `uint64` | Number of stale frames replaced before the video worker could send them. |
+| `debug.video_skipped_frames` | `uint64` | Number of camera frames intentionally not submitted to video because debug video send FPS is capped. |
+| `debug.video_chunks_sent` | `uint64` | Total number of UDP video chunks sent by the onboard video worker. |
+| `debug.video_chunk_count` | `int` | Number of UDP chunks in the most recently sent MJPEG frame. |
 | `debug.line_mask_count` | `int` | Number of threshold masks evaluated by the line detector. |
 | `debug.line_contours_found` | `int` | Number of line candidate contours found before filtering. |
 | `debug.line_candidates_evaluated` | `int` | Number of ranked contours actually scored. |
@@ -243,3 +253,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.2 | 2026-04-27 | Added `vision.line`, `debug.line_latency_ms`, GCS line overlay metadata, and explicit best-effort debug video rules. |
 | v1.3 | 2026-04-27 | Added line stabilizer state, raw line diagnostics, latency breakdown, video queue counters, and line detector workload counters. |
 | v1.3 | 2026-04-28 | No schema change; high-altitude line detector/stabilizer tuning continues to use the existing `vision.line.*` and `debug.line_*` fields. |
+| v1.4 | 2026-04-28 | Added debug video chunk/send/skip counters and optional Pi CPU temperature telemetry for diagnosing frame drops and thermal throttling. |

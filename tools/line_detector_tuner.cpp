@@ -16,7 +16,11 @@ struct Options {
     std::string mode;
     std::string mask_strategy;
     int threshold = -1;
+    int local_contrast_threshold = -1;
     int process_width = -1;
+    int morph_open_kernel = -1;
+    int morph_close_kernel = -1;
+    int line_run_merge_gap_px = -1;
     double roi_top_ratio = -1.0;
     double lookahead_y_ratio = -1.0;
     double lookahead_band_ratio = -1.0;
@@ -32,7 +36,11 @@ void printUsage()
         << "  --mode <mode>        auto, light_on_dark, or dark_on_light\n"
         << "  --mask <strategy>    global, local_contrast, white_local_contrast\n"
         << "  --threshold <n>      Override line threshold 0..255\n"
+        << "  --local-threshold <n> Override local contrast threshold 0..255\n"
         << "  --process-width <n>  Override resized processing width\n"
+        << "  --morph-open <n>     Override morphology open kernel\n"
+        << "  --morph-close <n>    Override morphology close kernel\n"
+        << "  --merge-gap <n>      Override projection run merge gap in source px\n"
         << "  --roi-top <ratio>    Override ROI top ratio 0.0..1.0\n"
         << "  --lookahead <ratio>  Override tracking point Y ratio 0.0..1.0\n"
         << "  --band <ratio>       Override lookahead band height ratio 0.0..1.0\n"
@@ -72,8 +80,16 @@ Options parseOptions(int argc, char** argv)
             options.mask_strategy = argv[++i];
         } else if (arg == "--threshold" && i + 1 < argc) {
             options.threshold = parseInt(argv[++i], options.threshold);
+        } else if (arg == "--local-threshold" && i + 1 < argc) {
+            options.local_contrast_threshold = parseInt(argv[++i], options.local_contrast_threshold);
         } else if (arg == "--process-width" && i + 1 < argc) {
             options.process_width = parseInt(argv[++i], options.process_width);
+        } else if (arg == "--morph-open" && i + 1 < argc) {
+            options.morph_open_kernel = parseInt(argv[++i], options.morph_open_kernel);
+        } else if (arg == "--morph-close" && i + 1 < argc) {
+            options.morph_close_kernel = parseInt(argv[++i], options.morph_close_kernel);
+        } else if (arg == "--merge-gap" && i + 1 < argc) {
+            options.line_run_merge_gap_px = parseInt(argv[++i], options.line_run_merge_gap_px);
         } else if (arg == "--roi-top" && i + 1 < argc) {
             options.roi_top_ratio = parseDouble(argv[++i], options.roi_top_ratio);
         } else if (arg == "--lookahead" && i + 1 < argc) {
@@ -113,8 +129,20 @@ int main(int argc, char** argv)
     if (options.threshold >= 0) {
         config.line.threshold = options.threshold;
     }
+    if (options.local_contrast_threshold >= 0) {
+        config.line.local_contrast_threshold = options.local_contrast_threshold;
+    }
     if (options.process_width > 0) {
         config.line.process_width = options.process_width;
+    }
+    if (options.morph_open_kernel > 0) {
+        config.line.morph_open_kernel = options.morph_open_kernel;
+    }
+    if (options.morph_close_kernel > 0) {
+        config.line.morph_close_kernel = options.morph_close_kernel;
+    }
+    if (options.line_run_merge_gap_px >= 0) {
+        config.line.line_run_merge_gap_px = options.line_run_merge_gap_px;
     }
     if (options.roi_top_ratio >= 0.0) {
         config.line.roi_top_ratio = options.roi_top_ratio;

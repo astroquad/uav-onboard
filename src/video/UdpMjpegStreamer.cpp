@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -106,6 +108,11 @@ bool UdpMjpegStreamer::open(const std::string& ip, std::uint16_t port)
     return true;
 }
 
+void UdpMjpegStreamer::setChunkPacingUs(int pacing_us)
+{
+    chunk_pacing_us_ = std::max(0, pacing_us);
+}
+
 bool UdpMjpegStreamer::sendFrame(const camera::CameraFrame& frame)
 {
     if (!socket_open_) {
@@ -131,6 +138,7 @@ bool UdpMjpegStreamer::sendFrame(const camera::CameraFrame& frame)
         last_error_ = "invalid chunk count";
         return false;
     }
+    last_chunk_count_ = static_cast<int>(chunk_count);
 
     std::vector<std::uint8_t> packet(kVideoHeaderSize + kVideoMaxPayloadSize);
     for (std::uint16_t chunk_index = 0; chunk_index < chunk_count; ++chunk_index) {
@@ -168,6 +176,10 @@ bool UdpMjpegStreamer::sendFrame(const camera::CameraFrame& frame)
             last_error_ = socketErrorString();
             return false;
         }
+
+        if (chunk_pacing_us_ > 0 && chunk_index + 1 < chunk_count) {
+            std::this_thread::sleep_for(std::chrono::microseconds(chunk_pacing_us_));
+        }
     }
 
     last_error_.clear();
@@ -185,6 +197,11 @@ void UdpMjpegStreamer::close()
 std::string UdpMjpegStreamer::lastError() const
 {
     return last_error_;
+}
+
+int UdpMjpegStreamer::lastChunkCount() const
+{
+    return last_chunk_count_;
 }
 
 } // namespace onboard::video

@@ -71,10 +71,15 @@ struct DebugTelemetry {
     double telemetry_build_ms = 0.0;
     double telemetry_send_ms = 0.0;
     double video_submit_ms = 0.0;
+    double video_send_ms = 0.0;
+    double cpu_temp_c = 0.0;
     std::uint64_t telemetry_bytes = 0;
     std::uint64_t video_jpeg_bytes = 0;
     std::uint64_t video_sent_frames = 0;
     std::uint64_t video_dropped_frames = 0;
+    std::uint64_t video_skipped_frames = 0;
+    std::uint64_t video_chunks_sent = 0;
+    int video_chunk_count = 0;
     int line_mask_count = 0;
     int line_contours_found = 0;
     int line_candidates_evaluated = 0;

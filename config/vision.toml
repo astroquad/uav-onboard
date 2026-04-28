@@ -7,8 +7,10 @@ fps = 30
 [video]
 width = 640
 height = 480
-fps = 15
-jpeg_quality = 50
+fps = 12
+jpeg_quality = 45
+send_fps = 10
+chunk_pacing_us = 150
 port = 5600
 
 [line]
@@ -21,9 +23,13 @@ lookahead_y_ratio = 0.55
 lookahead_band_ratio = 0.06
 threshold = 0
 local_contrast_blur = 31
-local_contrast_threshold = 12
+local_contrast_threshold = 10
 min_area_px = 250
 morph_kernel = 5
+morph_open_kernel = 1
+morph_close_kernel = 7
+morph_dilate_kernel = 1
+line_run_merge_gap_px = 16
 max_contour_points = 48
 confidence_min = 0.25
 min_line_width_px = 8

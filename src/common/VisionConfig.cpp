@@ -42,6 +42,8 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.video.height = video["height"].value_or(config.video.height);
         config.video.fps = video["fps"].value_or(config.video.fps);
         config.video.jpeg_quality = video["jpeg_quality"].value_or(config.video.jpeg_quality);
+        config.video.send_fps = video["send_fps"].value_or(config.video.send_fps);
+        config.video.chunk_pacing_us = video["chunk_pacing_us"].value_or(config.video.chunk_pacing_us);
         config.video.port = video["port"].value_or(config.video.port);
     }
 
@@ -76,6 +78,11 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             line["local_contrast_threshold"].value_or(config.line.local_contrast_threshold);
         config.line.min_area_px = line["min_area_px"].value_or(config.line.min_area_px);
         config.line.morph_kernel = line["morph_kernel"].value_or(config.line.morph_kernel);
+        config.line.morph_open_kernel = line["morph_open_kernel"].value_or(config.line.morph_open_kernel);
+        config.line.morph_close_kernel = line["morph_close_kernel"].value_or(config.line.morph_close_kernel);
+        config.line.morph_dilate_kernel = line["morph_dilate_kernel"].value_or(config.line.morph_dilate_kernel);
+        config.line.line_run_merge_gap_px =
+            line["line_run_merge_gap_px"].value_or(config.line.line_run_merge_gap_px);
         config.line.max_contour_points = line["max_contour_points"].value_or(config.line.max_contour_points);
         config.line.confidence_min = line["confidence_min"].value_or(config.line.confidence_min);
         config.line.min_line_width_px = line["min_line_width_px"].value_or(config.line.min_line_width_px);

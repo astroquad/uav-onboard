@@ -113,7 +113,9 @@ Current detectors:
 The debug video path is best-effort and non-critical. If GCS video streaming
 falls behind, old video frames are dropped and the vision loop keeps working on
 the latest camera frame/result. Future mission decision and control output must
-stay on the critical path; GCS video is only an observation aid.
+stay on the critical path; GCS video is only an observation aid. The default
+debug stream now captures at 12 FPS, submits video at 10 FPS, and paces UDP
+chunks to reduce Wi-Fi burst loss.
 
 Useful options:
 
@@ -165,6 +167,11 @@ Latency and stability defaults are configured in `config/vision.toml`:
   global grayscale threshold.
 - `line.lookahead_band_ratio = 0.06`: the tracking point is measured from a
   short horizontal band around the configured lookahead Y coordinate.
+- `line.morph_open_kernel = 1`, `line.morph_close_kernel = 7`: local-contrast
+  masks are closed more aggressively than they are opened so a bright line does
+  not split into two edge contours.
+- `line.line_run_merge_gap_px = 16`: nearby projection runs are merged when
+  measuring the tracking line width.
 - `line.max_candidates = 8`: only the largest ranked contours are scored.
 - `line.filter_enabled = true`: raw line offset/angle spikes are masked with
   EMA smoothing, short hold, and multi-frame reacquire logic.
@@ -173,8 +180,11 @@ Latency and stability defaults are configured in `config/vision.toml`:
 - `line.filter_max_angle_jump_deg = 90.0`: angle-only jumps are treated
   loosely because cross/grid contours can make `fitLine` angle noisy while the
   tracking offset remains stable.
+- `video.send_fps = 10`, `video.chunk_pacing_us = 150`: debug video is
+  decimated and paced separately from the detector frame loop.
 - The GCS vision log shows read/decode/ArUco/line/JSON/send/video timings,
-  contour counts, queue drops, and raw-vs-filtered line state.
+  video chunk/skip counters, CPU temperature when available, contour counts,
+  queue drops, and raw-vs-filtered line state.
 
 For image-file detector smoke tests:
 
@@ -183,6 +193,7 @@ For image-file detector smoke tests:
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode auto
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mask local_contrast --process-width 480 --band 0.06
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --local-threshold 10 --morph-open 1 --morph-close 7 --merge-gap 16
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode light_on_dark --threshold 160 --roi-top 0.08 --lookahead 0.55
 ```
 

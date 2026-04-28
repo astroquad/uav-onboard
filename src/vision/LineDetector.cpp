@@ -189,7 +189,7 @@ cv::Mat localContrastMask(
     return mask;
 }
 
-void cleanMask(cv::Mat& mask, int morph_kernel)
+void applyMorphology(cv::Mat& mask, int morph_type, int morph_kernel)
 {
     const int kernel_size = oddKernelSize(morph_kernel);
     if (kernel_size <= 1) {
@@ -199,14 +199,45 @@ void cleanMask(cv::Mat& mask, int morph_kernel)
     const cv::Mat kernel = cv::getStructuringElement(
         cv::MORPH_RECT,
         cv::Size(kernel_size, kernel_size));
-    cv::morphologyEx(mask, mask, cv::MORPH_OPEN, kernel);
-    cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
+    if (morph_type == cv::MORPH_DILATE) {
+        cv::dilate(mask, mask, kernel);
+    } else {
+        cv::morphologyEx(mask, mask, morph_type, kernel);
+    }
 }
 
-int scaledMorphKernel(const common::LineConfig& config, const WorkGeometry& geometry)
+int scaledKernelSize(int configured_kernel, const WorkGeometry& geometry)
 {
     const double scale = std::max(1.0, std::max(geometry.scale_x, geometry.scale_y));
-    return oddKernelSize(static_cast<int>(std::lround(config.morph_kernel / scale)));
+    return oddKernelSize(static_cast<int>(std::lround(configured_kernel / scale)));
+}
+
+int scaledMorphOpenKernel(const common::LineConfig& config, const WorkGeometry& geometry)
+{
+    const int configured = config.morph_open_kernel > 0
+        ? config.morph_open_kernel
+        : config.morph_kernel;
+    return scaledKernelSize(configured, geometry);
+}
+
+int scaledMorphCloseKernel(const common::LineConfig& config, const WorkGeometry& geometry)
+{
+    const int configured = config.morph_close_kernel > 0
+        ? config.morph_close_kernel
+        : config.morph_kernel;
+    return scaledKernelSize(configured, geometry);
+}
+
+int scaledMorphDilateKernel(const common::LineConfig& config, const WorkGeometry& geometry)
+{
+    return scaledKernelSize(config.morph_dilate_kernel, geometry);
+}
+
+void cleanMask(cv::Mat& mask, const common::LineConfig& config, const WorkGeometry& geometry)
+{
+    applyMorphology(mask, cv::MORPH_OPEN, scaledMorphOpenKernel(config, geometry));
+    applyMorphology(mask, cv::MORPH_CLOSE, scaledMorphCloseKernel(config, geometry));
+    applyMorphology(mask, cv::MORPH_DILATE, scaledMorphDilateKernel(config, geometry));
 }
 
 std::vector<cv::Mat> buildMasks(
@@ -236,7 +267,7 @@ std::vector<cv::Mat> buildMasks(
     }
 
     for (auto& mask : masks) {
-        cleanMask(mask, scaledMorphKernel(config, geometry));
+        cleanMask(mask, config, geometry);
     }
     return masks;
 }
@@ -252,6 +283,12 @@ int scaledMinLineWidth(const common::LineConfig& config, const WorkGeometry& geo
 {
     const double scaled_width = config.min_line_width_px / std::max(1.0, geometry.scale_x);
     return std::max(2, static_cast<int>(std::lround(scaled_width)));
+}
+
+int scaledRunMergeGap(const common::LineConfig& config, const WorkGeometry& geometry)
+{
+    const double scaled_gap = config.line_run_merge_gap_px / std::max(1.0, geometry.scale_x);
+    return std::max(0, static_cast<int>(std::lround(scaled_gap)));
 }
 
 std::vector<std::size_t> sortedCandidateIndexes(
@@ -335,6 +372,7 @@ std::optional<ProjectionRun> bestProjectionRun(
     int band_height,
     int min_line_width,
     int max_line_width,
+    int max_merge_gap,
     int work_width)
 {
     if (runs.empty()) {
@@ -348,7 +386,13 @@ std::optional<ProjectionRun> bestProjectionRun(
     for (std::size_t start_index = 0; start_index < runs.size(); ++start_index) {
         int weight = 0;
         int active_columns = 0;
+        int previous_end_x = runs[start_index].start_x - 1;
         for (std::size_t end_index = start_index; end_index < runs.size(); ++end_index) {
+            const int gap = runs[end_index].start_x - previous_end_x - 1;
+            if (end_index > start_index && gap > max_merge_gap) {
+                break;
+            }
+
             const int start_x = runs[start_index].start_x;
             const int end_x = runs[end_index].end_x;
             const int width = end_x - start_x + 1;
@@ -358,6 +402,7 @@ std::optional<ProjectionRun> bestProjectionRun(
 
             weight += runs[end_index].weight;
             active_columns += runs[end_index].end_x - runs[end_index].start_x + 1;
+            previous_end_x = runs[end_index].end_x;
             if (width < min_line_width) {
                 continue;
             }
@@ -438,6 +483,7 @@ std::optional<Candidate> evaluateContour(
         scan_y1 - scan_y0,
         min_line_width,
         max_line_width,
+        scaledRunMergeGap(config, geometry),
         geometry.work_width);
     if (!projection_run) {
         return std::nullopt;

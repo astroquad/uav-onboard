@@ -14,8 +14,10 @@ struct CameraConfig {
 struct VideoStreamConfig {
     int width = 640;
     int height = 480;
-    int fps = 15;
-    int jpeg_quality = 50;
+    int fps = 12;
+    int jpeg_quality = 45;
+    int send_fps = 10;
+    int chunk_pacing_us = 150;
     int port = 5600;
 };
 
@@ -39,9 +41,13 @@ struct LineConfig {
     double lookahead_band_ratio = 0.06;
     int threshold = 0;
     int local_contrast_blur = 31;
-    int local_contrast_threshold = 12;
+    int local_contrast_threshold = 10;
     int min_area_px = 250;
     int morph_kernel = 5;
+    int morph_open_kernel = 1;
+    int morph_close_kernel = 7;
+    int morph_dilate_kernel = 1;
+    int line_run_merge_gap_px = 16;
     int max_contour_points = 48;
     double confidence_min = 0.25;
     int min_line_width_px = 8;

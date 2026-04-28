@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -66,14 +67,29 @@ protocol::LineTelemetry toProtocolLine(const vision::LineDetection& line)
     return output;
 }
 
+double readCpuTempC()
+{
+#ifdef _WIN32
+    return 0.0;
+#else
+    std::ifstream input("/sys/class/thermal/thermal_zone0/temp");
+    double milli_celsius = 0.0;
+    if (!(input >> milli_celsius)) {
+        return 0.0;
+    }
+    return milli_celsius / 1000.0;
+#endif
+}
+
 class LatestVideoSender {
 public:
-    bool start(const std::string& ip, std::uint16_t port)
+    bool start(const std::string& ip, std::uint16_t port, int chunk_pacing_us)
     {
         if (!streamer_.open(ip, port)) {
             last_error_ = streamer_.lastError();
             return false;
         }
+        streamer_.setChunkPacingUs(chunk_pacing_us);
 
         running_ = true;
         worker_ = std::thread([this]() { workerLoop(); });
@@ -88,6 +104,11 @@ public:
         }
         latest_ = std::move(frame);
         condition_.notify_one();
+    }
+
+    void noteSkippedFrame()
+    {
+        skipped_frames_.fetch_add(1);
     }
 
     void stop()
@@ -123,6 +144,27 @@ public:
         return dropped_frames_;
     }
 
+    std::uint64_t skippedFrames() const
+    {
+        return skipped_frames_.load();
+    }
+
+    std::uint64_t chunksSent() const
+    {
+        return chunks_sent_.load();
+    }
+
+    int lastChunkCount() const
+    {
+        return last_chunk_count_.load();
+    }
+
+    double lastSendMs() const
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex_);
+        return last_send_ms_;
+    }
+
 private:
     void workerLoop()
     {
@@ -138,11 +180,26 @@ private:
                 latest_.reset();
             }
 
-            if (frame && !streamer_.sendFrame(*frame)) {
+            if (frame) {
+                const auto send_started = std::chrono::steady_clock::now();
+                const bool sent = streamer_.sendFrame(*frame);
+                const auto send_finished = std::chrono::steady_clock::now();
+                const double send_ms = std::chrono::duration<double, std::milli>(
+                    send_finished - send_started).count();
+                {
+                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                    last_send_ms_ = send_ms;
+                }
+                last_chunk_count_.store(streamer_.lastChunkCount());
+                if (sent) {
+                    ++sent_frames_;
+                    chunks_sent_.fetch_add(static_cast<std::uint64_t>(
+                        std::max(0, streamer_.lastChunkCount())));
+                    continue;
+                }
+
                 std::lock_guard<std::mutex> lock(mutex_);
                 last_error_ = streamer_.lastError();
-            } else if (frame) {
-                ++sent_frames_;
             }
         }
     }
@@ -156,6 +213,11 @@ private:
     std::string last_error_;
     std::uint64_t dropped_frames_ = 0;
     std::atomic<std::uint64_t> sent_frames_ {0};
+    std::atomic<std::uint64_t> skipped_frames_ {0};
+    std::atomic<std::uint64_t> chunks_sent_ {0};
+    std::atomic<int> last_chunk_count_ {0};
+    mutable std::mutex stats_mutex_;
+    double last_send_ms_ = 0.0;
 };
 
 } // namespace
@@ -164,7 +226,10 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 {
     LatestVideoSender video_sender;
     if (options.send_video &&
-        !video_sender.start(options.network.gcs_ip, options.network.video_port)) {
+        !video_sender.start(
+            options.network.gcs_ip,
+            options.network.video_port,
+            options.vision.video.chunk_pacing_us)) {
         std::cerr << "failed to open UDP video streamer: "
                   << video_sender.takeLastError() << "\n";
         return 1;
@@ -201,6 +266,8 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
               << "  video UDP port: " << options.network.video_port << "\n"
               << "  size: " << options.vision.video.width << 'x' << options.vision.video.height << "\n"
               << "  fps: " << options.vision.video.fps << "\n"
+              << "  video_send_fps: " << options.vision.video.send_fps << "\n"
+              << "  video_chunk_pacing_us: " << options.vision.video.chunk_pacing_us << "\n"
               << "  aruco_dictionary: " << aruco_detector.dictionaryName() << "\n"
               << "  aruco: " << (options.enable_aruco ? "on" : "off") << "\n"
               << "  line: " << (options.enable_line && options.vision.line.enabled ? "on" : "off") << "\n"
@@ -218,6 +285,8 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     double last_telemetry_send_ms = 0.0;
     double last_video_submit_ms = 0.0;
     std::uint64_t last_telemetry_bytes = 0;
+    double last_cpu_temp_c = readCpuTempC();
+    auto last_video_sent_time = std::chrono::steady_clock::time_point {};
     while (options.count == 0 || processed_count < options.count) {
         camera::CameraFrame frame;
         const auto read_started = std::chrono::steady_clock::now();
@@ -278,6 +347,9 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         double telemetry_build_ms = last_telemetry_build_ms;
         double telemetry_send_ms = last_telemetry_send_ms;
         if (options.send_telemetry) {
+            if (processed_count % 30 == 0) {
+                last_cpu_temp_c = readCpuTempC();
+            }
             protocol::BringupTelemetry telemetry;
             telemetry.seq = telemetry_seq++;
             telemetry.timestamp_ms = frame.timestamp_ms;
@@ -304,10 +376,15 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
             telemetry.debug.telemetry_build_ms = last_telemetry_build_ms;
             telemetry.debug.telemetry_send_ms = last_telemetry_send_ms;
             telemetry.debug.video_submit_ms = last_video_submit_ms;
+            telemetry.debug.video_send_ms = video_sender.lastSendMs();
+            telemetry.debug.cpu_temp_c = last_cpu_temp_c;
             telemetry.debug.telemetry_bytes = last_telemetry_bytes;
             telemetry.debug.video_jpeg_bytes = jpeg_bytes;
             telemetry.debug.video_sent_frames = video_sender.sentFrames();
             telemetry.debug.video_dropped_frames = video_sender.droppedFrames();
+            telemetry.debug.video_skipped_frames = video_sender.skippedFrames();
+            telemetry.debug.video_chunks_sent = video_sender.chunksSent();
+            telemetry.debug.video_chunk_count = video_sender.lastChunkCount();
             telemetry.debug.line_mask_count = result.line.mask_count;
             telemetry.debug.line_contours_found = result.line.contours_found;
             telemetry.debug.line_candidates_evaluated = result.line.candidates_evaluated;
@@ -336,15 +413,26 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
         double video_submit_ms = last_video_submit_ms;
         if (options.send_video) {
-            const auto video_submit_started = std::chrono::steady_clock::now();
-            video_sender.submit(std::move(frame));
-            const auto video_submit_finished = std::chrono::steady_clock::now();
-            video_submit_ms = std::chrono::duration<double, std::milli>(
-                video_submit_finished - video_submit_started).count();
-            last_video_submit_ms = video_submit_ms;
-            const std::string video_error = video_sender.takeLastError();
-            if (!video_error.empty()) {
-                std::cerr << "video send warning: " << video_error << "\n";
+            const int send_fps = std::clamp(options.vision.video.send_fps, 1, options.vision.video.fps);
+            const auto now = std::chrono::steady_clock::now();
+            const auto min_period = std::chrono::microseconds(1000000 / send_fps);
+            const bool should_send =
+                last_video_sent_time.time_since_epoch().count() == 0 ||
+                now - last_video_sent_time >= min_period;
+            if (should_send) {
+                const auto video_submit_started = std::chrono::steady_clock::now();
+                video_sender.submit(std::move(frame));
+                const auto video_submit_finished = std::chrono::steady_clock::now();
+                video_submit_ms = std::chrono::duration<double, std::milli>(
+                    video_submit_finished - video_submit_started).count();
+                last_video_submit_ms = video_submit_ms;
+                last_video_sent_time = now;
+                const std::string video_error = video_sender.takeLastError();
+                if (!video_error.empty()) {
+                    std::cerr << "video send warning: " << video_error << "\n";
+                }
+            } else {
+                video_sender.noteSkippedFrame();
             }
         }
 
@@ -365,9 +453,12 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
                   << " json_ms=" << telemetry_build_ms
                   << " tsend_ms=" << telemetry_send_ms
                   << " vsubmit_ms=" << video_submit_ms
+                  << " vsend_ms=" << video_sender.lastSendMs()
                   << " jpeg_bytes=" << jpeg_bytes
+                  << " video_chunks=" << video_sender.lastChunkCount()
                   << " video_sent=" << video_sender.sentFrames()
                   << " video_dropped=" << video_sender.droppedFrames()
+                  << " video_skipped=" << video_sender.skippedFrames()
                   << "\n";
     }
 

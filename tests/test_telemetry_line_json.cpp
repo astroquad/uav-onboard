@@ -32,6 +32,11 @@ int main()
     telemetry.vision.line.contour_px.push_back({350.0, 120.0});
     telemetry.debug.line_contours_found = 3;
     telemetry.debug.video_jpeg_bytes = 12345;
+    telemetry.debug.video_send_ms = 4.5;
+    telemetry.debug.cpu_temp_c = 62.5;
+    telemetry.debug.video_chunk_count = 12;
+    telemetry.debug.video_chunks_sent = 120;
+    telemetry.debug.video_skipped_frames = 2;
 
     const auto json = nlohmann::json::parse(onboard::protocol::buildTelemetryJson(telemetry));
     assert(json["vision"]["line_detected"].get<bool>());
@@ -41,6 +46,11 @@ int main()
     assert(json["vision"]["line"]["raw_center_offset_px"].get<double>() == -20.0);
     assert(json["vision"]["line"]["contour_px"].size() == 2);
     assert(json["debug"].contains("line_latency_ms"));
+    assert(json["debug"]["video_send_ms"].get<double>() == 4.5);
+    assert(json["debug"]["cpu_temp_c"].get<double>() == 62.5);
+    assert(json["debug"]["video_chunk_count"].get<int>() == 12);
+    assert(json["debug"]["video_chunks_sent"].get<std::uint64_t>() == 120);
+    assert(json["debug"]["video_skipped_frames"].get<std::uint64_t>() == 2);
     assert(json["debug"]["line_contours_found"].get<int>() == 3);
     assert(json["debug"]["video_jpeg_bytes"].get<std::uint64_t>() == 12345);
     return 0;
