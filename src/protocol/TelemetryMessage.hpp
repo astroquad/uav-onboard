@@ -36,6 +36,33 @@ struct LineTelemetry {
     std::vector<Point2f> contour_px;
 };
 
+struct BranchTelemetry {
+    std::string direction;
+    bool present = false;
+    double score = 0.0;
+    Point2f endpoint_px;
+    double angle_deg = 0.0;
+};
+
+struct IntersectionTelemetry {
+    bool valid = false;
+    bool detected = false;
+    std::string type = "none";
+    std::string raw_type = "none";
+    bool stable = false;
+    bool held = false;
+    Point2f center_px;
+    Point2f raw_center_px;
+    double score = 0.0;
+    double raw_score = 0.0;
+    int branch_mask = 0;
+    int branch_count = 0;
+    int stable_frames = 0;
+    double radius_px = 0.0;
+    int selected_mask_index = -1;
+    std::vector<BranchTelemetry> branches;
+};
+
 struct CameraTelemetry {
     std::string status = "not_checked";
     std::string sensor_model;
@@ -61,6 +88,7 @@ struct VisionTelemetry {
     LineTelemetry line;
     bool intersection_detected = false;
     double intersection_score = 0.0;
+    IntersectionTelemetry intersection;
     bool marker_detected = false;
     int marker_id = -1;
     std::vector<MarkerTelemetry> markers;
@@ -78,6 +106,7 @@ struct DebugTelemetry {
     double jpeg_decode_ms = 0.0;
     double aruco_latency_ms = 0.0;
     double line_latency_ms = 0.0;
+    double intersection_latency_ms = 0.0;
     double telemetry_build_ms = 0.0;
     double telemetry_send_ms = 0.0;
     double video_submit_ms = 0.0;

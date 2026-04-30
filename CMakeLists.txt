@@ -88,7 +88,10 @@ if(BUILD_TOOLS)
     if(OpenCV_FOUND)
         add_library(onboard_vision STATIC
             src/vision/ArucoDetector.cpp
+            src/vision/IntersectionDetector.cpp
+            src/vision/IntersectionStabilizer.cpp
             src/vision/LineDetector.cpp
+            src/vision/LineMaskBuilder.cpp
             src/vision/LineStabilizer.cpp
             src/vision/OpenCvCameraSource.cpp
         )

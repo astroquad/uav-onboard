@@ -5,7 +5,10 @@
 #include "protocol/TelemetryMessage.hpp"
 #include "video/UdpMjpegStreamer.hpp"
 #include "vision/ArucoDetector.hpp"
+#include "vision/IntersectionDetector.hpp"
+#include "vision/IntersectionStabilizer.hpp"
 #include "vision/LineDetector.hpp"
+#include "vision/LineMaskBuilder.hpp"
 #include "vision/LineStabilizer.hpp"
 
 #include <opencv2/core.hpp>
@@ -69,6 +72,65 @@ protocol::LineTelemetry toProtocolLine(const vision::LineDetection& line)
         output.contour_px.push_back(toProtocolPoint(point));
     }
     return output;
+}
+
+protocol::IntersectionTelemetry toProtocolIntersection(const vision::IntersectionDetection& intersection)
+{
+    protocol::IntersectionTelemetry output;
+    output.valid = intersection.valid;
+    output.detected = intersection.intersection_detected;
+    output.type = vision::intersectionTypeName(intersection.type);
+    output.raw_type = vision::intersectionTypeName(intersection.raw_type);
+    output.stable = intersection.stable;
+    output.held = intersection.held;
+    output.center_px = toProtocolPoint(intersection.center_px);
+    output.raw_center_px = toProtocolPoint(intersection.raw_center_px);
+    output.score = intersection.score;
+    output.raw_score = intersection.raw_score;
+    output.branch_mask = intersection.branch_mask;
+    output.branch_count = intersection.branch_count;
+    output.stable_frames = intersection.stable_frames;
+    output.radius_px = intersection.radius_px;
+    output.selected_mask_index = intersection.selected_mask_index;
+    output.branches.reserve(intersection.branches.size());
+    for (const auto& branch : intersection.branches) {
+        protocol::BranchTelemetry branch_output;
+        branch_output.direction = vision::branchDirectionName(branch.direction);
+        branch_output.present = branch.present;
+        branch_output.score = branch.score;
+        branch_output.endpoint_px = toProtocolPoint(branch.endpoint_px);
+        branch_output.angle_deg = branch.angle_deg;
+        output.branches.push_back(branch_output);
+    }
+    return output;
+}
+
+std::string branchScoreSummary(const vision::IntersectionDetection& intersection)
+{
+    std::ostringstream stream;
+    for (std::size_t index = 0; index < intersection.branches.size(); ++index) {
+        if (index > 0) {
+            stream << ',';
+        }
+        const auto& branch = intersection.branches[index];
+        const char* label = "?";
+        switch (branch.direction) {
+        case vision::BranchDirection::Front:
+            label = "F";
+            break;
+        case vision::BranchDirection::Right:
+            label = "R";
+            break;
+        case vision::BranchDirection::Back:
+            label = "B";
+            break;
+        case vision::BranchDirection::Left:
+            label = "L";
+            break;
+        }
+        stream << label << ':' << branch.score;
+    }
+    return stream.str();
 }
 
 double readCpuTempC()
@@ -497,8 +559,11 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     }
 
     const vision::ArucoDetector aruco_detector(options.vision.aruco);
+    const vision::LineMaskBuilder line_mask_builder(options.vision.line);
     const vision::LineDetector line_detector(options.vision.line);
     vision::LineStabilizer line_stabilizer(options.vision.line);
+    const vision::IntersectionDetector intersection_detector(options.vision.line);
+    vision::IntersectionStabilizer intersection_stabilizer(options.vision.line);
 
     std::cout << "vision_debug_node\n"
               << "  destination: " << options.network.gcs_ip << "\n"
@@ -520,6 +585,8 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
               << "  line_mode: " << options.vision.line.mode << "\n"
               << "  line_process_width: " << options.vision.line.process_width << "\n"
               << "  line_filter: " << (options.vision.line.filter_enabled ? "on" : "off") << "\n"
+              << "  intersection: " << (options.enable_line && options.vision.line.enabled ? "on" : "off") << "\n"
+              << "  intersection_threshold: " << options.vision.line.intersection_threshold << "\n"
               << "  video: " << (options.send_video ? "on best-effort latest-frame" : "off") << "\n"
               << "  telemetry: " << (options.send_telemetry ? "on" : "off") << "\n"
               << "  count: " << (options.count == 0 ? std::string("forever") : std::to_string(options.count))
@@ -570,6 +637,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
         double aruco_latency_ms = 0.0;
         double line_latency_ms = 0.0;
+        double intersection_latency_ms = 0.0;
 
         if (!image.empty()) {
             if (options.enable_aruco) {
@@ -583,12 +651,21 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
             if (options.enable_line && options.vision.line.enabled) {
                 const auto line_started = std::chrono::steady_clock::now();
-                const auto raw_line = line_detector.detect(image);
+                const auto line_masks = line_mask_builder.build(image);
+                const auto raw_line = line_detector.detect(line_masks);
                 const auto line_finished = std::chrono::steady_clock::now();
                 result.line = line_stabilizer.update(raw_line, frame.width);
                 result.line_detected = result.line.detected;
                 line_latency_ms = std::chrono::duration<double, std::milli>(
                     line_finished - line_started).count();
+
+                const auto intersection_started = std::chrono::steady_clock::now();
+                const auto raw_intersection = intersection_detector.detect(line_masks, raw_line);
+                result.intersection = intersection_stabilizer.update(raw_intersection);
+                result.intersection_detected = result.intersection.intersection_detected;
+                const auto intersection_finished = std::chrono::steady_clock::now();
+                intersection_latency_ms = std::chrono::duration<double, std::milli>(
+                    intersection_finished - intersection_started).count();
             }
         }
         const auto processing_finished = std::chrono::steady_clock::now();
@@ -628,8 +705,12 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
             telemetry.vision.line_offset = result.line.center_offset_px;
             telemetry.vision.line_angle = result.line.angle_deg;
             telemetry.vision.line = toProtocolLine(result.line);
+            telemetry.vision.intersection_detected = result.intersection.intersection_detected;
+            telemetry.vision.intersection_score = result.intersection.score;
+            telemetry.vision.intersection = toProtocolIntersection(result.intersection);
             telemetry.debug.aruco_latency_ms = aruco_latency_ms;
             telemetry.debug.line_latency_ms = line_latency_ms;
+            telemetry.debug.intersection_latency_ms = intersection_latency_ms;
             telemetry.debug.processing_latency_ms = std::chrono::duration<double, std::milli>(
                 processing_finished - processing_started).count();
             telemetry.debug.read_frame_ms = read_frame_ms;
@@ -713,10 +794,21 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
                   << " held=" << (result.line.held ? "yes" : "no")
                   << " rejected_jump=" << (result.line.rejected_jump ? "yes" : "no")
                   << " line_conf=" << result.line.confidence
+                  << " ix_type=" << vision::intersectionTypeName(result.intersection.type)
+                  << " ix_raw=" << vision::intersectionTypeName(result.intersection.raw_type)
+                  << " ix_valid=" << (result.intersection.valid ? "yes" : "no")
+                  << " ix_stable=" << (result.intersection.stable ? "yes" : "no")
+                  << " ix_held=" << (result.intersection.held ? "yes" : "no")
+                  << " ix_detected=" << (result.intersection.intersection_detected ? "yes" : "no")
+                  << " ix_score=" << result.intersection.score
+                  << " ix_center=(" << result.intersection.center_px.x
+                  << ',' << result.intersection.center_px.y << ')'
+                  << " branches=" << branchScoreSummary(result.intersection)
                   << " read_ms=" << read_frame_ms
                   << " decode_ms=" << jpeg_decode_ms
                   << " aruco_ms=" << aruco_latency_ms
                   << " line_ms=" << line_latency_ms
+                  << " ix_ms=" << intersection_latency_ms
                   << " process_ms=" << std::chrono::duration<double, std::milli>(
                          processing_finished - processing_started).count()
                   << " json_ms=" << telemetry_build_ms

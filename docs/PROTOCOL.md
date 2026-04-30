@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.5
-Last updated: 2026-04-29
+Version: v1.6
+Last updated: 2026-04-30
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 ## 1. Channels
@@ -101,6 +101,32 @@ Required top-level fields:
     },
     "intersection_detected": false,
     "intersection_score": 0.0,
+    "intersection": {
+      "valid": false,
+      "detected": false,
+      "type": "none",
+      "raw_type": "none",
+      "stable": false,
+      "held": false,
+      "center_px": { "x": 0.0, "y": 0.0 },
+      "raw_center_px": { "x": 0.0, "y": 0.0 },
+      "score": 0.0,
+      "raw_score": 0.0,
+      "branch_mask": 0,
+      "branch_count": 0,
+      "stable_frames": 0,
+      "radius_px": 0.0,
+      "selected_mask_index": -1,
+      "branches": [
+        {
+          "direction": "front",
+          "present": false,
+          "score": 0.0,
+          "endpoint_px": { "x": 0.0, "y": 0.0 },
+          "angle_deg": -90.0
+        }
+      ]
+    },
     "marker_detected": true,
     "marker_id": 7,
     "marker_count": 1,
@@ -129,6 +155,7 @@ Required top-level fields:
     "jpeg_decode_ms": 3.4,
     "aruco_latency_ms": 8.1,
     "line_latency_ms": 2.2,
+    "intersection_latency_ms": 1.3,
     "telemetry_build_ms": 0.3,
     "telemetry_send_ms": 0.1,
     "video_submit_ms": 0.1,
@@ -198,6 +225,23 @@ Required top-level fields:
 | `vision.line.raw_angle_deg` | number | Raw detector angle before stabilizer filtering. |
 | `vision.line.confidence` | number | 0.0 to 1.0 confidence estimate from contour quality. |
 | `vision.line.contour_px` | array | Simplified connected line candidate contour/polyline in image pixel coordinates. GCS draws it in magenta, including cross-shaped intersections when they are part of the selected contour. |
+| `vision.intersection_detected` | `bool` | Legacy summary field. True for stabilized `+`, `T`, or `L` intersection types. False for `straight`, `none`, or `unknown`. |
+| `vision.intersection_score` | number | Stabilized intersection confidence score. |
+| `vision.intersection.valid` | `bool` | True when the intersection classifier has a usable classification result for the frame or a short held result. |
+| `vision.intersection.detected` | `bool` | True when the stabilized type is a turn/branching intersection: `+`, `T`, or `L`. |
+| `vision.intersection.type` | string | Stabilized type: `none`, `unknown`, `straight`, `L`, `T`, or `+`. |
+| `vision.intersection.raw_type` | string | Current-frame raw classifier type before temporal smoothing. |
+| `vision.intersection.stable` | `bool` | True after the same type has survived the stabilizer for the required frame count. |
+| `vision.intersection.held` | `bool` | True when the stabilizer is briefly holding the previous type because the raw frame is missing or weak. |
+| `vision.intersection.center_px` | object | Stabilized center point used by GCS to draw the intersection overlay. |
+| `vision.intersection.raw_center_px` | object | Raw center point before temporal smoothing. |
+| `vision.intersection.raw_score` | number | Current-frame raw confidence before temporal smoothing. |
+| `vision.intersection.branch_mask` | int | Bit mask for present branches in front/right/back/left order. |
+| `vision.intersection.branch_count` | int | Number of branches classified as present. |
+| `vision.intersection.stable_frames` | int | Number of consecutive frames supporting the current stabilized type. |
+| `vision.intersection.radius_px` | number | Approximate source-image center sampling radius used for debug overlay context. |
+| `vision.intersection.selected_mask_index` | int | Index of the line polarity mask that produced the selected classification. |
+| `vision.intersection.branches[]` | array | Per-direction branch observations. Directions are `front`, `right`, `back`, and `left`; each entry includes `present`, `score`, `endpoint_px`, and `angle_deg`. |
 | `vision.marker_detected` | `bool` | True when `markers` is not empty. |
 | `vision.marker_id` | `int` | First detected marker id, kept for backward compatibility. `-1` means none. |
 | `vision.marker_count` | `int` | Number of entries in `vision.markers`. |
@@ -209,6 +253,7 @@ Required top-level fields:
 | `debug.jpeg_decode_ms` | number | Time spent decoding the camera JPEG for onboard detectors. |
 | `debug.aruco_latency_ms` | number | ArUco detector latency for the frame. |
 | `debug.line_latency_ms` | number | Line detector latency for the frame. |
+| `debug.intersection_latency_ms` | number | Intersection classifier latency for the frame. |
 | `debug.telemetry_build_ms` | number | Most recently measured telemetry JSON serialization latency. |
 | `debug.telemetry_send_ms` | number | Most recently measured UDP telemetry send call latency. |
 | `debug.video_submit_ms` | number | Most recently measured latest-frame video queue submit latency. |
@@ -232,7 +277,7 @@ Required top-level fields:
 | `debug.line_roi_pixels` | `int` | Pixel count of the resized ROI processed by the line detector. |
 | `debug.line_selected_contour_points` | `int` | Number of simplified contour points sent in telemetry. |
 
-GCS overlay rendering uses only onboard vision metadata. It does not run marker or line detection locally.
+GCS overlay rendering uses only onboard vision metadata. It does not run marker, line, or intersection detection locally.
 
 ## 4. Video Stream
 
@@ -292,7 +337,7 @@ Command messages will use JSON with the same common top-level fields and will re
 |---|---|---|
 | `uav_onboard` | onboard | Basic telemetry bring-up sender. |
 | `video_streamer` | onboard | Raw MJPEG streaming smoke tool. |
-| `vision_debug_node` | onboard | Pi camera capture, ArUco/line detection, raw video send, vision telemetry send. |
+| `vision_debug_node` | onboard | Pi camera capture, ArUco/line/intersection detection, raw video send, vision telemetry send. |
 | `uav_gcs` | GCS | Basic telemetry receiver. |
 | `uav_gcs_video` | GCS | Raw MJPEG video viewer. |
 | `uav_gcs_vision_debug` | GCS | MJPEG video viewer with vision log window and GCS-side marker/line overlay. |
@@ -309,3 +354,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.4 | 2026-04-28 | Added debug video chunk/send/skip counters and optional Pi CPU temperature telemetry for diagnosing frame drops and thermal throttling. |
 | v1.5 | 2026-04-28 | Added Raspberry Pi 4 + IMX519 camera/system telemetry, capture/processing FPS, debug video pacing config, and video send failure counters. |
 | v1.5 | 2026-04-29 | No schema change; synchronized example defaults to the performance profile: 960x720 camera, 5 FPS opt-in debug video, and 150us chunk pacing. |
+| v1.6 | 2026-04-30 | Added structured `vision.intersection`, branch ray metadata, `debug.intersection_latency_ms`, and GCS intersection overlay/log support. |

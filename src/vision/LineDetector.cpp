@@ -584,6 +584,77 @@ LineDetector::LineDetector(const common::LineConfig& config)
 {
 }
 
+LineDetection LineDetector::detect(const LineMaskFrame& masks) const
+{
+    const auto& mask_geometry = masks.geometry;
+    if (!config_.enabled ||
+        mask_geometry.source_width <= 0 ||
+        mask_geometry.source_height <= 0 ||
+        mask_geometry.work_width <= 0 ||
+        mask_geometry.work_height <= 0 ||
+        masks.masks.empty()) {
+        return {};
+    }
+
+    WorkGeometry geometry;
+    geometry.source_width = mask_geometry.source_width;
+    geometry.source_height = mask_geometry.source_height;
+    geometry.roi_top = mask_geometry.roi_top;
+    geometry.roi_height = mask_geometry.roi_height;
+    geometry.work_width = mask_geometry.work_width;
+    geometry.work_height = mask_geometry.work_height;
+    geometry.scale_x = mask_geometry.scale_x;
+    geometry.scale_y = mask_geometry.scale_y;
+
+    const int source_lookahead_y = std::clamp(
+        static_cast<int>(std::lround(
+            geometry.source_height * clampRatio(config_.lookahead_y_ratio, 0.55))),
+        geometry.roi_top,
+        geometry.source_height - 1);
+    const int work_lookahead_y = std::clamp(
+        static_cast<int>(std::lround((source_lookahead_y - geometry.roi_top) / geometry.scale_y)),
+        0,
+        geometry.work_height - 1);
+
+    int total_contours = 0;
+    int candidates_evaluated = 0;
+    std::optional<Candidate> best;
+    for (const auto& candidate_mask : masks.masks) {
+        if (candidate_mask.mask.empty()) {
+            continue;
+        }
+
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(candidate_mask.mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        total_contours += static_cast<int>(contours.size());
+
+        const auto candidate_indexes = sortedCandidateIndexes(
+            contours,
+            scaledMinArea(config_, geometry),
+            config_.max_candidates);
+        for (const auto index : candidate_indexes) {
+            ++candidates_evaluated;
+            auto candidate = evaluateContour(
+                contours[index],
+                candidate_mask.mask,
+                config_,
+                geometry,
+                work_lookahead_y);
+            if (candidate && (!best || candidate->score > best->score)) {
+                best = std::move(candidate);
+            }
+        }
+    }
+
+    LineDetection output = best ? best->line : LineDetection {};
+    output.mask_count = static_cast<int>(masks.masks.size());
+    output.contours_found = total_contours;
+    output.candidates_evaluated = candidates_evaluated;
+    output.roi_pixels = geometry.work_width * geometry.work_height;
+    output.selected_contour_points = static_cast<int>(output.contour_px.size());
+    return output;
+}
+
 LineDetection LineDetector::detect(const cv::Mat& image) const
 {
     if (!config_.enabled || image.empty() || image.cols <= 0 || image.rows <= 0) {

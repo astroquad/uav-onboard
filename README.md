@@ -116,7 +116,9 @@ cmake --build build-tests
 ctest --test-dir build-tests --output-on-failure
 ```
 
-Current focused tests cover telemetry JSON generation for `vision.line`.
+Current focused tests cover telemetry JSON generation, line/intersection
+stabilization, and synthetic intersection classification when OpenCV is
+available.
 
 ## Vision Debug: ArUco and Line Tracing
 
@@ -143,6 +145,9 @@ Current detectors:
 - Line tracing MVP using resized ROI local-contrast masking, lookahead-band
   projection, contour scoring, and onboard EMA/hold filtering for sudden
   offset jumps.
+- Intersection classification using the same line mask, largest-blob center
+  candidates, branch ray scoring, angle-based `L` vs `straight` checks, and
+  onboard temporal smoothing for `+`, `T`, `L`, and `straight`.
 
 The debug video path is opt-in, best-effort, and non-critical. By default the
 onboard process captures camera frames only to compute ArUco/line metadata and
@@ -177,6 +182,7 @@ GCS raw camera/overlay visual tuning examples:
 
 ```bash
 ./build/vision_debug_node --config config --video
+./build/vision_debug_node --config config --video --fps 12
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video --gcs-ip <laptop-ip>
 ./build/vision_debug_node --config config --aruco-only --video --camera-quality 90 --lens-position 1.0
@@ -186,6 +192,12 @@ If the GCS camera window says `waiting for video stream...`, check the onboard
 startup line. `video: off` means the run is telemetry-only and the GCS log will
 show `video_sent=0`, `chunks_last=0`, and `last_bytes=0`. Add `--video` for
 visual debugging.
+
+Debug video send FPS is independent from camera capture FPS. With no CLI
+override, opt-in GCS video uses `debug_video.send_fps = 5`. Use `--fps 12` for
+debug sessions where the GCS view should track the 12 FPS vision loop more
+closely. Passing `--fps` enables debug video unless `--no-video` is also given,
+which is treated as an option conflict.
 
 Line mode guidance:
 
@@ -209,6 +221,13 @@ the detector. The green tracking point is calculated from a narrow lookahead
 band inside that contour rather than from the whole contour centroid, so broad
 floor blobs and cross-shaped contours are less likely to pull the control point
 away from the actual line center.
+
+Intersection classification is sent separately from the line tracking point.
+The GCS overlay draws the stabilized intersection center in cyan and present
+branch rays in yellow, while the log shows raw/stabilized type, branch scores,
+hold state, and classifier latency. `straight` is reported as a valid type but
+does not set `intersection_detected`, because it is not a turn/branching
+intersection.
 
 Latency and stability defaults are configured in `config/vision.toml`:
 
@@ -244,15 +263,19 @@ Latency and stability defaults are configured in `config/vision.toml`:
 - `line.filter_max_angle_jump_deg = 90.0`: angle-only jumps are treated
   loosely because cross/grid contours can make `fitLine` angle noisy while the
   tracking offset remains stable.
+- `line.intersection_threshold = 0.8`: minimum branch ray score used by the
+  intersection classifier to decide whether a front/right/back/left branch is
+  present.
 - `debug_video.enabled = false`: GCS MJPEG streaming is disabled by default so
   normal onboard runs send metadata only.
 - `debug_video.send_fps = 5`, `debug_video.chunk_pacing_us = 150`: when debug
   video is enabled for visual tuning, it is decimated and paced separately from
   the detector frame loop so GCS observation does not compete with mission work.
-- The GCS vision log shows read/decode/ArUco/line/JSON/send/video timings,
+- The GCS vision log shows read/decode/ArUco/line/intersection/JSON/send/video timings,
   capture/processing FPS, video chunk/skip/failure counters, Pi board/OS/load/
   memory/throttling/Wi-Fi state, camera focus/exposure config, contour counts,
-  queue drops, and raw-vs-filtered line state.
+  queue drops, raw-vs-filtered line state, and raw-vs-stabilized intersection
+  state.
 
 For image-file detector smoke tests:
 
@@ -271,6 +294,8 @@ Expected GCS result:
   arrows, and labels.
 - Detected line contour/border is overlaid by GCS in magenta.
 - The line tracking point is overlaid by GCS in green.
+- Detected intersection center/type is overlaid by GCS in cyan, with present
+  branch rays and branch scores in yellow.
 - If the opt-in onboard JPEG stream is enabled, it remains raw camera video with
   no drawn overlay.
 

@@ -22,6 +22,17 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
         contour.push_back(pointToJson(point));
     }
 
+    nlohmann::json branches = nlohmann::json::array();
+    for (const auto& branch : telemetry.vision.intersection.branches) {
+        branches.push_back({
+            {"direction", branch.direction},
+            {"present", branch.present},
+            {"score", branch.score},
+            {"endpoint_px", pointToJson(branch.endpoint_px)},
+            {"angle_deg", branch.angle_deg},
+        });
+    }
+
     nlohmann::json markers = nlohmann::json::array();
     for (const auto& marker : telemetry.vision.markers) {
         nlohmann::json corners = nlohmann::json::array();
@@ -95,6 +106,24 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
         }},
         {"intersection_detected", telemetry.vision.intersection_detected},
         {"intersection_score", telemetry.vision.intersection_score},
+        {"intersection", {
+            {"valid", telemetry.vision.intersection.valid},
+            {"detected", telemetry.vision.intersection.detected},
+            {"type", telemetry.vision.intersection.type},
+            {"raw_type", telemetry.vision.intersection.raw_type},
+            {"stable", telemetry.vision.intersection.stable},
+            {"held", telemetry.vision.intersection.held},
+            {"center_px", pointToJson(telemetry.vision.intersection.center_px)},
+            {"raw_center_px", pointToJson(telemetry.vision.intersection.raw_center_px)},
+            {"score", telemetry.vision.intersection.score},
+            {"raw_score", telemetry.vision.intersection.raw_score},
+            {"branch_mask", telemetry.vision.intersection.branch_mask},
+            {"branch_count", telemetry.vision.intersection.branch_count},
+            {"stable_frames", telemetry.vision.intersection.stable_frames},
+            {"radius_px", telemetry.vision.intersection.radius_px},
+            {"selected_mask_index", telemetry.vision.intersection.selected_mask_index},
+            {"branches", branches},
+        }},
         {"marker_detected", telemetry.vision.marker_detected},
         {"marker_id", telemetry.vision.marker_id},
         {"marker_count", telemetry.vision.markers.size()},
@@ -111,6 +140,7 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
         {"jpeg_decode_ms", telemetry.debug.jpeg_decode_ms},
         {"aruco_latency_ms", telemetry.debug.aruco_latency_ms},
         {"line_latency_ms", telemetry.debug.line_latency_ms},
+        {"intersection_latency_ms", telemetry.debug.intersection_latency_ms},
         {"telemetry_build_ms", telemetry.debug.telemetry_build_ms},
         {"telemetry_send_ms", telemetry.debug.telemetry_send_ms},
         {"video_submit_ms", telemetry.debug.video_submit_ms},

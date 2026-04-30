@@ -2,6 +2,7 @@
 #include "common/NetworkConfig.hpp"
 #include "common/VisionConfig.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -36,6 +37,8 @@ struct Options {
     int camera_height_override = 0;
     int camera_fps_override = 0;
     int camera_quality_override = 0;
+    int debug_video_fps_override = 0;
+    bool debug_video_fps_specified = false;
     double lens_position_override = -1.0;
     std::string autofocus_mode_override;
     bool send_video = false;
@@ -66,6 +69,7 @@ void printUsage()
         << "  --camera-width <n>   Override rpicam capture width\n"
         << "  --camera-height <n>  Override rpicam capture height\n"
         << "  --camera-fps <n>     Override rpicam capture FPS\n"
+        << "  --fps <n>            Override GCS debug video send FPS; default 5 when video is enabled\n"
         << "  --camera-quality <n> Override rpicam MJPEG quality, 1-100\n"
         << "  --autofocus-mode <m> Override autofocus mode, e.g. manual/auto/continuous\n"
         << "  --lens-position <d>  Override manual lens position in dioptres\n"
@@ -120,6 +124,9 @@ Options parseOptions(int argc, char** argv)
             options.camera_height_override = parseInt(argv[++i], options.camera_height_override);
         } else if (arg == "--camera-fps" && i + 1 < argc) {
             options.camera_fps_override = parseInt(argv[++i], options.camera_fps_override);
+        } else if (arg == "--fps" && i + 1 < argc) {
+            options.debug_video_fps_override = parseInt(argv[++i], options.debug_video_fps_override);
+            options.debug_video_fps_specified = true;
         } else if (arg == "--camera-quality" && i + 1 < argc) {
             options.camera_quality_override = parseInt(argv[++i], options.camera_quality_override);
         } else if (arg == "--autofocus-mode" && i + 1 < argc) {
@@ -326,6 +333,10 @@ int main(int argc, char** argv)
     if (options.camera_fps_override > 0) {
         vision_config.camera.fps = options.camera_fps_override;
     }
+    if (options.debug_video_fps_specified && options.debug_video_fps_override <= 0) {
+        std::cerr << "--fps must be positive\n";
+        return 2;
+    }
     if (options.camera_quality_override > 0) {
         vision_config.camera.jpeg_quality = options.camera_quality_override;
     }
@@ -336,8 +347,21 @@ int main(int argc, char** argv)
         vision_config.camera.lens_position = options.lens_position_override;
     }
 
-    const bool send_video =
-        options.send_video_overridden ? options.send_video : vision_config.debug_video.enabled;
+    if (options.debug_video_fps_specified) {
+        vision_config.debug_video.send_fps = std::clamp(
+            options.debug_video_fps_override,
+            1,
+            std::max(1, vision_config.camera.fps));
+    }
+
+    if (options.debug_video_fps_specified && options.send_video_overridden && !options.send_video) {
+        std::cerr << "--fps cannot be combined with --no-video\n";
+        return 2;
+    }
+
+    const bool send_video = options.send_video_overridden
+        ? options.send_video
+        : (vision_config.debug_video.enabled || options.debug_video_fps_specified);
 
     if (send_video && options.gcs_ip_override.empty() && isBroadcastAddress(network_config.gcs_ip)) {
         std::cout << "discovering GCS video receiver for "
