@@ -96,6 +96,12 @@ GridNodeEvent GridCoordinateTracker::update(
 
     if (!has_origin_) {
         has_origin_ = true;
+        if (current_heading_ == GridHeading::Unknown) {
+            // Vision-only grid smoke starts from the launch line into the first node.
+            // Until MAVLink/IMU heading is wired in, treat that first arrival as north.
+            current_heading_ = GridHeading::North;
+            using_default_start_heading_ = true;
+        }
         current_coord_ = {};
         event.first_node = true;
     } else if (current_heading_ != GridHeading::Unknown) {
@@ -115,23 +121,30 @@ GridNodeEvent GridCoordinateTracker::update(
 
     nodes_[event.local_coord] = event;
     last_node_frame_seq_ = frame_seq;
+    current_heading_ = chooseNextHeading(decision);
     return event;
 }
 
 void GridCoordinateTracker::notifyTurnCompleted(GridHeading new_heading)
 {
     current_heading_ = new_heading;
+    using_default_start_heading_ = false;
 }
 
 void GridCoordinateTracker::setHeading(GridHeading heading)
 {
     current_heading_ = heading;
+    using_default_start_heading_ = false;
 }
 
 void GridCoordinateTracker::resetLocalOrigin()
 {
     has_origin_ = false;
     current_coord_ = {};
+    current_heading_ = GridHeading::Unknown;
+    using_default_start_heading_ = false;
+    pending_second_turn_ = false;
+    pending_turn_right_ = true;
     next_node_id_ = 1;
     last_node_frame_seq_ = 0;
     nodes_.clear();
@@ -171,6 +184,52 @@ GridCoord GridCoordinateTracker::advance(GridCoord coord, GridHeading heading) c
         break;
     }
     return coord;
+}
+
+GridHeading GridCoordinateTracker::chooseNextHeading(const IntersectionDecision& decision)
+{
+    if (current_heading_ == GridHeading::Unknown) {
+        return current_heading_;
+    }
+
+    if (pending_second_turn_) {
+        pending_second_turn_ = false;
+        return pending_turn_right_ ? turnRight(current_heading_) : turnLeft(current_heading_);
+    }
+
+    const bool front_available = (decision.accepted_branch_mask & (1 << 0)) != 0;
+    const bool right_available = (decision.accepted_branch_mask & (1 << 1)) != 0;
+    const bool left_available = (decision.accepted_branch_mask & (1 << 3)) != 0;
+
+    // At the first grid node, prefer the visible side branch so the bottom-entry
+    // hand-held smoke test starts expanding across the first row.
+    if (using_default_start_heading_ && nodes_.size() == 1 && right_available) {
+        using_default_start_heading_ = false;
+        return turnRight(current_heading_);
+    }
+    if (using_default_start_heading_ && nodes_.size() == 1 && !right_available && left_available) {
+        using_default_start_heading_ = false;
+        return turnLeft(current_heading_);
+    }
+
+    if (front_available) {
+        return current_heading_;
+    }
+
+    if (right_available) {
+        pending_second_turn_ = true;
+        pending_turn_right_ = true;
+        return turnRight(current_heading_);
+    }
+    if (left_available) {
+        pending_second_turn_ = true;
+        pending_turn_right_ = false;
+        return turnLeft(current_heading_);
+    }
+    if ((decision.accepted_branch_mask & (1 << 2)) != 0) {
+        return turnBack(current_heading_);
+    }
+    return current_heading_;
 }
 
 const char* gridHeadingName(GridHeading heading)

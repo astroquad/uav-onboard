@@ -202,6 +202,50 @@ int main()
     }
 
     {
+        const auto config = makeConfig();
+        GridCoordinateTracker tracker(config);
+
+        IntersectionDecision decision;
+        decision.event_ready = true;
+        decision.accepted_type = IntersectionType::L;
+        decision.accepted_branch_mask = 3; // front + right at the entry node.
+
+        auto first = tracker.update(decision, 10, 1000);
+        assert(first.valid);
+        assert(first.first_node);
+        assert(first.local_coord.x == 0);
+        assert(first.local_coord.y == 0);
+        assert(first.arrival_heading == GridHeading::North);
+        assert(tracker.currentHeading() == GridHeading::East);
+
+        decision.accepted_type = IntersectionType::T;
+        decision.accepted_branch_mask = 13; // front + back + left while moving east.
+        auto second = tracker.update(decision, 16, 1600);
+        assert(second.valid);
+        assert(second.local_coord.x == 1);
+        assert(second.local_coord.y == 0);
+        assert(second.arrival_heading == GridHeading::East);
+        assert(tracker.currentHeading() == GridHeading::East);
+
+        decision.accepted_type = IntersectionType::L;
+        decision.accepted_branch_mask = 12; // back + left at row end.
+        auto third = tracker.update(decision, 22, 2200);
+        assert(third.valid);
+        assert(third.local_coord.x == 2);
+        assert(third.local_coord.y == 0);
+        assert(tracker.currentHeading() == GridHeading::North);
+
+        decision.accepted_type = IntersectionType::T;
+        decision.accepted_branch_mask = 13;
+        auto fourth = tracker.update(decision, 28, 2800);
+        assert(fourth.valid);
+        assert(fourth.local_coord.x == 2);
+        assert(fourth.local_coord.y == -1);
+        assert(fourth.arrival_heading == GridHeading::North);
+        assert(tracker.currentHeading() == GridHeading::West);
+    }
+
+    {
         assert(onboard::mission::rotateCameraBranchMaskToGrid(11, GridHeading::North) == 11);
         assert(onboard::mission::rotateCameraBranchMaskToGrid(11, GridHeading::East) == 7);
         assert(onboard::mission::rotateCameraBranchMaskToGrid(11, GridHeading::South) == 14);

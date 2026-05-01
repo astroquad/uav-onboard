@@ -63,10 +63,14 @@ public:
 
 private:
     GridCoord advance(GridCoord coord, GridHeading heading) const;
+    GridHeading chooseNextHeading(const IntersectionDecision& decision);
 
     common::IntersectionDecisionConfig config_;
     bool has_origin_ = false;
     GridHeading current_heading_ = GridHeading::Unknown;
+    bool using_default_start_heading_ = false;
+    bool pending_second_turn_ = false;
+    bool pending_turn_right_ = true;
     GridCoord current_coord_;
     std::uint32_t next_node_id_ = 1;
     std::uint32_t last_node_frame_seq_ = 0;
