@@ -53,6 +53,8 @@ add_library(onboard_core STATIC
     src/common/NetworkConfig.cpp
     src/common/Time.cpp
     src/common/VisionConfig.cpp
+    src/mission/GridCoordinateTracker.cpp
+    src/mission/IntersectionDecision.cpp
     src/network/UdpTelemetrySender.cpp
     src/protocol/TelemetryMessage.cpp
 )
@@ -111,6 +113,10 @@ if(BUILD_TOOLS)
         add_executable(line_detector_tuner tools/line_detector_tuner.cpp)
         target_include_directories(line_detector_tuner PRIVATE src)
         target_link_libraries(line_detector_tuner PRIVATE onboard_vision)
+
+        add_executable(grid_image_smoke tools/grid_image_smoke.cpp)
+        target_include_directories(grid_image_smoke PRIVATE src)
+        target_link_libraries(grid_image_smoke PRIVATE onboard_vision onboard_core)
 
         add_executable(vision_debug_node
             tools/vision_debug_node.cpp

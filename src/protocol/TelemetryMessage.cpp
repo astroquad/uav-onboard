@@ -33,6 +33,33 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
         });
     }
 
+    nlohmann::json decision_branches = nlohmann::json::array();
+    for (const auto& branch : telemetry.vision.intersection_decision.branches) {
+        decision_branches.push_back({
+            {"direction", branch.direction},
+            {"present_frames", branch.present_frames},
+            {"max_score", branch.max_score},
+            {"average_score", branch.average_score},
+        });
+    }
+
+    const auto nodeToJson = [](const GridNodeTelemetry& node) {
+        return nlohmann::json {
+            {"valid", node.valid},
+            {"id", node.id},
+            {"local_coord", {
+                {"x", node.x},
+                {"y", node.y},
+            }},
+            {"topology", node.topology},
+            {"arrival_heading", node.arrival_heading},
+            {"camera_branch_mask", node.camera_branch_mask},
+            {"grid_branch_mask", node.grid_branch_mask},
+            {"first_node", node.first_node},
+            {"origin_local_only", node.origin_local_only},
+        };
+    };
+
     nlohmann::json markers = nlohmann::json::array();
     for (const auto& marker : telemetry.vision.markers) {
         nlohmann::json corners = nlohmann::json::array();
@@ -124,6 +151,30 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
             {"selected_mask_index", telemetry.vision.intersection.selected_mask_index},
             {"branches", branches},
         }},
+        {"intersection_decision", {
+            {"state", telemetry.vision.intersection_decision.state},
+            {"action", telemetry.vision.intersection_decision.action},
+            {"accepted_type", telemetry.vision.intersection_decision.accepted_type},
+            {"best_observed_type", telemetry.vision.intersection_decision.best_observed_type},
+            {"event_ready", telemetry.vision.intersection_decision.event_ready},
+            {"turn_candidate", telemetry.vision.intersection_decision.turn_candidate},
+            {"required_turn", telemetry.vision.intersection_decision.required_turn},
+            {"front_available", telemetry.vision.intersection_decision.front_available},
+            {"node_recorded", telemetry.vision.intersection_decision.node_recorded},
+            {"cooldown_active", telemetry.vision.intersection_decision.cooldown_active},
+            {"accepted_branch_mask", telemetry.vision.intersection_decision.accepted_branch_mask},
+            {"window_frames", telemetry.vision.intersection_decision.window_frames},
+            {"age_ms", telemetry.vision.intersection_decision.age_ms},
+            {"confidence", telemetry.vision.intersection_decision.confidence},
+            {"center_px", pointToJson(telemetry.vision.intersection_decision.center_px)},
+            {"center_y_norm", telemetry.vision.intersection_decision.center_y_norm},
+            {"approach_phase", telemetry.vision.intersection_decision.approach_phase},
+            {"overshoot_risk", telemetry.vision.intersection_decision.overshoot_risk},
+            {"too_late_to_turn", telemetry.vision.intersection_decision.too_late_to_turn},
+            {"branches", decision_branches},
+            {"node", nodeToJson(telemetry.vision.intersection_decision.node)},
+        }},
+        {"grid_node", nodeToJson(telemetry.vision.grid_node)},
         {"marker_detected", telemetry.vision.marker_detected},
         {"marker_id", telemetry.vision.marker_id},
         {"marker_count", telemetry.vision.markers.size()},
@@ -141,6 +192,7 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
         {"aruco_latency_ms", telemetry.debug.aruco_latency_ms},
         {"line_latency_ms", telemetry.debug.line_latency_ms},
         {"intersection_latency_ms", telemetry.debug.intersection_latency_ms},
+        {"intersection_decision_latency_ms", telemetry.debug.intersection_decision_latency_ms},
         {"telemetry_build_ms", telemetry.debug.telemetry_build_ms},
         {"telemetry_send_ms", telemetry.debug.telemetry_send_ms},
         {"video_submit_ms", telemetry.debug.video_submit_ms},

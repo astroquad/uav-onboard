@@ -148,6 +148,9 @@ Current detectors:
 - Intersection classification using the same line mask, largest-blob center
   candidates, branch ray scoring, angle-based `L` vs `straight` checks, and
   onboard temporal smoothing for `+`, `T`, `L`, and `straight`.
+- Intersection decision telemetry that aggregates recent branch evidence,
+  records `L`/`T`/`+` as local grid node events, and reports turn candidates,
+  approach phase, and overshoot risk without sending Pixhawk control commands.
 
 The debug video path is opt-in, best-effort, and non-critical. By default the
 onboard process captures camera frames only to compute ArUco/line metadata and
@@ -229,6 +232,13 @@ hold state, and classifier latency. `straight` is reported as a valid type but
 does not set `intersection_detected`, because it is not a turn/branching
 intersection.
 
+`vision.intersection_decision` is a mission/debug layer above the stabilized
+classifier. It uses a short branch-evidence window to accept topology, keeps
+`T -> +` false upgrades guarded by `high_confidence_score`, records local grid
+node events, and reports `front_available`, `turn_candidate`, `center_y_norm`,
+`approach_phase`, and `overshoot_risk`. These fields are telemetry only; they
+do not command the flight controller.
+
 Latency and stability defaults are configured in `config/vision.toml`:
 
 - `camera.sensor_model = "imx519"`: Pi 4 + IMX519-78 is the current default
@@ -266,6 +276,15 @@ Latency and stability defaults are configured in `config/vision.toml`:
 - `line.intersection_threshold = 0.8`: minimum branch ray score used by the
   intersection classifier to decide whether a front/right/back/left branch is
   present.
+- `intersection_decision.cruise_window_frames = 6`: short evidence window used
+  to accept `L`/`T`/`+` node events without stopping for seconds at every node.
+- `intersection_decision.min_branch_score = 0.72`: lower decision-layer branch
+  evidence threshold; `intersection_decision.high_confidence_score = 0.85`
+  prevents weak fourth-branch evidence from upgrading `T` to `+`.
+- `intersection_decision.record_node_once_frames = 18`: lockout to avoid
+  recording the same node repeatedly while the vehicle is still over it.
+- `intersection_decision.turn_zone_y_min/max` and `late_zone_y`: image-space
+  gating for turn readiness and overshoot risk telemetry.
 - `debug_video.enabled = false`: GCS MJPEG streaming is disabled by default so
   normal onboard runs send metadata only.
 - `debug_video.send_fps = 5`, `debug_video.chunk_pacing_us = 150`: when debug
@@ -286,7 +305,15 @@ For image-file detector smoke tests:
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mask local_contrast --process-width 480 --band 0.06
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --local-threshold 10 --morph-open 1 --morph-close 7 --merge-gap 16
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode light_on_dark --threshold 160 --roi-top 0.08 --lookahead 0.55
+./build/grid_image_smoke --config config --image test_data/images/grid_sample.png --output test_data/logs/grid_smoke --scenario sample
 ```
+
+`grid_image_smoke` writes `sections.csv`, `snake_full_field.csv`,
+`snake_from_entry.csv`, and annotated crop PNGs. The snake smoke path rotates
+each crop into the current camera heading before detection, matching the flight
+assumption that the drone yaws at turns and then continues moving forward. Edge
+nodes use centered padded crops so image-boundary clipping does not move the
+node away from the camera-frame center.
 
 Expected GCS result:
 

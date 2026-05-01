@@ -160,6 +160,47 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             line["intersection_threshold"].value_or(config.line.intersection_threshold);
     }
 
+    if (const auto decision = table["intersection_decision"]) {
+        config.intersection_decision.enabled =
+            decision["enabled"].value_or(config.intersection_decision.enabled);
+        config.intersection_decision.fps_assumption =
+            decision["fps_assumption"].value_or(config.intersection_decision.fps_assumption);
+        config.intersection_decision.cruise_window_frames =
+            decision["cruise_window_frames"].value_or(config.intersection_decision.cruise_window_frames);
+        config.intersection_decision.turn_confirm_frames =
+            decision["turn_confirm_frames"].value_or(config.intersection_decision.turn_confirm_frames);
+        config.intersection_decision.cooldown_frames =
+            decision["cooldown_frames"].value_or(config.intersection_decision.cooldown_frames);
+        config.intersection_decision.min_cross_branch_frames =
+            decision["min_cross_branch_frames"].value_or(config.intersection_decision.min_cross_branch_frames);
+        config.intersection_decision.min_t_branch_frames =
+            decision["min_t_branch_frames"].value_or(config.intersection_decision.min_t_branch_frames);
+        config.intersection_decision.min_l_branch_frames =
+            decision["min_l_branch_frames"].value_or(config.intersection_decision.min_l_branch_frames);
+        config.intersection_decision.min_branch_score =
+            decision["min_branch_score"].value_or(config.intersection_decision.min_branch_score);
+        config.intersection_decision.high_confidence_score =
+            decision["high_confidence_score"].value_or(config.intersection_decision.high_confidence_score);
+        config.intersection_decision.candidate_min_frames =
+            decision["candidate_min_frames"].value_or(config.intersection_decision.candidate_min_frames);
+        config.intersection_decision.turn_confirm_required =
+            decision["turn_confirm_required"].value_or(config.intersection_decision.turn_confirm_required);
+        config.intersection_decision.record_node_once_frames =
+            decision["record_node_once_frames"].value_or(config.intersection_decision.record_node_once_frames);
+        config.intersection_decision.turn_zone_y_min =
+            decision["turn_zone_y_min"].value_or(config.intersection_decision.turn_zone_y_min);
+        config.intersection_decision.turn_zone_y_max =
+            decision["turn_zone_y_max"].value_or(config.intersection_decision.turn_zone_y_max);
+        config.intersection_decision.late_zone_y =
+            decision["late_zone_y"].value_or(config.intersection_decision.late_zone_y);
+        config.intersection_decision.min_prearm_frames =
+            decision["min_prearm_frames"].value_or(config.intersection_decision.min_prearm_frames);
+        config.intersection_decision.front_missing_frames =
+            decision["front_missing_frames"].value_or(config.intersection_decision.front_missing_frames);
+        config.intersection_decision.node_advance_min_frames =
+            decision["node_advance_min_frames"].value_or(config.intersection_decision.node_advance_min_frames);
+    }
+
     return config;
 }
 

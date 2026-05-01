@@ -83,6 +83,27 @@ filter_hold_frames = 3
 filter_reacquire_frames = 3
 intersection_threshold = 0.8
 
+[intersection_decision]
+enabled = true
+fps_assumption = 12
+cruise_window_frames = 6
+turn_confirm_frames = 8
+cooldown_frames = 8
+min_cross_branch_frames = 2
+min_t_branch_frames = 2
+min_l_branch_frames = 3
+min_branch_score = 0.72
+high_confidence_score = 0.85
+candidate_min_frames = 2
+turn_confirm_required = 3
+record_node_once_frames = 18
+turn_zone_y_min = 0.42
+turn_zone_y_max = 0.68
+late_zone_y = 0.78
+min_prearm_frames = 2
+front_missing_frames = 2
+node_advance_min_frames = 4
+
 [aruco]
 dictionary = "DICT_4X4_50"
 marker_size_mm = 80.0

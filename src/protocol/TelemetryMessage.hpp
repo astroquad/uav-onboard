@@ -63,6 +63,50 @@ struct IntersectionTelemetry {
     std::vector<BranchTelemetry> branches;
 };
 
+struct BranchEvidenceTelemetry {
+    std::string direction;
+    int present_frames = 0;
+    double max_score = 0.0;
+    double average_score = 0.0;
+};
+
+struct GridNodeTelemetry {
+    bool valid = false;
+    std::uint32_t id = 0;
+    int x = 0;
+    int y = 0;
+    std::string topology = "unknown";
+    std::string arrival_heading = "unknown";
+    int camera_branch_mask = 0;
+    int grid_branch_mask = 0;
+    bool first_node = false;
+    bool origin_local_only = true;
+};
+
+struct IntersectionDecisionTelemetry {
+    std::string state = "cruise";
+    std::string action = "continue";
+    std::string accepted_type = "none";
+    std::string best_observed_type = "none";
+    bool event_ready = false;
+    bool turn_candidate = false;
+    bool required_turn = false;
+    bool front_available = false;
+    bool node_recorded = false;
+    bool cooldown_active = false;
+    int accepted_branch_mask = 0;
+    int window_frames = 0;
+    int age_ms = 0;
+    double confidence = 0.0;
+    Point2f center_px;
+    double center_y_norm = 0.0;
+    std::string approach_phase = "far";
+    bool overshoot_risk = false;
+    bool too_late_to_turn = false;
+    std::vector<BranchEvidenceTelemetry> branches;
+    GridNodeTelemetry node;
+};
+
 struct CameraTelemetry {
     std::string status = "not_checked";
     std::string sensor_model;
@@ -89,6 +133,8 @@ struct VisionTelemetry {
     bool intersection_detected = false;
     double intersection_score = 0.0;
     IntersectionTelemetry intersection;
+    IntersectionDecisionTelemetry intersection_decision;
+    GridNodeTelemetry grid_node;
     bool marker_detected = false;
     int marker_id = -1;
     std::vector<MarkerTelemetry> markers;
@@ -107,6 +153,7 @@ struct DebugTelemetry {
     double aruco_latency_ms = 0.0;
     double line_latency_ms = 0.0;
     double intersection_latency_ms = 0.0;
+    double intersection_decision_latency_ms = 0.0;
     double telemetry_build_ms = 0.0;
     double telemetry_send_ms = 0.0;
     double video_submit_ms = 0.0;

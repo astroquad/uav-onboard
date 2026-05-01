@@ -100,12 +100,35 @@ struct LineConfig {
     double intersection_threshold = 0.8;
 };
 
+struct IntersectionDecisionConfig {
+    bool enabled = true;
+    int fps_assumption = 12;
+    int cruise_window_frames = 6;
+    int turn_confirm_frames = 8;
+    int cooldown_frames = 8;
+    int min_cross_branch_frames = 2;
+    int min_t_branch_frames = 2;
+    int min_l_branch_frames = 3;
+    double min_branch_score = 0.72;
+    double high_confidence_score = 0.85;
+    int candidate_min_frames = 2;
+    int turn_confirm_required = 3;
+    int record_node_once_frames = 18;
+    double turn_zone_y_min = 0.42;
+    double turn_zone_y_max = 0.68;
+    double late_zone_y = 0.78;
+    int min_prearm_frames = 2;
+    int front_missing_frames = 2;
+    int node_advance_min_frames = 4;
+};
+
 struct VisionConfig {
     CameraConfig camera;
     VideoStreamConfig video;
     DebugVideoConfig debug_video;
     ArucoConfig aruco;
     LineConfig line;
+    IntersectionDecisionConfig intersection_decision;
 };
 
 VisionConfig loadVisionConfig(const std::string& config_dir);

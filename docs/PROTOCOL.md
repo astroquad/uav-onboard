@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.6
-Last updated: 2026-04-30
+Version: v1.7
+Last updated: 2026-05-01
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 ## 1. Channels
@@ -127,6 +127,57 @@ Required top-level fields:
         }
       ]
     },
+    "intersection_decision": {
+      "state": "cruise",
+      "action": "continue",
+      "accepted_type": "none",
+      "best_observed_type": "none",
+      "event_ready": false,
+      "turn_candidate": false,
+      "required_turn": false,
+      "front_available": false,
+      "node_recorded": false,
+      "cooldown_active": false,
+      "accepted_branch_mask": 0,
+      "window_frames": 0,
+      "age_ms": 0,
+      "confidence": 0.0,
+      "center_px": { "x": 0.0, "y": 0.0 },
+      "center_y_norm": 0.0,
+      "approach_phase": "far",
+      "overshoot_risk": false,
+      "too_late_to_turn": false,
+      "branches": [
+        {
+          "direction": "front",
+          "present_frames": 0,
+          "max_score": 0.0,
+          "average_score": 0.0
+        }
+      ],
+      "node": {
+        "valid": false,
+        "id": 0,
+        "local_coord": { "x": 0, "y": 0 },
+        "topology": "unknown",
+        "arrival_heading": "unknown",
+        "camera_branch_mask": 0,
+        "grid_branch_mask": 0,
+        "first_node": false,
+        "origin_local_only": true
+      }
+    },
+    "grid_node": {
+      "valid": false,
+      "id": 0,
+      "local_coord": { "x": 0, "y": 0 },
+      "topology": "unknown",
+      "arrival_heading": "unknown",
+      "camera_branch_mask": 0,
+      "grid_branch_mask": 0,
+      "first_node": false,
+      "origin_local_only": true
+    },
     "marker_detected": true,
     "marker_id": 7,
     "marker_count": 1,
@@ -156,6 +207,7 @@ Required top-level fields:
     "aruco_latency_ms": 8.1,
     "line_latency_ms": 2.2,
     "intersection_latency_ms": 1.3,
+    "intersection_decision_latency_ms": 0.05,
     "telemetry_build_ms": 0.3,
     "telemetry_send_ms": 0.1,
     "video_submit_ms": 0.1,
@@ -242,6 +294,20 @@ Required top-level fields:
 | `vision.intersection.radius_px` | number | Approximate source-image center sampling radius used for debug overlay context. |
 | `vision.intersection.selected_mask_index` | int | Index of the line polarity mask that produced the selected classification. |
 | `vision.intersection.branches[]` | array | Per-direction branch observations. Directions are `front`, `right`, `back`, and `left`; each entry includes `present`, `score`, `endpoint_px`, and `angle_deg`. |
+| `vision.intersection_decision.state` | string | Mission/debug decision state: `cruise`, `candidate`, `node_record`, `turn_confirm`, `turn_ready`, or `cooldown`. |
+| `vision.intersection_decision.action` | string | Debug action hint. This is not a Pixhawk command. Current values include `continue`, `prepare_turn`, and `hold`. |
+| `vision.intersection_decision.accepted_type` | string | Short-window accepted topology after branch evidence aggregation. |
+| `vision.intersection_decision.best_observed_type` | string | Highest single-frame topology observed in the decision window. |
+| `vision.intersection_decision.event_ready` | `bool` | True when this frame produced a grid node event. |
+| `vision.intersection_decision.turn_candidate` | `bool` | True when side evidence and front-branch/policy gating make a turn candidate. |
+| `vision.intersection_decision.required_turn` | `bool` | True when the decision layer believes a turn may be required; control is still future work. |
+| `vision.intersection_decision.front_available` | `bool` | True when recent evidence still supports a branch in the camera-forward direction. |
+| `vision.intersection_decision.center_y_norm` | number | Intersection center Y normalized by frame height, used for approach phase and late/overshoot flags. |
+| `vision.intersection_decision.approach_phase` | string | Image-space phase: `far`, `approaching`, `turn_zone`, `late`, or `passed`. |
+| `vision.intersection_decision.overshoot_risk` | `bool` | True when a required turn candidate is already past the allowed turn zone. |
+| `vision.intersection_decision.branches[]` | array | Per-direction decision evidence with `present_frames`, `max_score`, and `average_score`. |
+| `vision.intersection_decision.node` | object | Grid node event attached to this decision when available. |
+| `vision.grid_node` | object | Latest grid node event for this frame. `local_coord` is local-only until official competition origin conversion is implemented. |
 | `vision.marker_detected` | `bool` | True when `markers` is not empty. |
 | `vision.marker_id` | `int` | First detected marker id, kept for backward compatibility. `-1` means none. |
 | `vision.marker_count` | `int` | Number of entries in `vision.markers`. |
@@ -254,6 +320,7 @@ Required top-level fields:
 | `debug.aruco_latency_ms` | number | ArUco detector latency for the frame. |
 | `debug.line_latency_ms` | number | Line detector latency for the frame. |
 | `debug.intersection_latency_ms` | number | Intersection classifier latency for the frame. |
+| `debug.intersection_decision_latency_ms` | number | Short-window decision and grid-node update latency for the frame. |
 | `debug.telemetry_build_ms` | number | Most recently measured telemetry JSON serialization latency. |
 | `debug.telemetry_send_ms` | number | Most recently measured UDP telemetry send call latency. |
 | `debug.video_submit_ms` | number | Most recently measured latest-frame video queue submit latency. |
@@ -355,3 +422,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.5 | 2026-04-28 | Added Raspberry Pi 4 + IMX519 camera/system telemetry, capture/processing FPS, debug video pacing config, and video send failure counters. |
 | v1.5 | 2026-04-29 | No schema change; synchronized example defaults to the performance profile: 960x720 camera, 5 FPS opt-in debug video, and 150us chunk pacing. |
 | v1.6 | 2026-04-30 | Added structured `vision.intersection`, branch ray metadata, `debug.intersection_latency_ms`, and GCS intersection overlay/log support. |
+| v1.7 | 2026-05-01 | Added `vision.intersection_decision`, `vision.grid_node`, branch evidence telemetry, local grid node coordinates, and `debug.intersection_decision_latency_ms`. |

@@ -21,6 +21,13 @@ target_include_directories(test_intersection_stabilizer PRIVATE ../src)
 target_link_libraries(test_intersection_stabilizer PRIVATE onboard_core)
 add_test(NAME intersection_stabilizer COMMAND test_intersection_stabilizer)
 
+add_executable(test_intersection_decision
+    test_intersection_decision.cpp
+)
+target_include_directories(test_intersection_decision PRIVATE ../src)
+target_link_libraries(test_intersection_decision PRIVATE onboard_core)
+add_test(NAME intersection_decision COMMAND test_intersection_decision)
+
 if(TARGET onboard_vision)
     add_executable(test_intersection_detector
         test_intersection_detector.cpp

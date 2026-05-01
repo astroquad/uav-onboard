@@ -1,6 +1,8 @@
 #include "app/VisionDebugPipeline.hpp"
 
 #include "camera/RpicamMjpegSource.hpp"
+#include "mission/GridCoordinateTracker.hpp"
+#include "mission/IntersectionDecision.hpp"
 #include "network/UdpTelemetrySender.hpp"
 #include "protocol/TelemetryMessage.hpp"
 #include "video/UdpMjpegStreamer.hpp"
@@ -102,6 +104,59 @@ protocol::IntersectionTelemetry toProtocolIntersection(const vision::Intersectio
         branch_output.angle_deg = branch.angle_deg;
         output.branches.push_back(branch_output);
     }
+    return output;
+}
+
+protocol::GridNodeTelemetry toProtocolGridNode(const mission::GridNodeEvent& node)
+{
+    protocol::GridNodeTelemetry output;
+    output.valid = node.valid;
+    output.id = node.node_id;
+    output.x = node.local_coord.x;
+    output.y = node.local_coord.y;
+    output.topology = vision::intersectionTypeName(node.topology);
+    output.arrival_heading = mission::gridHeadingName(node.arrival_heading);
+    output.camera_branch_mask = node.camera_branch_mask;
+    output.grid_branch_mask = node.grid_branch_mask;
+    output.first_node = node.first_node;
+    output.origin_local_only = node.origin_local_only;
+    return output;
+}
+
+protocol::IntersectionDecisionTelemetry toProtocolIntersectionDecision(
+    const mission::IntersectionDecision& decision,
+    const mission::GridNodeEvent& node)
+{
+    protocol::IntersectionDecisionTelemetry output;
+    output.state = mission::decisionStateName(decision.state);
+    output.action = mission::decisionActionName(decision.action);
+    output.accepted_type = vision::intersectionTypeName(decision.accepted_type);
+    output.best_observed_type = vision::intersectionTypeName(decision.best_observed_type);
+    output.event_ready = decision.event_ready;
+    output.turn_candidate = decision.turn_candidate;
+    output.required_turn = decision.required_turn;
+    output.front_available = decision.front_available;
+    output.node_recorded = decision.node_recorded;
+    output.cooldown_active = decision.cooldown_active;
+    output.accepted_branch_mask = decision.accepted_branch_mask;
+    output.window_frames = decision.window_frames;
+    output.age_ms = decision.age_ms;
+    output.confidence = decision.confidence;
+    output.center_px = toProtocolPoint(decision.center_px);
+    output.center_y_norm = decision.center_y_norm;
+    output.approach_phase = decision.approach_phase;
+    output.overshoot_risk = decision.overshoot_risk;
+    output.too_late_to_turn = decision.too_late_to_turn;
+    const char* labels[] = {"front", "right", "back", "left"};
+    for (std::size_t index = 0; index < decision.branch_evidence.size(); ++index) {
+        protocol::BranchEvidenceTelemetry branch;
+        branch.direction = labels[index];
+        branch.present_frames = decision.branch_evidence[index].present_frames;
+        branch.max_score = decision.branch_evidence[index].max_score;
+        branch.average_score = decision.branch_evidence[index].average_score;
+        output.branches.push_back(branch);
+    }
+    output.node = toProtocolGridNode(node);
     return output;
 }
 
@@ -564,6 +619,8 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     vision::LineStabilizer line_stabilizer(options.vision.line);
     const vision::IntersectionDetector intersection_detector(options.vision.line);
     vision::IntersectionStabilizer intersection_stabilizer(options.vision.line);
+    mission::IntersectionDecisionEngine intersection_decision_engine(options.vision.intersection_decision);
+    mission::GridCoordinateTracker grid_tracker(options.vision.intersection_decision);
 
     std::cout << "vision_debug_node\n"
               << "  destination: " << options.network.gcs_ip << "\n"
@@ -587,6 +644,11 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
               << "  line_filter: " << (options.vision.line.filter_enabled ? "on" : "off") << "\n"
               << "  intersection: " << (options.enable_line && options.vision.line.enabled ? "on" : "off") << "\n"
               << "  intersection_threshold: " << options.vision.line.intersection_threshold << "\n"
+              << "  intersection_decision: " << (options.vision.intersection_decision.enabled ? "on" : "off") << "\n"
+              << "  intersection_decision_window: "
+              << options.vision.intersection_decision.cruise_window_frames << " frames\n"
+              << "  intersection_decision_min_branch_score: "
+              << options.vision.intersection_decision.min_branch_score << "\n"
               << "  video: " << (options.send_video ? "on best-effort latest-frame" : "off") << "\n"
               << "  telemetry: " << (options.send_telemetry ? "on" : "off") << "\n"
               << "  count: " << (options.count == 0 ? std::string("forever") : std::to_string(options.count))
@@ -638,6 +700,9 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         double aruco_latency_ms = 0.0;
         double line_latency_ms = 0.0;
         double intersection_latency_ms = 0.0;
+        double intersection_decision_latency_ms = 0.0;
+        mission::IntersectionDecision intersection_decision;
+        mission::GridNodeEvent grid_node;
 
         if (!image.empty()) {
             if (options.enable_aruco) {
@@ -666,6 +731,24 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
                 const auto intersection_finished = std::chrono::steady_clock::now();
                 intersection_latency_ms = std::chrono::duration<double, std::milli>(
                     intersection_finished - intersection_started).count();
+
+                const auto decision_started = std::chrono::steady_clock::now();
+                intersection_decision = intersection_decision_engine.update(
+                    result.intersection,
+                    frame.width,
+                    frame.height,
+                    frame.frame_id,
+                    frame.timestamp_ms,
+                    false);
+                if (intersection_decision.event_ready) {
+                    grid_node = grid_tracker.update(
+                        intersection_decision,
+                        frame.frame_id,
+                        frame.timestamp_ms);
+                }
+                const auto decision_finished = std::chrono::steady_clock::now();
+                intersection_decision_latency_ms = std::chrono::duration<double, std::milli>(
+                    decision_finished - decision_started).count();
             }
         }
         const auto processing_finished = std::chrono::steady_clock::now();
@@ -708,9 +791,17 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
             telemetry.vision.intersection_detected = result.intersection.intersection_detected;
             telemetry.vision.intersection_score = result.intersection.score;
             telemetry.vision.intersection = toProtocolIntersection(result.intersection);
+            telemetry.vision.intersection_decision =
+                toProtocolIntersectionDecision(intersection_decision, grid_node);
+            telemetry.vision.grid_node = toProtocolGridNode(grid_node);
+            if (grid_node.valid) {
+                telemetry.grid.col = grid_node.local_coord.x;
+                telemetry.grid.row = grid_node.local_coord.y;
+            }
             telemetry.debug.aruco_latency_ms = aruco_latency_ms;
             telemetry.debug.line_latency_ms = line_latency_ms;
             telemetry.debug.intersection_latency_ms = intersection_latency_ms;
+            telemetry.debug.intersection_decision_latency_ms = intersection_decision_latency_ms;
             telemetry.debug.processing_latency_ms = std::chrono::duration<double, std::milli>(
                 processing_finished - processing_started).count();
             telemetry.debug.read_frame_ms = read_frame_ms;
@@ -804,11 +895,28 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
                   << " ix_center=(" << result.intersection.center_px.x
                   << ',' << result.intersection.center_px.y << ')'
                   << " branches=" << branchScoreSummary(result.intersection)
+                  << " dec_state=" << mission::decisionStateName(intersection_decision.state)
+                  << " dec_action=" << mission::decisionActionName(intersection_decision.action)
+                  << " dec_type=" << vision::intersectionTypeName(intersection_decision.accepted_type)
+                  << " dec_best=" << vision::intersectionTypeName(intersection_decision.best_observed_type)
+                  << " dec_window=" << intersection_decision.window_frames
+                  << " dec_conf=" << intersection_decision.confidence
+                  << " dec_mask=" << static_cast<int>(intersection_decision.accepted_branch_mask)
+                  << " dec_event=" << (intersection_decision.event_ready ? "yes" : "no")
+                  << " dec_front=" << (intersection_decision.front_available ? "yes" : "no")
+                  << " dec_req_turn=" << (intersection_decision.required_turn ? "yes" : "no")
+                  << " dec_y=" << intersection_decision.center_y_norm
+                  << " dec_phase=" << intersection_decision.approach_phase
+                  << " dec_overshoot=" << (intersection_decision.overshoot_risk ? "yes" : "no")
+                  << " grid_valid=" << (grid_node.valid ? "yes" : "no")
+                  << " grid=(" << grid_node.local_coord.x << ',' << grid_node.local_coord.y << ')'
+                  << " grid_origin=" << (grid_node.origin_local_only ? "local" : "official")
                   << " read_ms=" << read_frame_ms
                   << " decode_ms=" << jpeg_decode_ms
                   << " aruco_ms=" << aruco_latency_ms
                   << " line_ms=" << line_latency_ms
                   << " ix_ms=" << intersection_latency_ms
+                  << " dec_ms=" << intersection_decision_latency_ms
                   << " process_ms=" << std::chrono::duration<double, std::milli>(
                          processing_finished - processing_started).count()
                   << " json_ms=" << telemetry_build_ms
