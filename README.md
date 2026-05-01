@@ -142,9 +142,11 @@ mission runs.
 Current detectors:
 
 - ArUco marker detection.
-- Line tracing MVP using resized ROI local-contrast masking, lookahead-band
-  projection, contour scoring, and onboard EMA/hold filtering for sudden
-  offset jumps.
+- Line tracing MVP using the shared resized ROI mask builder. The current
+  default `white_fill` strategy detects wide white tape/paper as filled blobs,
+  then uses an anchor-band projection, contour scoring, and onboard EMA/hold
+  filtering for sudden offset jumps. `local_contrast` remains available as a
+  comparison/tuning strategy.
 - Intersection classification using the same line mask, largest-blob center
   candidates, branch ray scoring, angle-based `L` vs `straight` checks, and
   onboard temporal smoothing for `+`, `T`, `L`, and `straight`.
@@ -210,27 +212,31 @@ Line mode guidance:
   best line-shaped candidate.
 - `dark_on_light`: use when the track line is darker than the floor.
 - `--line-threshold 0`: use automatic Otsu thresholding. A positive value uses
-  that fixed grayscale threshold. With the default `local_contrast` mask,
-  `line.local_contrast_threshold` is used instead.
+  that fixed grayscale threshold for global threshold masks. With the default
+  `white_fill` mask, `line.white_v_min`, `line.white_s_max`, and fill morphology
+  are the primary tuning values.
 - `--line-roi-top`: image ratio to ignore at the top. The default `0.08`
   keeps most of the upper frame visible; raise it only if the camera sees
   horizon or non-floor clutter.
 - `--line-lookahead`: vertical image ratio for the green tracking point. The
-  default `0.55` places it close to the frame center instead of the old lower
-  debug point.
+  default `0.55` remains the telemetry lookahead reference. The current GCS
+  overlay renders the red line-center point at the camera-center Y row and
+  draws only the horizontal lateral error from the image center.
 
 The line contour sent to GCS is the simplified connected contour selected by
-the detector. The green tracking point is calculated from a narrow lookahead
-band inside that contour rather than from the whole contour centroid, so broad
-floor blobs and cross-shaped contours are less likely to pull the control point
-away from the actual line center.
+the detector. The tracking X is calculated from a narrow anchor/lookahead band
+inside that contour rather than from the whole contour centroid, so broad floor
+blobs and cross-shaped contours are less likely to pull the control point away
+from the actual line center. GCS intentionally displays that X as a red point on
+the camera-center Y row with a green horizontal offset line for later lateral
+control tuning.
 
 Intersection classification is sent separately from the line tracking point.
-The GCS overlay draws the stabilized intersection center in cyan and present
-branch rays in yellow, while the log shows raw/stabilized type, branch scores,
-hold state, and classifier latency. `straight` is reported as a valid type but
-does not set `intersection_detected`, because it is not a turn/branching
-intersection.
+The GCS overlay now keeps only compact cyan intersection type text and yellow
+present-branch rays for the upper/current approach region, while the log shows
+raw/stabilized type, branch scores, hold state, and classifier latency.
+`straight` is reported as a valid type but does not set
+`intersection_detected`, because it is not a turn/branching intersection.
 
 `vision.intersection_decision` is a mission/debug layer above the stabilized
 classifier. It uses a short branch-evidence window to accept topology, keeps
@@ -255,9 +261,14 @@ Latency and stability defaults are configured in `config/vision.toml`:
 - `camera.exposure = "sport"`: initial setting to reduce motion blur.
 - `line.process_width = 480`: line detection keeps more high-altitude line
   pixels than the previous 320px setting while still running on a resized ROI.
-- `line.mask_strategy = "local_contrast"`: detects bright line structures by
-  comparing each pixel to its local background instead of relying only on a
-  global grayscale threshold.
+- `line.mask_strategy = "white_fill"`: detects wide bright/white line structures
+  as filled blobs using low-saturation/high-value masking, then closes/dilates
+  the mask so broad tape or paper is not reduced to thin edge strips.
+- `line.white_v_min = 145`, `line.white_s_max = 90`: default HSV gates for the
+  current white-line practice captures.
+- `line.fill_close_kernel = 11`, `line.fill_dilate_kernel = 3`: white-fill
+  morphology defaults used to connect broad line regions before contour
+  selection.
 - `line.lookahead_band_ratio = 0.06`: the tracking point is measured from a
   short horizontal band around the configured lookahead Y coordinate.
 - `line.morph_open_kernel = 1`, `line.morph_close_kernel = 7`: local-contrast
@@ -303,26 +314,36 @@ For image-file detector smoke tests:
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode auto
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mask local_contrast --process-width 480 --band 0.06
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mask white_fill --white-v-min 95 --white-s-max 130 --fill-close 17 --output test_data/logs/line_sample
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --local-threshold 10 --morph-open 1 --morph-close 7 --merge-gap 16
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode light_on_dark --threshold 160 --roi-top 0.08 --lookahead 0.55
 ./build/grid_image_smoke --config config --image test_data/images/grid_sample.png --output test_data/logs/grid_smoke --scenario sample
 ```
 
+When `--output <dir>` is passed, `line_detector_tuner` writes `mask_0.png`,
+`line_overlay.png`, and `summary.txt` so tuning runs can be reviewed without
+changing the input image.
+
 `grid_image_smoke` writes `sections.csv`, `snake_full_field.csv`,
-`snake_from_entry.csv`, and annotated crop PNGs. The snake smoke path rotates
-each crop into the current camera heading before detection, matching the flight
-assumption that the drone yaws at turns and then continues moving forward. Edge
-nodes use centered padded crops so image-boundary clipping does not move the
-node away from the camera-frame center.
+`snake_from_entry.csv`, `snake_from_entry_grid_log/*.txt`, and annotated crop
+PNGs. The snake smoke path detects the grid entry side/row/column, rotates each
+crop into the current camera heading before detection, and renders the same
+incremental ASCII grid shape that GCS receives from `GridMapTracker`. This
+matches the flight assumption that the drone yaws at turns and then continues
+moving forward. Edge nodes use centered padded crops so image-boundary clipping
+does not move the node away from the camera-frame center.
 
 Expected GCS result:
 
 - ArUco markers are overlaid by GCS as marker boxes, center points, direction
   arrows, and labels.
 - Detected line contour/border is overlaid by GCS in magenta.
-- The line tracking point is overlaid by GCS in green.
-- Detected intersection center/type is overlaid by GCS in cyan, with present
-  branch rays and branch scores in yellow.
+- The current line center is overlaid by GCS as a red point fixed on the
+  camera-center Y row, with the lateral error shown as a green horizontal line.
+- Detected intersection type is overlaid compactly in cyan, with present branch
+  rays in yellow for the upper/current approach region.
+- The GCS vision log appends `[grid-map]` ASCII output as local grid nodes are
+  visited during snake exploration.
 - If the opt-in onboard JPEG stream is enabled, it remains raw camera video with
   no drawn overlay.
 

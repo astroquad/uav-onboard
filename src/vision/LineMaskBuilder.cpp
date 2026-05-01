@@ -93,6 +93,33 @@ cv::Mat localContrastMask(
     return mask;
 }
 
+cv::Mat absoluteWhiteMask(
+    const cv::Mat& work_image,
+    const cv::Mat& gray,
+    const common::LineConfig& config)
+{
+    if (work_image.channels() < 3) {
+        cv::Mat mask;
+        cv::threshold(
+            gray,
+            mask,
+            std::clamp(config.white_v_min, 0, 255),
+            255,
+            cv::THRESH_BINARY);
+        return mask;
+    }
+
+    cv::Mat hsv;
+    cv::cvtColor(work_image, hsv, cv::COLOR_BGR2HSV);
+    cv::Mat mask;
+    cv::inRange(
+        hsv,
+        cv::Scalar(0, 0, std::clamp(config.white_v_min, 0, 255)),
+        cv::Scalar(180, std::clamp(config.white_s_max, 0, 255), 255),
+        mask);
+    return mask;
+}
+
 void applyMorphology(cv::Mat& mask, int morph_type, int morph_kernel)
 {
     const int kernel_size = oddKernelSize(morph_kernel);
@@ -108,6 +135,25 @@ void applyMorphology(cv::Mat& mask, int morph_type, int morph_kernel)
     } else {
         cv::morphologyEx(mask, mask, morph_type, kernel);
     }
+}
+
+void fillMask(cv::Mat& mask, const common::LineConfig& config, const LineMaskGeometry& geometry)
+{
+    applyMorphology(mask, cv::MORPH_CLOSE, scaledLineKernelSize(config.fill_close_kernel, geometry));
+    applyMorphology(mask, cv::MORPH_DILATE, scaledLineKernelSize(config.fill_dilate_kernel, geometry));
+}
+
+void clearThinBorderArtifacts(cv::Mat& mask)
+{
+    if (mask.empty()) {
+        return;
+    }
+    const int border = std::max(2, std::min(mask.cols, mask.rows) / 90);
+    const int bottom_top = std::max(0, mask.rows - border);
+    mask(cv::Rect(0, bottom_top, mask.cols, mask.rows - bottom_top)).setTo(0);
+    mask(cv::Rect(0, 0, std::min(border, mask.cols), mask.rows)).setTo(0);
+    const int right_left = std::max(0, mask.cols - border);
+    mask(cv::Rect(right_left, 0, mask.cols - right_left, mask.rows)).setTo(0);
 }
 
 int configuredMorphOpenKernel(const common::LineConfig& config)
@@ -135,7 +181,14 @@ bool usesLocalContrast(const std::string& strategy)
 {
     return strategy == "local_contrast" ||
            strategy == "white_local_contrast" ||
-           strategy == "light_on_dark_v2";
+           strategy == "light_on_dark_v2" ||
+           strategy == "local_contrast_fill";
+}
+
+bool usesWhiteFill(const std::string& strategy)
+{
+    return strategy == "white_fill" ||
+           strategy == "local_contrast_fill";
 }
 
 } // namespace
@@ -203,7 +256,18 @@ LineMaskFrame LineMaskBuilder::build(const cv::Mat& image) const
     }
 
     const bool use_local_contrast = usesLocalContrast(config_.mask_strategy);
+    const bool use_white_fill = usesWhiteFill(config_.mask_strategy);
     const auto make_mask = [&](bool light_line) {
+        if (use_white_fill) {
+            cv::Mat mask = absoluteWhiteMask(work_image, gray, config_);
+            if (use_local_contrast && light_line) {
+                cv::Mat contrast = localContrastMask(gray, true, config_);
+                cv::bitwise_or(mask, contrast, mask);
+            }
+            fillMask(mask, config_, geometry);
+            clearThinBorderArtifacts(mask);
+            return mask;
+        }
         return use_local_contrast
             ? localContrastMask(gray, light_line, config_)
             : thresholdMask(gray, light_line, config_.threshold);

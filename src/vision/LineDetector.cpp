@@ -494,8 +494,35 @@ std::optional<Candidate> evaluateContour(
         return std::nullopt;
     }
 
-    const double work_tracking_x =
+    double work_tracking_x =
         (projection_run->start_x + projection_run->end_x) / 2.0;
+    const int anchor_y = std::clamp(
+        static_cast<int>(std::lround(geometry.work_height * 0.74)),
+        0,
+        geometry.work_height - 1);
+    const int anchor_y0 = std::clamp(
+        anchor_y - band_height / 2,
+        0,
+        std::max(0, geometry.work_height - 1));
+    const int anchor_y1 = std::clamp(
+        anchor_y0 + band_height,
+        anchor_y0 + 1,
+        geometry.work_height);
+    const int anchor_scan_y0 = std::max(anchor_y0, bounds.y);
+    const int anchor_scan_y1 = std::min(anchor_y1, bounds.y + bounds.height);
+    if (anchor_scan_y0 < anchor_scan_y1) {
+        const auto anchor_runs = projectionRuns(mask, bounds, anchor_scan_y0, anchor_scan_y1);
+        const auto anchor_run = bestProjectionRun(
+            anchor_runs,
+            anchor_scan_y1 - anchor_scan_y0,
+            min_line_width,
+            max_line_width,
+            scaledRunMergeGap(config, geometry),
+            geometry.work_width);
+        if (anchor_run) {
+            work_tracking_x = (anchor_run->start_x + anchor_run->end_x) / 2.0;
+        }
+    }
     const double source_tracking_x = work_tracking_x * geometry.scale_x;
     const double source_lookahead_y =
         geometry.roi_top + work_lookahead_y * geometry.scale_y;
@@ -661,99 +688,8 @@ LineDetection LineDetector::detect(const cv::Mat& image) const
         return {};
     }
 
-    const int width = image.cols;
-    const int height = image.rows;
-    const int roi_top = std::clamp(
-        static_cast<int>(std::lround(height * clampRatio(config_.roi_top_ratio, 0.08))),
-        0,
-        std::max(0, height - 1));
-    const cv::Rect source_roi(0, roi_top, width, height - roi_top);
-    if (source_roi.width <= 0 || source_roi.height <= 0) {
-        return {};
-    }
-
-    WorkGeometry geometry;
-    geometry.source_width = width;
-    geometry.source_height = height;
-    geometry.roi_top = roi_top;
-    geometry.roi_height = source_roi.height;
-
-    const int requested_width = config_.process_width > 0 ? config_.process_width : width;
-    geometry.work_width = std::clamp(requested_width, 1, width);
-    if (geometry.work_width == width) {
-        geometry.work_height = source_roi.height;
-    } else {
-        const double scale = geometry.work_width / static_cast<double>(width);
-        geometry.work_height =
-            std::max(1, static_cast<int>(std::lround(source_roi.height * scale)));
-    }
-    geometry.scale_x = width / static_cast<double>(geometry.work_width);
-    geometry.scale_y = source_roi.height / static_cast<double>(geometry.work_height);
-
-    cv::Mat roi_image = image(source_roi);
-    cv::Mat work_image;
-    if (geometry.work_width == source_roi.width && geometry.work_height == source_roi.height) {
-        work_image = roi_image;
-    } else {
-        cv::resize(
-            roi_image,
-            work_image,
-            cv::Size(geometry.work_width, geometry.work_height),
-            0.0,
-            0.0,
-            cv::INTER_AREA);
-    }
-
-    cv::Mat gray;
-    if (work_image.channels() == 1) {
-        gray = work_image;
-    } else {
-        cv::cvtColor(work_image, gray, cv::COLOR_BGR2GRAY);
-    }
-
-    const int source_lookahead_y = std::clamp(
-        static_cast<int>(std::lround(height * clampRatio(config_.lookahead_y_ratio, 0.55))),
-        roi_top,
-        height - 1);
-    const int work_lookahead_y = std::clamp(
-        static_cast<int>(std::lround((source_lookahead_y - roi_top) / geometry.scale_y)),
-        0,
-        geometry.work_height - 1);
-
-    int total_contours = 0;
-    int candidates_evaluated = 0;
-    std::optional<Candidate> best;
-    auto masks = buildMasks(gray, config_, geometry);
-    for (const auto& mask : masks) {
-        std::vector<std::vector<cv::Point>> contours;
-        cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-        total_contours += static_cast<int>(contours.size());
-
-        const auto candidate_indexes = sortedCandidateIndexes(
-            contours,
-            scaledMinArea(config_, geometry),
-            config_.max_candidates);
-        for (const auto index : candidate_indexes) {
-            ++candidates_evaluated;
-            auto candidate = evaluateContour(
-                contours[index],
-                mask,
-                config_,
-                geometry,
-                work_lookahead_y);
-            if (candidate && (!best || candidate->score > best->score)) {
-                best = std::move(candidate);
-            }
-        }
-    }
-
-    LineDetection output = best ? best->line : LineDetection {};
-    output.mask_count = static_cast<int>(masks.size());
-    output.contours_found = total_contours;
-    output.candidates_evaluated = candidates_evaluated;
-    output.roi_pixels = geometry.work_width * geometry.work_height;
-    output.selected_contour_points = static_cast<int>(output.contour_px.size());
-    return output;
+    LineMaskBuilder mask_builder(config_);
+    return detect(mask_builder.build(image));
 }
 
 } // namespace onboard::vision

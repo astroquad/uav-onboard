@@ -68,7 +68,7 @@ struct ArucoConfig {
 struct LineConfig {
     bool enabled = true;
     std::string mode = "light_on_dark";
-    std::string mask_strategy = "local_contrast";
+    std::string mask_strategy = "white_fill";
     bool offset_normalized = false;
     double roi_top_ratio = 0.08;
     double lookahead_y_ratio = 0.55;
@@ -76,11 +76,15 @@ struct LineConfig {
     int threshold = 0;
     int local_contrast_blur = 31;
     int local_contrast_threshold = 10;
+    int white_v_min = 145;
+    int white_s_max = 90;
     int min_area_px = 250;
     int morph_kernel = 5;
     int morph_open_kernel = 1;
     int morph_close_kernel = 7;
     int morph_dilate_kernel = 1;
+    int fill_close_kernel = 11;
+    int fill_dilate_kernel = 3;
     int line_run_merge_gap_px = 16;
     int max_contour_points = 48;
     double confidence_min = 0.25;

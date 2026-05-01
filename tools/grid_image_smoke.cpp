@@ -29,10 +29,20 @@ struct Options {
     std::string scenario = "grid";
 };
 
+enum class EntrySide {
+    Top,
+    Bottom,
+    Left,
+    Right,
+    Unknown,
+};
+
 struct GridGeometry {
     std::vector<int> xs;
     std::vector<int> ys;
     int entry_col = 0;
+    int entry_row = 0;
+    EntrySide entry_side = EntrySide::Unknown;
 };
 
 struct GridIndex {
@@ -45,6 +55,12 @@ struct DetectionResult {
     onboard::mission::IntersectionDecision decision;
     onboard::mission::GridNodeEvent node;
     bool event_ready = false;
+};
+
+struct LoggedNode {
+    int x = 0;
+    int y = 0;
+    onboard::mission::GridHeading heading = onboard::mission::GridHeading::Unknown;
 };
 
 void printUsage()
@@ -80,6 +96,23 @@ Options parseOptions(int argc, char** argv)
         }
     }
     return options;
+}
+
+const char* entrySideName(EntrySide side)
+{
+    switch (side) {
+    case EntrySide::Top:
+        return "top";
+    case EntrySide::Bottom:
+        return "bottom";
+    case EntrySide::Left:
+        return "left";
+    case EntrySide::Right:
+        return "right";
+    case EntrySide::Unknown:
+        return "unknown";
+    }
+    return "unknown";
 }
 
 cv::Mat whiteMask(const cv::Mat& image)
@@ -169,7 +202,7 @@ GridGeometry detectGridGeometry(const cv::Mat& image, const cv::Mat& mask)
         mask,
         true,
         row_threshold,
-        static_cast<int>(std::lround(image.rows * 0.12)),
+        static_cast<int>(std::lround(image.rows * 0.02)),
         static_cast<int>(std::lround(image.rows * 0.98)));
     geometry.xs = projectionClusters(
         mask,
@@ -183,25 +216,83 @@ GridGeometry detectGridGeometry(const cv::Mat& image, const cv::Mat& mask)
     }
 
     const int cell_width = medianSpacing(geometry.xs);
-    const int top_y = geometry.ys.front();
-    const int band_top = std::max(0, top_y - std::max(40, cell_width / 2));
-    const int band_height = std::max(1, top_y - band_top - 2);
+    const int cell_height = medianSpacing(geometry.ys);
+    const int half_col_width = std::max(6, cell_width / 7);
+    const int half_row_height = std::max(6, cell_height / 7);
     int best_count = -1;
-    int best_col = 0;
-    for (std::size_t index = 0; index < geometry.xs.size(); ++index) {
-        const int half_width = std::max(6, cell_width / 7);
-        const cv::Rect roi(
-            std::max(0, geometry.xs[index] - half_width),
-            band_top,
-            std::min(mask.cols - std::max(0, geometry.xs[index] - half_width), half_width * 2 + 1),
-            band_height);
-        const int count = roi.empty() ? 0 : cv::countNonZero(mask(roi));
+
+    const auto countRect = [&](const cv::Rect& rect) {
+        const cv::Rect clipped = rect & cv::Rect(0, 0, mask.cols, mask.rows);
+        return clipped.empty() ? 0 : cv::countNonZero(mask(clipped));
+    };
+
+    const auto considerColumnBand = [&](EntrySide side, int col, int y0, int y1) {
+        const int x0 = std::max(0, geometry.xs[static_cast<std::size_t>(col)] - half_col_width);
+        const int count = countRect(cv::Rect(
+            x0,
+            y0,
+            std::min(mask.cols - x0, half_col_width * 2 + 1),
+            std::max(1, y1 - y0)));
         if (count > best_count) {
             best_count = count;
-            best_col = static_cast<int>(index);
+            geometry.entry_side = side;
+            geometry.entry_col = col;
+            geometry.entry_row = side == EntrySide::Top ? 0 : static_cast<int>(geometry.ys.size()) - 1;
         }
+    };
+
+    const auto considerRowBand = [&](EntrySide side, int row, int x0, int x1) {
+        const int y0 = std::max(0, geometry.ys[static_cast<std::size_t>(row)] - half_row_height);
+        const int count = countRect(cv::Rect(
+            x0,
+            y0,
+            std::max(1, x1 - x0),
+            std::min(mask.rows - y0, half_row_height * 2 + 1)));
+        if (count > best_count) {
+            best_count = count;
+            geometry.entry_side = side;
+            geometry.entry_row = row;
+            geometry.entry_col = side == EntrySide::Left ? 0 : static_cast<int>(geometry.xs.size()) - 1;
+        }
+    };
+
+    const int top_y = geometry.ys.front();
+    const int bottom_y = geometry.ys.back();
+    const int left_x = geometry.xs.front();
+    const int right_x = geometry.xs.back();
+    const int outside_band = std::max(40, std::max(cell_width, cell_height) / 2);
+    const int entry_gap = std::max(8, std::min(cell_width, cell_height) / 3);
+
+    for (int col = 0; col < static_cast<int>(geometry.xs.size()); ++col) {
+        considerColumnBand(
+            EntrySide::Top,
+            col,
+            std::max(0, top_y - outside_band),
+            std::max(0, top_y - entry_gap));
+        considerColumnBand(
+            EntrySide::Bottom,
+            col,
+            std::min(mask.rows - 1, bottom_y + entry_gap),
+            std::min(mask.rows, bottom_y + outside_band));
     }
-    geometry.entry_col = best_col;
+    for (int row = 0; row < static_cast<int>(geometry.ys.size()); ++row) {
+        considerRowBand(
+            EntrySide::Left,
+            row,
+            std::max(0, left_x - outside_band),
+            std::max(0, left_x - entry_gap));
+        considerRowBand(
+            EntrySide::Right,
+            row,
+            std::min(mask.cols - 1, right_x + entry_gap),
+            std::min(mask.cols, right_x + outside_band));
+    }
+
+    if (geometry.entry_side == EntrySide::Unknown) {
+        geometry.entry_side = EntrySide::Bottom;
+        geometry.entry_col = 0;
+        geometry.entry_row = static_cast<int>(geometry.ys.size()) - 1;
+    }
     return geometry;
 }
 
@@ -259,8 +350,13 @@ onboard::vision::IntersectionType expectedTopology(
     const bool right = col == static_cast<int>(geometry.xs.size()) - 1;
     const bool corner = (top || bottom) && (left || right);
     const bool edge = top || bottom || left || right;
-    if (top && col == geometry.entry_col) {
-        return corner ? onboard::vision::IntersectionType::T : onboard::vision::IntersectionType::T;
+    const bool entry_node =
+        (geometry.entry_side == EntrySide::Top && top && col == geometry.entry_col) ||
+        (geometry.entry_side == EntrySide::Bottom && bottom && col == geometry.entry_col) ||
+        (geometry.entry_side == EntrySide::Left && left && row == geometry.entry_row) ||
+        (geometry.entry_side == EntrySide::Right && right && row == geometry.entry_row);
+    if (entry_node) {
+        return onboard::vision::IntersectionType::T;
     }
     if (corner) {
         return onboard::vision::IntersectionType::L;
@@ -357,16 +453,58 @@ std::vector<GridIndex> fullSnakePath(const GridGeometry& geometry)
 std::vector<GridIndex> entrySnakePath(const GridGeometry& geometry)
 {
     std::vector<GridIndex> path;
-    for (int col = geometry.entry_col; col < static_cast<int>(geometry.xs.size()); ++col) {
-        path.push_back({0, col});
+    const int rows = static_cast<int>(geometry.ys.size());
+    const int cols = static_cast<int>(geometry.xs.size());
+    if (rows <= 0 || cols <= 0) {
+        return path;
     }
-    for (int row = 1; row < static_cast<int>(geometry.ys.size()); ++row) {
-        if (row % 2 == 1) {
-            for (int col = static_cast<int>(geometry.xs.size()) - 1; col >= 0; --col) {
+
+    if (geometry.entry_side == EntrySide::Bottom || geometry.entry_side == EntrySide::Top) {
+        const int start_col = std::clamp(geometry.entry_col, 0, cols - 1);
+        for (int col = start_col; col < cols; ++col) {
+            const bool forward = ((col - start_col) % 2) == 0;
+            if (geometry.entry_side == EntrySide::Bottom) {
+                if (forward) {
+                    for (int row = rows - 1; row >= 0; --row) {
+                        path.push_back({row, col});
+                    }
+                } else {
+                    for (int row = 0; row < rows; ++row) {
+                        path.push_back({row, col});
+                    }
+                }
+            } else if (forward) {
+                for (int row = 0; row < rows; ++row) {
+                    path.push_back({row, col});
+                }
+            } else {
+                for (int row = rows - 1; row >= 0; --row) {
+                    path.push_back({row, col});
+                }
+            }
+        }
+        return path;
+    }
+
+    const int start_row = std::clamp(geometry.entry_row, 0, rows - 1);
+    for (int row = start_row; row < rows; ++row) {
+        const bool forward = ((row - start_row) % 2) == 0;
+        if (geometry.entry_side == EntrySide::Right) {
+            if (forward) {
+                for (int col = cols - 1; col >= 0; --col) {
+                    path.push_back({row, col});
+                }
+            } else {
+                for (int col = 0; col < cols; ++col) {
+                    path.push_back({row, col});
+                }
+            }
+        } else if (forward) {
+            for (int col = 0; col < cols; ++col) {
                 path.push_back({row, col});
             }
         } else {
-            for (int col = 0; col < static_cast<int>(geometry.xs.size()); ++col) {
+            for (int col = cols - 1; col >= 0; --col) {
                 path.push_back({row, col});
             }
         }
@@ -428,17 +566,172 @@ cv::Mat rotateWorldCropToCameraFront(
     return world_crop.clone();
 }
 
+GridIndex startIndexFor(const GridGeometry& geometry)
+{
+    switch (geometry.entry_side) {
+    case EntrySide::Top:
+        return {0, geometry.entry_col};
+    case EntrySide::Bottom:
+        return {static_cast<int>(geometry.ys.size()) - 1, geometry.entry_col};
+    case EntrySide::Left:
+        return {geometry.entry_row, 0};
+    case EntrySide::Right:
+        return {geometry.entry_row, static_cast<int>(geometry.xs.size()) - 1};
+    case EntrySide::Unknown:
+        return {0, 0};
+    }
+    return {0, 0};
+}
+
+onboard::mission::GridHeading entryHeading(const GridGeometry& geometry)
+{
+    switch (geometry.entry_side) {
+    case EntrySide::Top:
+        return onboard::mission::GridHeading::South;
+    case EntrySide::Bottom:
+        return onboard::mission::GridHeading::North;
+    case EntrySide::Left:
+        return onboard::mission::GridHeading::East;
+    case EntrySide::Right:
+        return onboard::mission::GridHeading::West;
+    case EntrySide::Unknown:
+        return onboard::mission::GridHeading::Unknown;
+    }
+    return onboard::mission::GridHeading::Unknown;
+}
+
+onboard::mission::GridCoord headingVector(onboard::mission::GridHeading heading)
+{
+    switch (heading) {
+    case onboard::mission::GridHeading::North:
+        return {0, -1};
+    case onboard::mission::GridHeading::East:
+        return {1, 0};
+    case onboard::mission::GridHeading::South:
+        return {0, 1};
+    case onboard::mission::GridHeading::West:
+        return {-1, 0};
+    case onboard::mission::GridHeading::Unknown:
+        return {0, 1};
+    }
+    return {0, 1};
+}
+
+char headingArrow(onboard::mission::GridHeading heading)
+{
+    switch (heading) {
+    case onboard::mission::GridHeading::North:
+        return '^';
+    case onboard::mission::GridHeading::East:
+        return '>';
+    case onboard::mission::GridHeading::South:
+        return 'v';
+    case onboard::mission::GridHeading::West:
+        return '<';
+    case onboard::mission::GridHeading::Unknown:
+        return '@';
+    }
+    return '@';
+}
+
+std::string renderGridLog(const std::vector<LoggedNode>& nodes)
+{
+    if (nodes.empty()) {
+        return "[grid-map] empty\n";
+    }
+
+    int min_x = nodes.front().x;
+    int max_x = nodes.front().x;
+    int min_y = nodes.front().y;
+    int max_y = nodes.front().y;
+    for (const auto& node : nodes) {
+        min_x = std::min(min_x, node.x);
+        max_x = std::max(max_x, node.x);
+        min_y = std::min(min_y, node.y);
+        max_y = std::max(max_y, node.y);
+    }
+
+    const auto start_vector = headingVector(nodes.front().heading);
+    const int start_x = nodes.front().x - start_vector.x;
+    const int start_y = nodes.front().y - start_vector.y;
+    min_x = std::min(min_x, start_x);
+    max_x = std::max(max_x, start_x);
+    min_y = std::min(min_y, start_y);
+    max_y = std::max(max_y, start_y);
+
+    const int canvas_rows = (max_y - min_y) * 2 + 1;
+    const int canvas_cols = (max_x - min_x) * 4 + 1;
+    std::vector<std::string> canvas(
+        static_cast<std::size_t>(std::max(1, canvas_rows)),
+        std::string(static_cast<std::size_t>(std::max(1, canvas_cols)), ' '));
+    const auto rowFor = [&](int y) { return (y - min_y) * 2; };
+    const auto colFor = [&](int x) { return (x - min_x) * 4; };
+    const auto put = [&](int row, int col, char value) {
+        if (row >= 0 && col >= 0 &&
+            row < static_cast<int>(canvas.size()) &&
+            col < static_cast<int>(canvas[static_cast<std::size_t>(row)].size())) {
+            canvas[static_cast<std::size_t>(row)][static_cast<std::size_t>(col)] = value;
+        }
+    };
+    const auto drawEdge = [&](int ax, int ay, int bx, int by) {
+        const int row_a = rowFor(ay);
+        const int col_a = colFor(ax);
+        const int row_b = rowFor(by);
+        const int col_b = colFor(bx);
+        if (row_a == row_b) {
+            for (int col = std::min(col_a, col_b) + 1; col < std::max(col_a, col_b); ++col) {
+                put(row_a, col, '-');
+            }
+        } else if (col_a == col_b) {
+            for (int row = std::min(row_a, row_b) + 1; row < std::max(row_a, row_b); ++row) {
+                put(row, col_a, '|');
+            }
+        }
+    };
+
+    drawEdge(start_x, start_y, nodes.front().x, nodes.front().y);
+    put(rowFor(start_y), colFor(start_x), 's');
+    for (std::size_t index = 1; index < nodes.size(); ++index) {
+        drawEdge(nodes[index - 1].x, nodes[index - 1].y, nodes[index].x, nodes[index].y);
+    }
+    for (const auto& lhs : nodes) {
+        for (const auto& rhs : nodes) {
+            const int dx = rhs.x - lhs.x;
+            const int dy = rhs.y - lhs.y;
+            if ((dx == 1 && dy == 0) || (dx == 0 && dy == 1)) {
+                drawEdge(lhs.x, lhs.y, rhs.x, rhs.y);
+            }
+        }
+    }
+    for (const auto& node : nodes) {
+        put(rowFor(node.y), colFor(node.x), '+');
+    }
+    const auto& current = nodes.back();
+    put(rowFor(current.y), colFor(current.x), headingArrow(current.heading));
+
+    std::ostringstream stream;
+    stream << "[grid-map] nodes=" << nodes.size()
+           << " current=(" << current.x << ',' << current.y << ")"
+           << " heading=" << onboard::mission::gridHeadingName(current.heading) << "\n";
+    for (const auto& row : canvas) {
+        stream << row << "\n";
+    }
+    return stream.str();
+}
+
 void writeGeometry(
     const std::filesystem::path& output_dir,
     const Options& options,
     const GridGeometry& geometry)
 {
     std::ofstream output(output_dir / "geometry.csv");
-    output << "scenario,image_width,image_height,grid_cols,grid_rows,entry_col,xs,ys\n";
+    output << "scenario,image_width,image_height,grid_cols,grid_rows,entry_side,entry_col,entry_row,xs,ys\n";
     output << options.scenario << ",,,"
            << geometry.xs.size() << ','
            << geometry.ys.size() << ','
+           << entrySideName(geometry.entry_side) << ','
            << geometry.entry_col << ',';
+    output << geometry.entry_row << ',';
     for (std::size_t index = 0; index < geometry.xs.size(); ++index) {
         if (index > 0) {
             output << '|';
@@ -525,8 +818,11 @@ void runSnake(
     const onboard::common::IntersectionDecisionConfig& decision_config)
 {
     const auto snake_dir = output_dir / (name + "_zoom");
+    const auto grid_log_dir = output_dir / (name + "_grid_log");
     std::filesystem::create_directories(snake_dir);
+    std::filesystem::create_directories(grid_log_dir);
     std::ofstream csv(output_dir / (name + ".csv"));
+    std::ofstream grid_log_csv(output_dir / (name + "_grid_log.txt"));
     csv << "step,row,col,camera_heading,rotated_to_camera_front,detector_type,decision_type,node_valid,"
         << "local_x,local_y,expected_x,expected_y,coord_match,crop_file\n";
 
@@ -536,6 +832,7 @@ void runSnake(
     int expected_y = 0;
     GridIndex previous;
     bool has_previous = false;
+    std::vector<LoggedNode> logged_nodes;
     for (std::size_t step = 0; step < path.size(); ++step) {
         const auto current = path[step];
         const auto heading = cameraHeadingForStep(path, step);
@@ -560,6 +857,13 @@ void runSnake(
             frame_seq += static_cast<std::uint32_t>(decision_config.node_advance_min_frames + 2);
             result.node = tracker.update(result.decision, frame_seq, frame_seq * 83);
         }
+        if (result.node.valid) {
+            logged_nodes.push_back({
+                result.node.local_coord.x,
+                result.node.local_coord.y,
+                heading,
+            });
+        }
 
         cv::Mat zoom;
         cv::resize(crop, zoom, cv::Size(), 2.0, 2.0, cv::INTER_LINEAR);
@@ -575,6 +879,34 @@ void runSnake(
                   << "_r" << current.row
                   << "_c" << current.col << ".png";
         cv::imwrite((snake_dir / file_name.str()).string(), zoom);
+
+        std::ostringstream grid_step_file;
+        grid_step_file << "step_" << std::setw(3) << std::setfill('0') << step
+                       << "_r" << current.row
+                       << "_c" << current.col
+                       << "_heading_" << onboard::mission::gridHeadingName(heading)
+                       << ".txt";
+        const std::string rendered_grid = renderGridLog(logged_nodes);
+        {
+            std::ofstream grid_step(grid_log_dir / grid_step_file.str());
+            grid_step << "step=" << step << "\n"
+                      << "world_row=" << current.row << "\n"
+                      << "world_col=" << current.col << "\n"
+                      << "camera_heading=" << onboard::mission::gridHeadingName(heading) << "\n"
+                      << "node_valid=" << (result.node.valid ? "yes" : "no") << "\n"
+                      << "local_coord=(" << result.node.local_coord.x << ','
+                      << result.node.local_coord.y << ")\n"
+                      << rendered_grid;
+        }
+        grid_log_csv << "===== step " << step
+                     << " row=" << current.row
+                     << " col=" << current.col
+                     << " heading=" << onboard::mission::gridHeadingName(heading)
+                     << " node=" << (result.node.valid ? "yes" : "no")
+                     << " crop=" << (snake_dir.filename() / file_name.str()).string()
+                     << " log=" << (grid_log_dir.filename() / grid_step_file.str()).string()
+                     << " =====\n"
+                     << rendered_grid;
 
         const bool coord_match =
             result.node.valid &&
@@ -660,7 +992,9 @@ int main(int argc, char** argv)
               << " size=" << image.cols << 'x' << image.rows
               << " cols=" << geometry.xs.size()
               << " rows=" << geometry.ys.size()
+              << " entry_side=" << entrySideName(geometry.entry_side)
               << " entry_col=" << geometry.entry_col
+              << " entry_row=" << geometry.entry_row
               << " output=" << output_dir.string() << "\n";
     return 0;
 }
