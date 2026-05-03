@@ -61,14 +61,16 @@ void assertDarkLineWorksWithWhiteFillStrategy()
 {
     auto config = makeConfig("dark_on_light");
     config.mask_strategy = "white_fill";
-    config.local_contrast_threshold = 8;
+    config.dark_v_max = 100;
+    config.dark_fill_close_kernel = 13;
+    config.dark_fill_dilate_kernel = 3;
     config.min_line_width_px = 12;
-    config.max_line_width_ratio = 0.20;
+    config.dark_max_line_width_ratio = 0.34;
     config.confidence_min = 0.20;
 
     cv::Mat image(240, 320, CV_8UC3, cv::Scalar(230, 230, 230));
     cv::rectangle(image, {0, 0}, {319, 239}, cv::Scalar(255, 255, 255), 6);
-    cv::line(image, {160, 20}, {160, 220}, cv::Scalar(0, 0, 0), 28, cv::LINE_8);
+    cv::line(image, {160, 20}, {160, 220}, cv::Scalar(0, 0, 0), 72, cv::LINE_8);
 
     onboard::vision::LineMaskBuilder builder(config);
     onboard::vision::LineDetector detector(config);
@@ -78,6 +80,30 @@ void assertDarkLineWorksWithWhiteFillStrategy()
     assert(std::abs(line.tracking_point_px.x - 160.0f) < 18.0f);
     assert(std::abs(line.center_offset_px) < 18.0f);
     assert(line.contour_px.size() >= 2);
+}
+
+void assertLightLineWhiteFillStillWorks()
+{
+    auto config = makeConfig("light_on_dark");
+    config.mask_strategy = "white_fill";
+    config.white_v_min = 145;
+    config.white_s_max = 90;
+    config.fill_close_kernel = 11;
+    config.fill_dilate_kernel = 3;
+    config.min_line_width_px = 12;
+    config.max_line_width_ratio = 0.22;
+    config.confidence_min = 0.20;
+
+    cv::Mat image(240, 320, CV_8UC3, cv::Scalar(20, 20, 20));
+    cv::line(image, {160, 20}, {160, 220}, cv::Scalar(245, 245, 245), 44, cv::LINE_8);
+
+    onboard::vision::LineMaskBuilder builder(config);
+    onboard::vision::LineDetector detector(config);
+    const auto masks = builder.build(image);
+    const auto line = detector.detect(masks);
+    assert(line.detected);
+    assert(std::abs(line.tracking_point_px.x - 160.0f) < 18.0f);
+    assert(std::abs(line.center_offset_px) < 18.0f);
 }
 
 } // namespace
@@ -122,6 +148,7 @@ int main()
     }
 
     assertDarkLineWorksWithWhiteFillStrategy();
+    assertLightLineWhiteFillStillWorks();
 
     return 0;
 }

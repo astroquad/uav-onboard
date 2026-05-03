@@ -130,6 +130,7 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             line["local_contrast_threshold"].value_or(config.line.local_contrast_threshold);
         config.line.white_v_min = line["white_v_min"].value_or(config.line.white_v_min);
         config.line.white_s_max = line["white_s_max"].value_or(config.line.white_s_max);
+        config.line.dark_v_max = line["dark_v_max"].value_or(config.line.dark_v_max);
         config.line.min_area_px = line["min_area_px"].value_or(config.line.min_area_px);
         config.line.morph_kernel = line["morph_kernel"].value_or(config.line.morph_kernel);
         config.line.morph_open_kernel = line["morph_open_kernel"].value_or(config.line.morph_open_kernel);
@@ -137,12 +138,18 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.line.morph_dilate_kernel = line["morph_dilate_kernel"].value_or(config.line.morph_dilate_kernel);
         config.line.fill_close_kernel = line["fill_close_kernel"].value_or(config.line.fill_close_kernel);
         config.line.fill_dilate_kernel = line["fill_dilate_kernel"].value_or(config.line.fill_dilate_kernel);
+        config.line.dark_fill_close_kernel =
+            line["dark_fill_close_kernel"].value_or(config.line.dark_fill_close_kernel);
+        config.line.dark_fill_dilate_kernel =
+            line["dark_fill_dilate_kernel"].value_or(config.line.dark_fill_dilate_kernel);
         config.line.line_run_merge_gap_px =
             line["line_run_merge_gap_px"].value_or(config.line.line_run_merge_gap_px);
         config.line.max_contour_points = line["max_contour_points"].value_or(config.line.max_contour_points);
         config.line.confidence_min = line["confidence_min"].value_or(config.line.confidence_min);
         config.line.min_line_width_px = line["min_line_width_px"].value_or(config.line.min_line_width_px);
         config.line.max_line_width_ratio = line["max_line_width_ratio"].value_or(config.line.max_line_width_ratio);
+        config.line.dark_max_line_width_ratio =
+            line["dark_max_line_width_ratio"].value_or(config.line.dark_max_line_width_ratio);
         config.line.process_width = line["process_width"].value_or(config.line.process_width);
         config.line.max_candidates = line["max_candidates"].value_or(config.line.max_candidates);
         config.line.filter_enabled = line["filter_enabled"].value_or(config.line.filter_enabled);

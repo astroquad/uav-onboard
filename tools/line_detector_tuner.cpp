@@ -26,12 +26,16 @@ struct Options {
     int local_contrast_threshold = -1;
     int white_v_min = -1;
     int white_s_max = -1;
+    int dark_v_max = -1;
     int process_width = -1;
     int morph_open_kernel = -1;
     int morph_close_kernel = -1;
     int fill_close_kernel = -1;
     int fill_dilate_kernel = -1;
+    int dark_fill_close_kernel = -1;
+    int dark_fill_dilate_kernel = -1;
     int line_run_merge_gap_px = -1;
+    double dark_max_line_width_ratio = -1.0;
     double roi_top_ratio = -1.0;
     double lookahead_y_ratio = -1.0;
     double lookahead_band_ratio = -1.0;
@@ -46,17 +50,21 @@ void printUsage()
         << "  --image <path>       Input image path\n"
         << "  --output <dir>       Optional directory for mask, overlay, and summary files\n"
         << "  --mode <mode>        auto, light_on_dark, or dark_on_light\n"
-        << "  --mask <strategy>    global, local_contrast, white_local_contrast\n"
+        << "  --mask <strategy>    global, local_contrast, white_fill, dark_fill\n"
         << "  --threshold <n>      Override line threshold 0..255\n"
         << "  --local-threshold <n> Override local contrast threshold 0..255\n"
         << "  --white-v-min <n>    Override white-fill value minimum 0..255\n"
         << "  --white-s-max <n>    Override white-fill saturation maximum 0..255\n"
+        << "  --dark-v-max <n>     Override dark-fill value maximum 0..255\n"
         << "  --process-width <n>  Override resized processing width\n"
         << "  --morph-open <n>     Override morphology open kernel\n"
         << "  --morph-close <n>    Override morphology close kernel\n"
         << "  --fill-close <n>     Override white-fill morphology close kernel\n"
         << "  --fill-dilate <n>    Override white-fill morphology dilate kernel\n"
+        << "  --dark-fill-close <n> Override dark-fill morphology close kernel\n"
+        << "  --dark-fill-dilate <n> Override dark-fill morphology dilate kernel\n"
         << "  --merge-gap <n>      Override projection run merge gap in source px\n"
+        << "  --dark-max-width <r> Override dark-line max width ratio\n"
         << "  --roi-top <ratio>    Override ROI top ratio 0.0..1.0\n"
         << "  --lookahead <ratio>  Override tracking point Y ratio 0.0..1.0\n"
         << "  --band <ratio>       Override lookahead band height ratio 0.0..1.0\n"
@@ -104,6 +112,8 @@ Options parseOptions(int argc, char** argv)
             options.white_v_min = parseInt(argv[++i], options.white_v_min);
         } else if (arg == "--white-s-max" && i + 1 < argc) {
             options.white_s_max = parseInt(argv[++i], options.white_s_max);
+        } else if (arg == "--dark-v-max" && i + 1 < argc) {
+            options.dark_v_max = parseInt(argv[++i], options.dark_v_max);
         } else if (arg == "--process-width" && i + 1 < argc) {
             options.process_width = parseInt(argv[++i], options.process_width);
         } else if (arg == "--morph-open" && i + 1 < argc) {
@@ -114,8 +124,14 @@ Options parseOptions(int argc, char** argv)
             options.fill_close_kernel = parseInt(argv[++i], options.fill_close_kernel);
         } else if (arg == "--fill-dilate" && i + 1 < argc) {
             options.fill_dilate_kernel = parseInt(argv[++i], options.fill_dilate_kernel);
+        } else if (arg == "--dark-fill-close" && i + 1 < argc) {
+            options.dark_fill_close_kernel = parseInt(argv[++i], options.dark_fill_close_kernel);
+        } else if (arg == "--dark-fill-dilate" && i + 1 < argc) {
+            options.dark_fill_dilate_kernel = parseInt(argv[++i], options.dark_fill_dilate_kernel);
         } else if (arg == "--merge-gap" && i + 1 < argc) {
             options.line_run_merge_gap_px = parseInt(argv[++i], options.line_run_merge_gap_px);
+        } else if (arg == "--dark-max-width" && i + 1 < argc) {
+            options.dark_max_line_width_ratio = parseDouble(argv[++i], options.dark_max_line_width_ratio);
         } else if (arg == "--roi-top" && i + 1 < argc) {
             options.roi_top_ratio = parseDouble(argv[++i], options.roi_top_ratio);
         } else if (arg == "--lookahead" && i + 1 < argc) {
@@ -237,6 +253,9 @@ int main(int argc, char** argv)
     if (options.white_s_max >= 0) {
         config.line.white_s_max = options.white_s_max;
     }
+    if (options.dark_v_max >= 0) {
+        config.line.dark_v_max = options.dark_v_max;
+    }
     if (options.process_width > 0) {
         config.line.process_width = options.process_width;
     }
@@ -252,8 +271,17 @@ int main(int argc, char** argv)
     if (options.fill_dilate_kernel > 0) {
         config.line.fill_dilate_kernel = options.fill_dilate_kernel;
     }
+    if (options.dark_fill_close_kernel > 0) {
+        config.line.dark_fill_close_kernel = options.dark_fill_close_kernel;
+    }
+    if (options.dark_fill_dilate_kernel > 0) {
+        config.line.dark_fill_dilate_kernel = options.dark_fill_dilate_kernel;
+    }
     if (options.line_run_merge_gap_px >= 0) {
         config.line.line_run_merge_gap_px = options.line_run_merge_gap_px;
+    }
+    if (options.dark_max_line_width_ratio > 0.0) {
+        config.line.dark_max_line_width_ratio = options.dark_max_line_width_ratio;
     }
     if (options.roi_top_ratio >= 0.0) {
         config.line.roi_top_ratio = options.roi_top_ratio;

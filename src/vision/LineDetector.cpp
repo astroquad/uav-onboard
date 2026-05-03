@@ -444,6 +444,7 @@ std::optional<ProjectionRun> bestProjectionRun(
 std::optional<Candidate> evaluateContour(
     const std::vector<cv::Point>& work_contour,
     const cv::Mat& mask,
+    LinePolarity polarity,
     const common::LineConfig& config,
     const WorkGeometry& geometry,
     int work_lookahead_y)
@@ -473,10 +474,13 @@ std::optional<Candidate> evaluateContour(
     }
 
     const int min_line_width = scaledMinLineWidth(config, geometry);
+    const double max_line_width_ratio = polarity == LinePolarity::DarkOnLight
+        ? clampRatio(config.dark_max_line_width_ratio, 0.34)
+        : clampRatio(config.max_line_width_ratio, 0.22);
     const int max_line_width = std::max(
         min_line_width + 1,
         static_cast<int>(std::lround(
-            geometry.work_width * clampRatio(config.max_line_width_ratio, 0.22))));
+            geometry.work_width * max_line_width_ratio)));
     const auto runs = projectionRuns(mask, bounds, scan_y0, scan_y1);
     const auto projection_run = bestProjectionRun(
         runs,
@@ -664,6 +668,7 @@ LineDetection LineDetector::detect(const LineMaskFrame& masks) const
             auto candidate = evaluateContour(
                 contours[index],
                 candidate_mask.mask,
+                candidate_mask.polarity,
                 config_,
                 geometry,
                 work_lookahead_y);

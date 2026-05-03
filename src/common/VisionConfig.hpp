@@ -78,6 +78,7 @@ struct LineConfig {
     int local_contrast_threshold = 10;
     int white_v_min = 145;
     int white_s_max = 90;
+    int dark_v_max = 85;
     int min_area_px = 250;
     int morph_kernel = 5;
     int morph_open_kernel = 1;
@@ -85,11 +86,14 @@ struct LineConfig {
     int morph_dilate_kernel = 1;
     int fill_close_kernel = 11;
     int fill_dilate_kernel = 3;
+    int dark_fill_close_kernel = 11;
+    int dark_fill_dilate_kernel = 3;
     int line_run_merge_gap_px = 16;
     int max_contour_points = 48;
     double confidence_min = 0.25;
     int min_line_width_px = 8;
     double max_line_width_ratio = 0.22;
+    double dark_max_line_width_ratio = 0.34;
     int process_width = 480;
     int max_candidates = 8;
     bool filter_enabled = true;
