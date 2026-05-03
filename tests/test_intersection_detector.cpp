@@ -1,9 +1,11 @@
 #include "vision/IntersectionDetector.hpp"
+#include "vision/LineDetector.hpp"
 #include "vision/LineMaskBuilder.hpp"
 
 #include <opencv2/imgproc.hpp>
 
 #include <cassert>
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -55,6 +57,29 @@ void assertType(
     assert(detection.type == expected);
 }
 
+void assertDarkLineWorksWithWhiteFillStrategy()
+{
+    auto config = makeConfig("dark_on_light");
+    config.mask_strategy = "white_fill";
+    config.local_contrast_threshold = 8;
+    config.min_line_width_px = 12;
+    config.max_line_width_ratio = 0.20;
+    config.confidence_min = 0.20;
+
+    cv::Mat image(240, 320, CV_8UC3, cv::Scalar(230, 230, 230));
+    cv::rectangle(image, {0, 0}, {319, 239}, cv::Scalar(255, 255, 255), 6);
+    cv::line(image, {160, 20}, {160, 220}, cv::Scalar(0, 0, 0), 28, cv::LINE_8);
+
+    onboard::vision::LineMaskBuilder builder(config);
+    onboard::vision::LineDetector detector(config);
+    const auto masks = builder.build(image);
+    const auto line = detector.detect(masks);
+    assert(line.detected);
+    assert(std::abs(line.tracking_point_px.x - 160.0f) < 18.0f);
+    assert(std::abs(line.center_offset_px) < 18.0f);
+    assert(line.contour_px.size() >= 2);
+}
+
 } // namespace
 
 int main()
@@ -95,6 +120,8 @@ int main()
         drawSegment(image, {40, 120}, {280, 120}, true);
         assertType(std::move(image), dark_config, onboard::vision::IntersectionType::Cross);
     }
+
+    assertDarkLineWorksWithWhiteFillStrategy();
 
     return 0;
 }

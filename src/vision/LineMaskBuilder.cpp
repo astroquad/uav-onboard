@@ -258,7 +258,7 @@ LineMaskFrame LineMaskBuilder::build(const cv::Mat& image) const
     const bool use_local_contrast = usesLocalContrast(config_.mask_strategy);
     const bool use_white_fill = usesWhiteFill(config_.mask_strategy);
     const auto make_mask = [&](bool light_line) {
-        if (use_white_fill) {
+        if (use_white_fill && light_line) {
             cv::Mat mask = absoluteWhiteMask(work_image, gray, config_);
             if (use_local_contrast && light_line) {
                 cv::Mat contrast = localContrastMask(gray, true, config_);
@@ -267,6 +267,9 @@ LineMaskFrame LineMaskBuilder::build(const cv::Mat& image) const
             fillMask(mask, config_, geometry);
             clearThinBorderArtifacts(mask);
             return mask;
+        }
+        if (!light_line && (use_white_fill || use_local_contrast)) {
+            return localContrastMask(gray, false, config_);
         }
         return use_local_contrast
             ? localContrastMask(gray, light_line, config_)
