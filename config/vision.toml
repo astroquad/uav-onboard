@@ -90,6 +90,8 @@ filter_max_angle_jump_deg = 90.0
 filter_hold_frames = 3
 filter_reacquire_frames = 3
 intersection_threshold = 0.8
+marker_mask_enabled = true
+marker_mask_detect_candidates = true
 
 [intersection_decision]
 enabled = true
@@ -120,3 +122,4 @@ max_marker_perimeter_rate = 4.0
 adaptive_thresh_win_size_min = 3
 adaptive_thresh_win_size_max = 23
 adaptive_thresh_win_size_step = 10
+roi_fallback_enabled = true

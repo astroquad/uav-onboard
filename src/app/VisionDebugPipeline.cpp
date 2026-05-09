@@ -716,7 +716,10 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
             if (options.enable_line && options.vision.line.enabled) {
                 const auto line_started = std::chrono::steady_clock::now();
-                const auto line_masks = line_mask_builder.build(image);
+                const auto line_masks = line_mask_builder.build(
+                    image,
+                    result.markers,
+                    options.vision.line.marker_mask_detect_candidates);
                 const auto raw_line = line_detector.detect(line_masks);
                 const auto line_finished = std::chrono::steady_clock::now();
                 result.line = line_stabilizer.update(raw_line, frame.width);

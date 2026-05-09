@@ -112,6 +112,8 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             aruco["adaptive_thresh_win_size_max"].value_or(config.aruco.adaptive_thresh_win_size_max);
         config.aruco.adaptive_thresh_win_size_step =
             aruco["adaptive_thresh_win_size_step"].value_or(config.aruco.adaptive_thresh_win_size_step);
+        config.aruco.roi_fallback_enabled =
+            aruco["roi_fallback_enabled"].value_or(config.aruco.roi_fallback_enabled);
     }
 
     if (const auto line = table["line"]) {
@@ -169,6 +171,10 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             line["filter_reacquire_frames"].value_or(config.line.filter_reacquire_frames);
         config.line.intersection_threshold =
             line["intersection_threshold"].value_or(config.line.intersection_threshold);
+        config.line.marker_mask_enabled =
+            line["marker_mask_enabled"].value_or(config.line.marker_mask_enabled);
+        config.line.marker_mask_detect_candidates =
+            line["marker_mask_detect_candidates"].value_or(config.line.marker_mask_detect_candidates);
     }
 
     if (const auto decision = table["intersection_decision"]) {

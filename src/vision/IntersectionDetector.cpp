@@ -188,6 +188,52 @@ double foregroundDensity(const cv::Mat& mask, cv::Point center, int radius)
     return cv::countNonZero(mask(bounds)) / static_cast<double>(bounds.area());
 }
 
+bool isOccluded(const cv::Mat* occlusion_mask, cv::Point point)
+{
+    return occlusion_mask != nullptr &&
+           !occlusion_mask->empty() &&
+           point.x >= 0 &&
+           point.x < occlusion_mask->cols &&
+           point.y >= 0 &&
+           point.y < occlusion_mask->rows &&
+           occlusion_mask->at<std::uint8_t>(point) != 0;
+}
+
+double foregroundDensityIgnoringOcclusion(
+    const cv::Mat& mask,
+    const cv::Mat* occlusion_mask,
+    cv::Point center,
+    int radius)
+{
+    const cv::Rect bounds = cv::Rect(
+        center.x - radius,
+        center.y - radius,
+        radius * 2 + 1,
+        radius * 2 + 1) & cv::Rect(0, 0, mask.cols, mask.rows);
+    if (bounds.empty()) {
+        return 0.0;
+    }
+
+    int samples = 0;
+    int hits = 0;
+    for (int y = bounds.y; y < bounds.y + bounds.height; ++y) {
+        const auto* row = mask.ptr<std::uint8_t>(y);
+        for (int x = bounds.x; x < bounds.x + bounds.width; ++x) {
+            if (isOccluded(occlusion_mask, {x, y})) {
+                continue;
+            }
+            ++samples;
+            if (row[x] != 0) {
+                ++hits;
+            }
+        }
+    }
+    if (samples == 0) {
+        return isOccluded(occlusion_mask, center) ? 0.20 : 0.0;
+    }
+    return hits / static_cast<double>(samples);
+}
+
 cv::Rect centerSearchRect(const LineMaskGeometry& geometry)
 {
     const int width = std::max(1, static_cast<int>(std::lround(geometry.work_width * 0.45)));
@@ -226,6 +272,7 @@ void addUniqueCandidate(std::vector<CenterCandidate>& candidates, cv::Point poin
 
 std::vector<CenterCandidate> centerCandidates(
     const cv::Mat& mask,
+    const cv::Mat* occlusion_mask,
     const common::LineConfig& config,
     const LineMaskGeometry& geometry,
     const LineDetection& raw_line)
@@ -290,11 +337,40 @@ std::vector<CenterCandidate> centerCandidates(
         }
     }
 
+    if (occlusion_mask != nullptr && !occlusion_mask->empty()) {
+        cv::Mat labels;
+        cv::Mat stats;
+        cv::Mat centroids;
+        const int components = cv::connectedComponentsWithStats(*occlusion_mask, labels, stats, centroids, 8);
+        for (int label = 1; label < components; ++label) {
+            const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+            if (area < std::max(16, (geometry.work_width * geometry.work_height) / 4000)) {
+                continue;
+            }
+            const cv::Rect bounds(
+                stats.at<int>(label, cv::CC_STAT_LEFT),
+                stats.at<int>(label, cv::CC_STAT_TOP),
+                stats.at<int>(label, cv::CC_STAT_WIDTH),
+                stats.at<int>(label, cv::CC_STAT_HEIGHT));
+            if (!rectIntersects(bounds, center_rect) &&
+                (raw_rect.empty() || !rectIntersects(bounds, raw_rect))) {
+                continue;
+            }
+            addUniqueCandidate(
+                candidates,
+                toWorkPoint(
+                    {centroids.at<double>(label, 0), centroids.at<double>(label, 1)},
+                    geometry),
+                0.75);
+        }
+    }
+
     return candidates;
 }
 
 RayScore scoreBranch(
     const cv::Mat& mask,
+    const cv::Mat* occlusion_mask,
     cv::Point center,
     BranchDirection direction,
     double present_threshold)
@@ -337,6 +413,9 @@ RayScore scoreBranch(
                 point.y += offset;
             }
             if (point.x < 0 || point.x >= mask.cols || point.y < 0 || point.y >= mask.rows) {
+                continue;
+            }
+            if (isOccluded(occlusion_mask, point)) {
                 continue;
             }
             ++strip_samples;
@@ -415,6 +494,7 @@ bool isIntersectionType(IntersectionType type)
 
 std::optional<EvaluatedCenter> evaluateCenter(
     const cv::Mat& mask,
+    const cv::Mat* occlusion_mask,
     const LineMaskGeometry& geometry,
     cv::Point center,
     double seed_score,
@@ -426,10 +506,15 @@ std::optional<EvaluatedCenter> evaluateCenter(
         0.25,
         0.95);
     const int center_radius = std::max(3, std::min(mask.cols, mask.rows) / 48);
-    const double center_density = foregroundDensity(mask, center, center_radius);
+    const double center_density = foregroundDensityIgnoringOcclusion(
+        mask,
+        occlusion_mask,
+        center,
+        center_radius);
+    const bool center_occluded = isOccluded(occlusion_mask, center);
 
     IntersectionDetection detection;
-    detection.valid = center_density > 0.04;
+    detection.valid = center_density > 0.04 || center_occluded;
     detection.center_px = toTelemetryPoint(toSourcePoint(center, geometry));
     detection.raw_center_px = detection.center_px;
     detection.selected_mask_index = selected_mask_index;
@@ -441,7 +526,7 @@ std::optional<EvaluatedCenter> evaluateCenter(
     const auto directions = branchDirections();
     for (std::size_t index = 0; index < directions.size(); ++index) {
         const auto direction = directions[index];
-        const auto ray = scoreBranch(mask, center, direction, present_threshold);
+        const auto ray = scoreBranch(mask, occlusion_mask, center, direction, present_threshold);
         auto& branch = detection.branches[index];
         branch.direction = direction;
         branch.present = ray.present;
@@ -470,7 +555,7 @@ std::optional<EvaluatedCenter> evaluateCenter(
     detection.score = static_cast<float>(std::clamp(
         0.45 * branch_score +
             0.25 * branch_count_score +
-            0.20 * std::clamp(center_density * 2.0, 0.0, 1.0) +
+            0.20 * std::clamp((center_occluded ? 0.35 : center_density * 2.0), 0.0, 1.0) +
             0.10 * seed_score -
             0.08 * center_penalty,
         0.0,
@@ -513,16 +598,24 @@ IntersectionDetection IntersectionDetector::detect(
     }
 
     std::optional<EvaluatedCenter> best;
+    const cv::Mat* occlusion_mask =
+        masks.marker_occlusion_mask.empty() ? nullptr : &masks.marker_occlusion_mask;
     for (std::size_t mask_index = 0; mask_index < masks.masks.size(); ++mask_index) {
         const auto& candidate_mask = masks.masks[mask_index].mask;
         if (candidate_mask.empty()) {
             continue;
         }
         const cv::Mat mask = bridgeMask(candidate_mask, config_, masks.geometry);
-        const auto candidates = centerCandidates(mask, config_, masks.geometry, raw_line);
+        const auto candidates = centerCandidates(
+            mask,
+            occlusion_mask,
+            config_,
+            masks.geometry,
+            raw_line);
         for (const auto& candidate : candidates) {
             auto evaluated = evaluateCenter(
                 mask,
+                occlusion_mask,
                 masks.geometry,
                 candidate.point,
                 candidate.seed_score,

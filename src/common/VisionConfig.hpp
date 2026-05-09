@@ -63,6 +63,7 @@ struct ArucoConfig {
     int adaptive_thresh_win_size_min = 3;
     int adaptive_thresh_win_size_max = 23;
     int adaptive_thresh_win_size_step = 10;
+    bool roi_fallback_enabled = true;
 };
 
 struct LineConfig {
@@ -106,6 +107,8 @@ struct LineConfig {
     int filter_hold_frames = 3;
     int filter_reacquire_frames = 3;
     double intersection_threshold = 0.8;
+    bool marker_mask_enabled = true;
+    bool marker_mask_detect_candidates = true;
 };
 
 struct IntersectionDecisionConfig {

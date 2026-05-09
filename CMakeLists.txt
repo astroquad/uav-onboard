@@ -118,6 +118,10 @@ if(BUILD_TOOLS)
         target_include_directories(grid_image_smoke PRIVATE src)
         target_link_libraries(grid_image_smoke PRIVATE onboard_vision onboard_core)
 
+        add_executable(marker_grid_replay tools/marker_grid_replay.cpp)
+        target_include_directories(marker_grid_replay PRIVATE src)
+        target_link_libraries(marker_grid_replay PRIVATE onboard_vision onboard_core)
+
         add_executable(vision_debug_node
             tools/vision_debug_node.cpp
             src/app/VisionDebugPipeline.cpp

@@ -228,6 +228,154 @@ bool usesDarkFill(const std::string& strategy)
            strategy == "local_contrast_fill";
 }
 
+cv::Point markerCornerToWorkPoint(const Point2f& point, const LineMaskGeometry& geometry)
+{
+    return {
+        std::clamp(
+            static_cast<int>(std::lround(point.x / geometry.scale_x)),
+            0,
+            std::max(0, geometry.work_width - 1)),
+        std::clamp(
+            static_cast<int>(std::lround((point.y - geometry.roi_top) / geometry.scale_y)),
+            0,
+            std::max(0, geometry.work_height - 1)),
+    };
+}
+
+void addMarkerPolygonOccluders(
+    cv::Mat& occlusion_mask,
+    const std::vector<MarkerObservation>& markers,
+    const LineMaskGeometry& geometry)
+{
+    if (markers.empty() || occlusion_mask.empty()) {
+        return;
+    }
+
+    for (const auto& marker : markers) {
+        if (marker.id < 0) {
+            continue;
+        }
+        std::vector<cv::Point> polygon;
+        polygon.reserve(marker.corners_px.size());
+        for (const auto& corner : marker.corners_px) {
+            polygon.push_back(markerCornerToWorkPoint(corner, geometry));
+        }
+        const std::vector<std::vector<cv::Point>> polygons {polygon};
+        cv::fillPoly(occlusion_mask, polygons, cv::Scalar(255), cv::LINE_8);
+    }
+}
+
+void addMarkerLikeSquareOccluders(
+    cv::Mat& occlusion_mask,
+    const cv::Mat& work_image,
+    const cv::Mat& gray)
+{
+    if (occlusion_mask.empty() || work_image.empty() || gray.empty()) {
+        return;
+    }
+
+    cv::Mat dark;
+    if (work_image.channels() >= 3) {
+        cv::Mat hsv;
+        cv::cvtColor(work_image, hsv, cv::COLOR_BGR2HSV);
+        cv::inRange(hsv, cv::Scalar(0, 0, 0), cv::Scalar(180, 255, 95), dark);
+    } else {
+        cv::threshold(gray, dark, 95, 255, cv::THRESH_BINARY_INV);
+    }
+
+    const cv::Mat close_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
+    cv::morphologyEx(dark, dark, cv::MORPH_CLOSE, close_kernel);
+
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int components = cv::connectedComponentsWithStats(dark, labels, stats, centroids, 8);
+    const double frame_area = static_cast<double>(std::max(1, work_image.cols * work_image.rows));
+    for (int label = 1; label < components; ++label) {
+        const int x = stats.at<int>(label, cv::CC_STAT_LEFT);
+        const int y = stats.at<int>(label, cv::CC_STAT_TOP);
+        const int width = stats.at<int>(label, cv::CC_STAT_WIDTH);
+        const int height = stats.at<int>(label, cv::CC_STAT_HEIGHT);
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+        if (width <= 0 || height <= 0) {
+            continue;
+        }
+
+        const double rect_ratio = width / static_cast<double>(height);
+        const double area_ratio = area / frame_area;
+        if (rect_ratio < 0.65 || rect_ratio > 1.55 ||
+            area_ratio < 0.004 || area_ratio > 0.18) {
+            continue;
+        }
+
+        const cv::Rect rect = cv::Rect(x, y, width, height) &
+            cv::Rect(0, 0, work_image.cols, work_image.rows);
+        if (rect.empty()) {
+            continue;
+        }
+
+        const cv::Mat rect_gray = gray(rect);
+        cv::Mat bright;
+        cv::threshold(rect_gray, bright, 180, 255, cv::THRESH_BINARY);
+        const double bright_ratio = cv::countNonZero(bright) /
+            static_cast<double>(std::max(1, rect.area()));
+        if (bright_ratio < 0.05 || bright_ratio > 0.65) {
+            continue;
+        }
+
+        const int pad = std::max(2, std::min(width, height) / 8);
+        const cv::Rect expanded = cv::Rect(
+            x - pad,
+            y - pad,
+            width + pad * 2,
+            height + pad * 2) &
+            cv::Rect(0, 0, work_image.cols, work_image.rows);
+        if (!expanded.empty()) {
+            occlusion_mask(expanded).setTo(255);
+        }
+    }
+}
+
+cv::Mat buildMarkerOcclusionMask(
+    const cv::Mat& work_image,
+    const cv::Mat& gray,
+    const LineMaskGeometry& geometry,
+    const std::vector<MarkerObservation>& markers,
+    bool detect_marker_like_occluders)
+{
+    cv::Mat occlusion_mask(
+        geometry.work_height,
+        geometry.work_width,
+        CV_8UC1,
+        cv::Scalar(0));
+
+    addMarkerPolygonOccluders(occlusion_mask, markers, geometry);
+    if (detect_marker_like_occluders) {
+        addMarkerLikeSquareOccluders(occlusion_mask, work_image, gray);
+    }
+
+    if (cv::countNonZero(occlusion_mask) == 0) {
+        return {};
+    }
+
+    const int dilate_kernel = std::clamp(
+        scaledLineKernelSize(16, geometry),
+        3,
+        15);
+    const cv::Mat kernel = cv::getStructuringElement(
+        cv::MORPH_RECT,
+        cv::Size(oddKernelSize(dilate_kernel), oddKernelSize(dilate_kernel)));
+    cv::dilate(occlusion_mask, occlusion_mask, kernel);
+    return occlusion_mask;
+}
+
+void eraseMarkerOcclusion(cv::Mat& mask, const cv::Mat& occlusion_mask)
+{
+    if (!mask.empty() && !occlusion_mask.empty() && mask.size() == occlusion_mask.size()) {
+        mask.setTo(0, occlusion_mask);
+    }
+}
+
 } // namespace
 
 LineMaskBuilder::LineMaskBuilder(const common::LineConfig& config)
@@ -236,6 +384,14 @@ LineMaskBuilder::LineMaskBuilder(const common::LineConfig& config)
 }
 
 LineMaskFrame LineMaskBuilder::build(const cv::Mat& image) const
+{
+    return build(image, {}, false);
+}
+
+LineMaskFrame LineMaskBuilder::build(
+    const cv::Mat& image,
+    const std::vector<MarkerObservation>& markers,
+    bool detect_marker_like_occluders) const
 {
     LineMaskFrame output;
     if (!config_.enabled || image.empty() || image.cols <= 0 || image.rows <= 0) {
@@ -295,6 +451,25 @@ LineMaskFrame LineMaskBuilder::build(const cv::Mat& image) const
     const bool use_local_contrast = usesLocalContrast(config_.mask_strategy);
     const bool use_white_fill = usesWhiteFill(config_.mask_strategy);
     const bool use_dark_fill = usesDarkFill(config_.mask_strategy);
+    const bool marker_mask_active =
+        config_.marker_mask_enabled &&
+        config_.mode != "dark_on_light" &&
+        (!markers.empty() || (detect_marker_like_occluders && config_.marker_mask_detect_candidates));
+    if (marker_mask_active) {
+        output.marker_occlusion_mask = buildMarkerOcclusionMask(
+            work_image,
+            gray,
+            geometry,
+            markers,
+            detect_marker_like_occluders && config_.marker_mask_detect_candidates);
+        if (!output.marker_occlusion_mask.empty()) {
+            cv::Mat labels;
+            output.marker_occlusion_count = cv::connectedComponents(
+                output.marker_occlusion_mask,
+                labels,
+                8) - 1;
+        }
+    }
     const auto make_mask = [&](bool light_line) {
         if (use_white_fill && light_line) {
             cv::Mat mask = absoluteWhiteMask(work_image, gray, config_);
@@ -302,6 +477,7 @@ LineMaskFrame LineMaskBuilder::build(const cv::Mat& image) const
                 cv::Mat contrast = localContrastMask(gray, true, config_);
                 cv::bitwise_or(mask, contrast, mask);
             }
+            eraseMarkerOcclusion(mask, output.marker_occlusion_mask);
             fillMask(mask, config_, geometry);
             clearThinBorderArtifacts(mask);
             return mask;
@@ -324,6 +500,9 @@ LineMaskFrame LineMaskBuilder::build(const cv::Mat& image) const
     const auto add_mask = [&](bool light_line) {
         LineMaskCandidate candidate;
         candidate.mask = make_mask(light_line);
+        if (light_line) {
+            eraseMarkerOcclusion(candidate.mask, output.marker_occlusion_mask);
+        }
         candidate.polarity = light_line ? LinePolarity::LightOnDark : LinePolarity::DarkOnLight;
         cleanMask(candidate.mask, config_, geometry);
         output.masks.push_back(std::move(candidate));

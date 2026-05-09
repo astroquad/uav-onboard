@@ -3,9 +3,12 @@
 #include <opencv2/aruco.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <numeric>
+#include <vector>
 
 namespace onboard::vision {
 namespace {
@@ -51,6 +54,304 @@ float orientationDeg(const std::array<Point2f, 4>& corners)
     return static_cast<float>(std::atan2(dy, dx) * 180.0 / CV_PI);
 }
 
+float distancePx(Point2f lhs, Point2f rhs)
+{
+    const float dx = lhs.x - rhs.x;
+    const float dy = lhs.y - rhs.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+float markerApproxSidePx(const MarkerObservation& marker)
+{
+    float sum = 0.0f;
+    for (std::size_t index = 0; index < marker.corners_px.size(); ++index) {
+        sum += distancePx(
+            marker.corners_px[index],
+            marker.corners_px[(index + 1) % marker.corners_px.size()]);
+    }
+    return sum / static_cast<float>(marker.corners_px.size());
+}
+
+MarkerObservation makeMarkerObservation(int id, const std::vector<cv::Point2f>& corners)
+{
+    MarkerObservation marker;
+    marker.id = id;
+    for (std::size_t corner_index = 0; corner_index < marker.corners_px.size(); ++corner_index) {
+        marker.corners_px[corner_index] = toPoint(corners[corner_index]);
+    }
+
+    for (const auto& corner : marker.corners_px) {
+        marker.center_px.x += corner.x;
+        marker.center_px.y += corner.y;
+    }
+    marker.center_px.x /= static_cast<float>(marker.corners_px.size());
+    marker.center_px.y /= static_cast<float>(marker.corners_px.size());
+    marker.orientation_deg = orientationDeg(marker.corners_px);
+    return marker;
+}
+
+void appendMarkerIfUnique(VisionResult& result, const MarkerObservation& marker)
+{
+    if (marker.id < 0) {
+        return;
+    }
+    const float marker_side = markerApproxSidePx(marker);
+    for (auto& existing : result.markers) {
+        const float existing_side = markerApproxSidePx(existing);
+        const float near_threshold = std::max(12.0f, std::max(marker_side, existing_side) * 0.55f);
+        if (existing.id == marker.id || distancePx(existing.center_px, marker.center_px) < near_threshold) {
+            if (marker_side > existing_side * 1.25f) {
+                existing = marker;
+            }
+            return;
+        }
+    }
+    result.markers.push_back(marker);
+}
+
+void appendDetectedMarkers(
+    const std::vector<std::vector<cv::Point2f>>& marker_corners,
+    const std::vector<int>& ids,
+    VisionResult& result)
+{
+    for (std::size_t marker_index = 0; marker_index < ids.size(); ++marker_index) {
+        if (marker_index >= marker_corners.size() || marker_corners[marker_index].size() != 4) {
+            continue;
+        }
+        appendMarkerIfUnique(result, makeMarkerObservation(ids[marker_index], marker_corners[marker_index]));
+    }
+}
+
+cv::Rect2f boundingRectForCorners(const std::vector<cv::Point2f>& corners)
+{
+    float min_x = corners.front().x;
+    float min_y = corners.front().y;
+    float max_x = corners.front().x;
+    float max_y = corners.front().y;
+    for (const auto& corner : corners) {
+        min_x = std::min(min_x, corner.x);
+        min_y = std::min(min_y, corner.y);
+        max_x = std::max(max_x, corner.x);
+        max_y = std::max(max_y, corner.y);
+    }
+    return {min_x, min_y, max_x - min_x, max_y - min_y};
+}
+
+double darkRatioInRect(const cv::Mat& gray, const cv::Rect& rect)
+{
+    const cv::Rect clipped = rect & cv::Rect(0, 0, gray.cols, gray.rows);
+    if (clipped.empty()) {
+        return 0.0;
+    }
+    cv::Mat dark;
+    cv::threshold(gray(clipped), dark, 95, 255, cv::THRESH_BINARY_INV);
+    return cv::countNonZero(dark) / static_cast<double>(std::max(1, clipped.area()));
+}
+
+bool markerShapeLooksPlausible(
+    const cv::Mat& gray,
+    const std::vector<cv::Point2f>& source_corners)
+{
+    const cv::Rect2f bounds = boundingRectForCorners(source_corners);
+    if (bounds.width <= 0.0f || bounds.height <= 0.0f) {
+        return false;
+    }
+
+    const float side_ratio = bounds.width / bounds.height;
+    const float min_side = std::min(bounds.width, bounds.height);
+    const float max_side = std::max(bounds.width, bounds.height);
+    const float frame_min = static_cast<float>(std::max(1, std::min(gray.cols, gray.rows)));
+    if (side_ratio < 0.65f || side_ratio > 1.55f ||
+        min_side < std::max(16.0f, frame_min * 0.030f) ||
+        max_side > frame_min * 0.36f) {
+        return false;
+    }
+
+    const int pad = std::max(1, static_cast<int>(std::lround(min_side * 0.08f)));
+    const cv::Rect rect(
+        static_cast<int>(std::floor(bounds.x)) - pad,
+        static_cast<int>(std::floor(bounds.y)) - pad,
+        static_cast<int>(std::ceil(bounds.width)) + pad * 2,
+        static_cast<int>(std::ceil(bounds.height)) + pad * 2);
+    return darkRatioInRect(gray, rect) >= 0.35;
+}
+
+cv::Mat brightComponentMask(const cv::Mat& image, const cv::Mat& gray)
+{
+    cv::Mat mask;
+    if (image.channels() >= 3) {
+        cv::Mat hsv;
+        cv::cvtColor(image, hsv, cv::COLOR_BGR2HSV);
+        cv::inRange(hsv, cv::Scalar(0, 0, 170), cv::Scalar(180, 190, 255), mask);
+    } else {
+        cv::threshold(gray, mask, 220, 255, cv::THRESH_BINARY);
+    }
+
+    const cv::Mat close = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+    cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, close);
+    return mask;
+}
+
+std::vector<int> fallbackRoiSizes(int frame_min, int component_width, int component_height)
+{
+    const int min_size = std::max(44, static_cast<int>(std::lround(frame_min * 0.035)));
+    const int max_size = std::min(
+        std::max(min_size, static_cast<int>(std::lround(frame_min * 0.38))),
+        std::max(min_size, 280));
+
+    std::vector<int> sizes;
+    const auto add_size = [&](double value) {
+        const int size = std::clamp(static_cast<int>(std::lround(value)), min_size, max_size);
+        sizes.push_back(size);
+    };
+
+    const int component_side = std::max(component_width, component_height);
+    for (const double scale : {1.5, 1.8, 2.1, 2.5, 3.0, 3.6}) {
+        add_size(component_side * scale);
+    }
+    for (const double ratio : {0.035, 0.055, 0.08, 0.11, 0.16, 0.24, 0.32, 0.38}) {
+        add_size(frame_min * ratio);
+    }
+
+    std::sort(sizes.begin(), sizes.end());
+    sizes.erase(
+        std::unique(
+            sizes.begin(),
+            sizes.end(),
+            [](int lhs, int rhs) { return std::abs(lhs - rhs) < 6; }),
+        sizes.end());
+    return sizes;
+}
+
+void detectInPaddedRoi(
+    const cv::Mat& image,
+    const cv::Mat& gray,
+    const std::string& dictionary_name,
+    const cv::aruco::DetectorParameters& parameters,
+    const cv::Rect& source_rect,
+    int pad,
+    VisionResult& result)
+{
+    if (source_rect.empty()) {
+        return;
+    }
+
+    cv::Mat padded;
+    cv::copyMakeBorder(
+        image(source_rect),
+        padded,
+        pad,
+        pad,
+        pad,
+        pad,
+        cv::BORDER_CONSTANT | cv::BORDER_ISOLATED,
+        cv::Scalar(255, 255, 255));
+
+    for (const double scale : {1.0, 2.0}) {
+        cv::Mat detector_input = padded;
+        if (scale > 1.0) {
+            cv::resize(padded, detector_input, cv::Size(), scale, scale, cv::INTER_CUBIC);
+        }
+
+        cv::Mat roi_gray;
+        if (detector_input.channels() == 1) {
+            roi_gray = detector_input.clone();
+        } else {
+            cv::cvtColor(detector_input, roi_gray, cv::COLOR_BGR2GRAY);
+        }
+
+        cv::aruco::ArucoDetector detector(
+            cv::aruco::getPredefinedDictionary(dictionaryFromName(dictionary_name)),
+            parameters);
+        std::vector<int> ids;
+        std::vector<std::vector<cv::Point2f>> marker_corners;
+        detector.detectMarkers(roi_gray, marker_corners, ids);
+
+        for (std::size_t marker_index = 0; marker_index < ids.size(); ++marker_index) {
+            if (marker_index >= marker_corners.size() || marker_corners[marker_index].size() != 4) {
+                continue;
+            }
+
+            std::vector<cv::Point2f> source_corners;
+            source_corners.reserve(4);
+            for (const auto& corner : marker_corners[marker_index]) {
+                source_corners.push_back({
+                    static_cast<float>(corner.x / scale - pad + source_rect.x),
+                    static_cast<float>(corner.y / scale - pad + source_rect.y),
+                });
+            }
+            if (!markerShapeLooksPlausible(gray, source_corners)) {
+                continue;
+            }
+            appendMarkerIfUnique(result, makeMarkerObservation(ids[marker_index], source_corners));
+        }
+    }
+}
+
+void appendRoiFallbackMarkers(
+    const cv::Mat& image,
+    const cv::Mat& gray,
+    const std::string& dictionary_name,
+    const cv::aruco::DetectorParameters& parameters,
+    VisionResult& result)
+{
+    const cv::Mat bright = brightComponentMask(image, gray);
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int components = cv::connectedComponentsWithStats(bright, labels, stats, centroids, 8);
+    const int frame_min = std::max(1, std::min(image.cols, image.rows));
+    const int min_area = std::max(24, (image.cols * image.rows) / 90000);
+    const int max_area = std::max(600, (image.cols * image.rows) / 120);
+    const int max_component_side = std::max(36, frame_min / 8);
+
+    for (int label = 1; label < components; ++label) {
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+        const int width = stats.at<int>(label, cv::CC_STAT_WIDTH);
+        const int height = stats.at<int>(label, cv::CC_STAT_HEIGHT);
+        if (area < min_area || area > max_area ||
+            width < 4 || height < 4 ||
+            width > max_component_side || height > max_component_side) {
+            continue;
+        }
+
+        const double ratio = width / static_cast<double>(std::max(1, height));
+        if (ratio < 0.15 || ratio > 6.0) {
+            continue;
+        }
+
+        const double cx = centroids.at<double>(label, 0);
+        const double cy = centroids.at<double>(label, 1);
+        const auto sizes = fallbackRoiSizes(frame_min, width, height);
+        for (const int size : sizes) {
+            const int shift = std::max(4, size / 4);
+            const std::array<int, 5> offsets {-shift, -shift / 2, 0, shift / 2, shift};
+            for (const int dx : offsets) {
+                for (const int dy : offsets) {
+                    const int x = static_cast<int>(std::lround(cx + dx - size / 2.0));
+                    const int y = static_cast<int>(std::lround(cy + dy - size / 2.0));
+                    const cv::Rect source_rect =
+                        cv::Rect(x, y, size, size) & cv::Rect(0, 0, image.cols, image.rows);
+                    if (source_rect.width < size / 2 || source_rect.height < size / 2) {
+                        continue;
+                    }
+                    if (darkRatioInRect(gray, source_rect) < 0.30) {
+                        continue;
+                    }
+                    detectInPaddedRoi(
+                        image,
+                        gray,
+                        dictionary_name,
+                        parameters,
+                        source_rect,
+                        std::max(12, size / 2),
+                        result);
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 
 ArucoDetector::ArucoDetector(const common::ArucoConfig& config)
@@ -94,25 +395,10 @@ VisionResult ArucoDetector::detect(
     std::vector<std::vector<cv::Point2f>> marker_corners;
     detector.detectMarkers(gray, marker_corners, ids);
 
-    for (std::size_t marker_index = 0; marker_index < ids.size(); ++marker_index) {
-        if (marker_index >= marker_corners.size() || marker_corners[marker_index].size() != 4) {
-            continue;
-        }
+    appendDetectedMarkers(marker_corners, ids, result);
 
-        MarkerObservation marker;
-        marker.id = ids[marker_index];
-        for (std::size_t corner_index = 0; corner_index < marker.corners_px.size(); ++corner_index) {
-            marker.corners_px[corner_index] = toPoint(marker_corners[marker_index][corner_index]);
-        }
-
-        for (const auto& corner : marker.corners_px) {
-            marker.center_px.x += corner.x;
-            marker.center_px.y += corner.y;
-        }
-        marker.center_px.x /= static_cast<float>(marker.corners_px.size());
-        marker.center_px.y /= static_cast<float>(marker.corners_px.size());
-        marker.orientation_deg = orientationDeg(marker.corners_px);
-        result.markers.push_back(marker);
+    if (config_.roi_fallback_enabled && result.markers.empty()) {
+        appendRoiFallbackMarkers(image, gray, config_.dictionary, parameters, result);
     }
 
     return result;

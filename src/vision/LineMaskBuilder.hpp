@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/VisionConfig.hpp"
+#include "vision/VisionTypes.hpp"
 
 #include <opencv2/core.hpp>
 
@@ -32,6 +33,8 @@ struct LineMaskCandidate {
 struct LineMaskFrame {
     LineMaskGeometry geometry;
     std::vector<LineMaskCandidate> masks;
+    cv::Mat marker_occlusion_mask;
+    int marker_occlusion_count = 0;
 };
 
 class LineMaskBuilder {
@@ -39,6 +42,10 @@ public:
     explicit LineMaskBuilder(const common::LineConfig& config);
 
     LineMaskFrame build(const cv::Mat& image) const;
+    LineMaskFrame build(
+        const cv::Mat& image,
+        const std::vector<MarkerObservation>& markers,
+        bool detect_marker_like_occluders) const;
 
 private:
     common::LineConfig config_;
