@@ -123,3 +123,6 @@ adaptive_thresh_win_size_min = 3
 adaptive_thresh_win_size_max = 23
 adaptive_thresh_win_size_step = 10
 roi_fallback_enabled = true
+detect_interval_frames = 3
+fallback_max_components = 12
+fallback_max_rois = 120

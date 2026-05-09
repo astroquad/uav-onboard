@@ -64,6 +64,9 @@ struct ArucoConfig {
     int adaptive_thresh_win_size_max = 23;
     int adaptive_thresh_win_size_step = 10;
     bool roi_fallback_enabled = true;
+    int detect_interval_frames = 3;
+    int fallback_max_components = 12;
+    int fallback_max_rois = 120;
 };
 
 struct LineConfig {

@@ -469,9 +469,6 @@ std::optional<Candidate> evaluateContour(
         geometry.work_height);
     const int scan_y0 = std::max(band_y0, bounds.y);
     const int scan_y1 = std::min(band_y1, bounds.y + bounds.height);
-    if (scan_y0 >= scan_y1) {
-        return std::nullopt;
-    }
 
     const int min_line_width = scaledMinLineWidth(config, geometry);
     const double max_line_width_ratio = polarity == LinePolarity::DarkOnLight
@@ -481,25 +478,20 @@ std::optional<Candidate> evaluateContour(
         min_line_width + 1,
         static_cast<int>(std::lround(
             geometry.work_width * max_line_width_ratio)));
-    const auto runs = projectionRuns(mask, bounds, scan_y0, scan_y1);
-    const auto projection_run = bestProjectionRun(
-        runs,
-        scan_y1 - scan_y0,
-        min_line_width,
-        max_line_width,
-        scaledRunMergeGap(config, geometry),
-        geometry.work_width);
-    if (!projection_run) {
-        return std::nullopt;
+    std::optional<ProjectionRun> lookahead_run;
+    int lookahead_scan_height = 0;
+    if (scan_y0 < scan_y1) {
+        const auto runs = projectionRuns(mask, bounds, scan_y0, scan_y1);
+        lookahead_scan_height = scan_y1 - scan_y0;
+        lookahead_run = bestProjectionRun(
+            runs,
+            lookahead_scan_height,
+            min_line_width,
+            max_line_width,
+            scaledRunMergeGap(config, geometry),
+            geometry.work_width);
     }
 
-    const int work_line_width = projection_run->end_x - projection_run->start_x + 1;
-    if (work_line_width < min_line_width) {
-        return std::nullopt;
-    }
-
-    double work_tracking_x =
-        (projection_run->start_x + projection_run->end_x) / 2.0;
     const int anchor_y = std::clamp(
         static_cast<int>(std::lround(geometry.work_height * 0.74)),
         0,
@@ -514,19 +506,31 @@ std::optional<Candidate> evaluateContour(
         geometry.work_height);
     const int anchor_scan_y0 = std::max(anchor_y0, bounds.y);
     const int anchor_scan_y1 = std::min(anchor_y1, bounds.y + bounds.height);
+    std::optional<ProjectionRun> anchor_run;
+    int anchor_scan_height = 0;
     if (anchor_scan_y0 < anchor_scan_y1) {
         const auto anchor_runs = projectionRuns(mask, bounds, anchor_scan_y0, anchor_scan_y1);
-        const auto anchor_run = bestProjectionRun(
+        anchor_scan_height = anchor_scan_y1 - anchor_scan_y0;
+        anchor_run = bestProjectionRun(
             anchor_runs,
-            anchor_scan_y1 - anchor_scan_y0,
+            anchor_scan_height,
             min_line_width,
             max_line_width,
             scaledRunMergeGap(config, geometry),
             geometry.work_width);
-        if (anchor_run) {
-            work_tracking_x = (anchor_run->start_x + anchor_run->end_x) / 2.0;
-        }
     }
+    const auto selected_run = anchor_run ? anchor_run : lookahead_run;
+    const int selected_scan_height = anchor_run ? anchor_scan_height : lookahead_scan_height;
+    if (!selected_run) {
+        return std::nullopt;
+    }
+
+    const int work_line_width = selected_run->end_x - selected_run->start_x + 1;
+    if (work_line_width < min_line_width) {
+        return std::nullopt;
+    }
+    const double work_tracking_x =
+        (selected_run->start_x + selected_run->end_x) / 2.0;
     const double source_tracking_x = work_tracking_x * geometry.scale_x;
     const double source_lookahead_y =
         geometry.roi_top + work_lookahead_y * geometry.scale_y;
@@ -551,8 +555,8 @@ std::optional<Candidate> evaluateContour(
         0.0,
         1.0);
     const double band_density_score = std::clamp(
-        projection_run->weight /
-            std::max(1.0, work_line_width * static_cast<double>(scan_y1 - scan_y0)),
+        selected_run->weight /
+            std::max(1.0, work_line_width * static_cast<double>(std::max(1, selected_scan_height))),
         0.0,
         1.0);
 
@@ -566,13 +570,15 @@ std::optional<Candidate> evaluateContour(
         source_bounds.x <= 2 ||
         (source_bounds.x + source_bounds.width) >= geometry.source_width - 2;
     const double edge_penalty = touches_side ? 0.20 : 0.0;
+    const double anchor_score = anchor_run ? 1.0 : 0.0;
 
     const double score =
-        0.15 * span_score +
-        0.10 * area_score +
-        0.35 * width_score +
-        0.25 * center_score +
-        0.15 * band_density_score -
+        0.12 * span_score +
+        0.08 * area_score +
+        0.28 * width_score +
+        0.30 * center_score +
+        0.12 * band_density_score +
+        0.10 * anchor_score -
         edge_penalty;
     if (score < config.confidence_min) {
         return std::nullopt;

@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
+#include <optional>
 #include <vector>
 
 namespace onboard::vision {
@@ -72,6 +74,20 @@ float markerApproxSidePx(const MarkerObservation& marker)
     return sum / static_cast<float>(marker.corners_px.size());
 }
 
+bool isLiveFrameSize(const cv::Size& size)
+{
+    return std::min(size.width, size.height) <= 1000;
+}
+
+bool isLikelyPartialLiveMarker(const MarkerObservation& marker, const cv::Size& frame_size)
+{
+    if (!isLiveFrameSize(frame_size)) {
+        return false;
+    }
+    const float frame_min = static_cast<float>(std::max(1, std::min(frame_size.width, frame_size.height)));
+    return markerApproxSidePx(marker) < frame_min * 0.22f;
+}
+
 MarkerObservation makeMarkerObservation(int id, const std::vector<cv::Point2f>& corners)
 {
     MarkerObservation marker;
@@ -112,13 +128,20 @@ void appendMarkerIfUnique(VisionResult& result, const MarkerObservation& marker)
 void appendDetectedMarkers(
     const std::vector<std::vector<cv::Point2f>>& marker_corners,
     const std::vector<int>& ids,
+    const cv::Size& frame_size,
+    std::vector<MarkerObservation>& partial_markers,
     VisionResult& result)
 {
     for (std::size_t marker_index = 0; marker_index < ids.size(); ++marker_index) {
         if (marker_index >= marker_corners.size() || marker_corners[marker_index].size() != 4) {
             continue;
         }
-        appendMarkerIfUnique(result, makeMarkerObservation(ids[marker_index], marker_corners[marker_index]));
+        const auto marker = makeMarkerObservation(ids[marker_index], marker_corners[marker_index]);
+        if (isLikelyPartialLiveMarker(marker, frame_size)) {
+            partial_markers.push_back(marker);
+            continue;
+        }
+        appendMarkerIfUnique(result, marker);
     }
 }
 
@@ -161,9 +184,12 @@ bool markerShapeLooksPlausible(
     const float min_side = std::min(bounds.width, bounds.height);
     const float max_side = std::max(bounds.width, bounds.height);
     const float frame_min = static_cast<float>(std::max(1, std::min(gray.cols, gray.rows)));
+    const bool live_frame = isLiveFrameSize(gray.size());
+    const float min_side_ratio = live_frame ? 0.20f : 0.030f;
+    const float max_side_ratio = live_frame ? 0.42f : 0.36f;
     if (side_ratio < 0.65f || side_ratio > 1.55f ||
-        min_side < std::max(16.0f, frame_min * 0.030f) ||
-        max_side > frame_min * 0.36f) {
+        min_side < std::max(16.0f, frame_min * min_side_ratio) ||
+        max_side > frame_min * max_side_ratio) {
         return false;
     }
 
@@ -220,6 +246,9 @@ std::vector<int> fallbackRoiSizes(int frame_min, int component_width, int compon
             sizes.end(),
             [](int lhs, int rhs) { return std::abs(lhs - rhs) < 6; }),
         sizes.end());
+    if (frame_min <= 1000) {
+        std::reverse(sizes.begin(), sizes.end());
+    }
     return sizes;
 }
 
@@ -293,6 +322,8 @@ void appendRoiFallbackMarkers(
     const cv::Mat& gray,
     const std::string& dictionary_name,
     const cv::aruco::DetectorParameters& parameters,
+    int max_components,
+    int max_rois,
     VisionResult& result)
 {
     const cv::Mat bright = brightComponentMask(image, gray);
@@ -305,6 +336,14 @@ void appendRoiFallbackMarkers(
     const int max_area = std::max(600, (image.cols * image.rows) / 120);
     const int max_component_side = std::max(36, frame_min / 8);
 
+    struct ComponentCandidate {
+        int label = -1;
+        double score = 0.0;
+    };
+    std::vector<ComponentCandidate> component_candidates;
+    component_candidates.reserve(static_cast<std::size_t>(std::max(0, components - 1)));
+    const cv::Point2d frame_center(image.cols / 2.0, image.rows / 2.0);
+    const bool live_frame = isLiveFrameSize(image.size());
     for (int label = 1; label < components; ++label) {
         const int area = stats.at<int>(label, cv::CC_STAT_AREA);
         const int width = stats.at<int>(label, cv::CC_STAT_WIDTH);
@@ -319,15 +358,51 @@ void appendRoiFallbackMarkers(
         if (ratio < 0.15 || ratio > 6.0) {
             continue;
         }
+        const double cx = centroids.at<double>(label, 0);
+        const double cy = centroids.at<double>(label, 1);
+        const double center_distance = std::hypot(cx - frame_center.x, cy - frame_center.y);
+        const double center_score = 1.0 - std::clamp(
+            center_distance / std::max(1.0, std::hypot(frame_center.x, frame_center.y)),
+            0.0,
+            1.0);
+        const double area_score = std::clamp(
+            area / static_cast<double>(std::max(1, max_area)),
+            0.0,
+            1.0);
+        component_candidates.push_back({label, live_frame ? (0.75 * center_score + 0.25 * area_score) : area_score});
+    }
 
+    std::sort(
+        component_candidates.begin(),
+        component_candidates.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.score > rhs.score; });
+
+    int processed_components = 0;
+    int attempted_rois = 0;
+    const int component_limit = live_frame && max_components > 0
+        ? std::max(1, max_components)
+        : static_cast<int>(component_candidates.size());
+    const int roi_limit = live_frame && max_rois > 0 ? std::max(1, max_rois) : std::numeric_limits<int>::max();
+
+    for (const auto& component : component_candidates) {
+        if (processed_components >= component_limit || attempted_rois >= roi_limit) {
+            break;
+        }
+        const int label = component.label;
+        const int width = stats.at<int>(label, cv::CC_STAT_WIDTH);
+        const int height = stats.at<int>(label, cv::CC_STAT_HEIGHT);
         const double cx = centroids.at<double>(label, 0);
         const double cy = centroids.at<double>(label, 1);
         const auto sizes = fallbackRoiSizes(frame_min, width, height);
+        ++processed_components;
         for (const int size : sizes) {
             const int shift = std::max(4, size / 4);
             const std::array<int, 5> offsets {-shift, -shift / 2, 0, shift / 2, shift};
             for (const int dx : offsets) {
                 for (const int dy : offsets) {
+                    if (attempted_rois >= roi_limit) {
+                        return;
+                    }
                     const int x = static_cast<int>(std::lround(cx + dx - size / 2.0));
                     const int y = static_cast<int>(std::lround(cy + dy - size / 2.0));
                     const cv::Rect source_rect =
@@ -338,6 +413,73 @@ void appendRoiFallbackMarkers(
                     if (darkRatioInRect(gray, source_rect) < 0.30) {
                         continue;
                     }
+                    ++attempted_rois;
+                    detectInPaddedRoi(
+                        image,
+                        gray,
+                        dictionary_name,
+                        parameters,
+                        source_rect,
+                        std::max(12, size / 2),
+                        result);
+                }
+            }
+        }
+    }
+}
+
+void appendTargetedFallbackMarkers(
+    const cv::Mat& image,
+    const cv::Mat& gray,
+    const std::string& dictionary_name,
+    const cv::aruco::DetectorParameters& parameters,
+    const std::vector<MarkerObservation>& seed_markers,
+    int max_rois,
+    VisionResult& result)
+{
+    int attempted_rois = 0;
+    const int roi_limit = max_rois > 0 ? std::max(1, max_rois) : std::numeric_limits<int>::max();
+    const int frame_min = std::max(1, std::min(image.cols, image.rows));
+    for (const auto& seed : seed_markers) {
+        const float side = markerApproxSidePx(seed);
+        std::vector<int> sizes;
+        for (const double scale : {1.8, 2.2, 2.8, 3.4}) {
+            sizes.push_back(std::clamp(
+                static_cast<int>(std::lround(side * scale)),
+                std::max(44, static_cast<int>(std::lround(frame_min * 0.035))),
+                std::min(280, static_cast<int>(std::lround(frame_min * 0.38)))));
+        }
+        for (const double ratio : {0.18, 0.24, 0.30}) {
+            sizes.push_back(std::clamp(
+                static_cast<int>(std::lround(frame_min * ratio)),
+                44,
+                std::min(280, static_cast<int>(std::lround(frame_min * 0.38)))));
+        }
+        std::sort(sizes.begin(), sizes.end());
+        sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
+        if (frame_min <= 1000) {
+            std::reverse(sizes.begin(), sizes.end());
+        }
+
+        for (const int size : sizes) {
+            const int shift = std::max(4, size / 5);
+            const std::array<int, 5> offsets {-shift, -shift / 2, 0, shift / 2, shift};
+            for (const int dx : offsets) {
+                for (const int dy : offsets) {
+                    if (attempted_rois >= roi_limit) {
+                        return;
+                    }
+                    const int x = static_cast<int>(std::lround(seed.center_px.x + dx - size / 2.0f));
+                    const int y = static_cast<int>(std::lround(seed.center_px.y + dy - size / 2.0f));
+                    const cv::Rect source_rect =
+                        cv::Rect(x, y, size, size) & cv::Rect(0, 0, image.cols, image.rows);
+                    if (source_rect.width < size / 2 || source_rect.height < size / 2) {
+                        continue;
+                    }
+                    if (darkRatioInRect(gray, source_rect) < 0.30) {
+                        continue;
+                    }
+                    ++attempted_rois;
                     detectInPaddedRoi(
                         image,
                         gray,
@@ -395,10 +537,30 @@ VisionResult ArucoDetector::detect(
     std::vector<std::vector<cv::Point2f>> marker_corners;
     detector.detectMarkers(gray, marker_corners, ids);
 
-    appendDetectedMarkers(marker_corners, ids, result);
+    std::vector<MarkerObservation> partial_markers;
+    appendDetectedMarkers(marker_corners, ids, image.size(), partial_markers, result);
 
-    if (config_.roi_fallback_enabled && result.markers.empty()) {
-        appendRoiFallbackMarkers(image, gray, config_.dictionary, parameters, result);
+    if (config_.roi_fallback_enabled && (!partial_markers.empty() || result.markers.empty())) {
+        if (!partial_markers.empty()) {
+            appendTargetedFallbackMarkers(
+                image,
+                gray,
+                config_.dictionary,
+                parameters,
+                partial_markers,
+                config_.fallback_max_rois,
+                result);
+        }
+        if (result.markers.empty()) {
+            appendRoiFallbackMarkers(
+                image,
+                gray,
+                config_.dictionary,
+                parameters,
+                config_.fallback_max_components,
+                config_.fallback_max_rois,
+                result);
+        }
     }
 
     return result;

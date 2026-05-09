@@ -114,6 +114,12 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             aruco["adaptive_thresh_win_size_step"].value_or(config.aruco.adaptive_thresh_win_size_step);
         config.aruco.roi_fallback_enabled =
             aruco["roi_fallback_enabled"].value_or(config.aruco.roi_fallback_enabled);
+        config.aruco.detect_interval_frames =
+            aruco["detect_interval_frames"].value_or(config.aruco.detect_interval_frames);
+        config.aruco.fallback_max_components =
+            aruco["fallback_max_components"].value_or(config.aruco.fallback_max_components);
+        config.aruco.fallback_max_rois =
+            aruco["fallback_max_rois"].value_or(config.aruco.fallback_max_rois);
     }
 
     if (const auto line = table["line"]) {
