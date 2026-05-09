@@ -735,9 +735,19 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
                     image,
                     marker_mask_input,
                     options.vision.line.marker_mask_detect_candidates);
-                const auto raw_line = line_detector.detect(line_masks);
+                auto raw_line = line_detector.detect(line_masks);
+                raw_line = vision::applyMarkerCenterTracking(
+                    raw_line,
+                    result.markers,
+                    frame.width,
+                    frame.height);
                 const auto line_finished = std::chrono::steady_clock::now();
                 result.line = line_stabilizer.update(raw_line, frame.width);
+                result.line = vision::applyMarkerCenterTracking(
+                    result.line,
+                    result.markers,
+                    frame.width,
+                    frame.height);
                 result.line_detected = result.line.detected;
                 line_latency_ms = std::chrono::duration<double, std::milli>(
                     line_finished - line_started).count();

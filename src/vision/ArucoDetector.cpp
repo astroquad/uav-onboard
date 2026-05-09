@@ -15,6 +15,19 @@
 namespace onboard::vision {
 namespace {
 
+struct TemplateEntry {
+    int id = -1;
+    cv::Mat binary;
+};
+
+struct TemplateMatch {
+    bool matched = false;
+    int id = -1;
+    double score = 0.0;
+    double other_id_score = 0.0;
+    cv::Rect rect;
+};
+
 cv::aruco::PredefinedDictionaryType dictionaryFromName(const std::string& name)
 {
     static const std::map<std::string, cv::aruco::PredefinedDictionaryType> dictionaries = {
@@ -217,6 +230,151 @@ bool shouldRunFullFallback(
         1,
         interval);
     return static_cast<int>(frame_seq % static_cast<std::uint32_t>(interval)) < phase_window;
+}
+
+const std::vector<TemplateEntry>& markerTemplates(const std::string& dictionary_name)
+{
+    constexpr int kTemplateSide = 72;
+    static std::map<std::string, std::vector<TemplateEntry>> cache;
+    const auto cached = cache.find(dictionary_name);
+    if (cached != cache.end()) {
+        return cached->second;
+    }
+
+    const cv::aruco::Dictionary dictionary =
+        cv::aruco::getPredefinedDictionary(dictionaryFromName(dictionary_name));
+    const int dictionary_marker_count = std::max(0, dictionary.bytesList.rows);
+    const int marker_count = dictionary_name == "DICT_4X4_50"
+        ? std::min(dictionary_marker_count, 10)
+        : dictionary_marker_count;
+    std::vector<TemplateEntry> entries;
+    entries.reserve(static_cast<std::size_t>(marker_count * 4));
+    for (int id = 0; id < marker_count; ++id) {
+        cv::Mat marker;
+        cv::aruco::generateImageMarker(dictionary, id, kTemplateSide, marker, 1);
+        cv::threshold(marker, marker, 127, 255, cv::THRESH_BINARY);
+        for (int rotation = 0; rotation < 4; ++rotation) {
+            cv::Mat rotated;
+            if (rotation == 0) {
+                rotated = marker.clone();
+            } else if (rotation == 1) {
+                cv::rotate(marker, rotated, cv::ROTATE_90_COUNTERCLOCKWISE);
+            } else if (rotation == 2) {
+                cv::rotate(marker, rotated, cv::ROTATE_180);
+            } else {
+                cv::rotate(marker, rotated, cv::ROTATE_90_CLOCKWISE);
+            }
+            entries.push_back({id, std::move(rotated)});
+        }
+    }
+    const auto inserted = cache.emplace(dictionary_name, std::move(entries));
+    return inserted.first->second;
+}
+
+TemplateMatch matchTemplateSquare(
+    const cv::Mat& gray,
+    const std::vector<TemplateEntry>& templates,
+    const cv::Rect& rect)
+{
+    TemplateMatch best;
+    if (gray.empty() || rect.empty() || templates.empty()) {
+        return best;
+    }
+
+    const cv::Rect clipped = rect & cv::Rect(0, 0, gray.cols, gray.rows);
+    if (clipped.width < rect.width / 2 || clipped.height < rect.height / 2) {
+        return best;
+    }
+    if (darkRatioInRect(gray, clipped) < 0.25) {
+        return best;
+    }
+
+    cv::Mat binary;
+    cv::threshold(gray(clipped), binary, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+    cv::resize(binary, binary, templates.front().binary.size(), 0.0, 0.0, cv::INTER_AREA);
+    cv::threshold(binary, binary, 127, 255, cv::THRESH_BINARY);
+
+    double best_score = -1.0;
+    double best_other_id_score = -1.0;
+    int best_id = -1;
+    cv::Mat diff;
+    const double total_pixels = std::max(1, binary.rows * binary.cols);
+    for (const auto& entry : templates) {
+        if (entry.binary.size() != binary.size()) {
+            continue;
+        }
+        cv::compare(binary, entry.binary, diff, cv::CMP_NE);
+        const double score = 1.0 - cv::countNonZero(diff) / total_pixels;
+        if (score > best_score) {
+            if (best_id >= 0 && entry.id != best_id) {
+                best_other_id_score = std::max(best_other_id_score, best_score);
+            }
+            best_score = score;
+            best_id = entry.id;
+        } else if (entry.id != best_id) {
+            best_other_id_score = std::max(best_other_id_score, score);
+        }
+    }
+
+    constexpr double kMinScore = 0.82;
+    constexpr double kMinOtherIdGap = 0.035;
+    const double other_score = best_other_id_score < 0.0 ? 0.0 : best_other_id_score;
+    if (best_id >= 0 && best_score >= kMinScore && best_score - other_score >= kMinOtherIdGap) {
+        best.matched = true;
+        best.id = best_id;
+        best.score = best_score;
+        best.other_id_score = other_score;
+        best.rect = clipped;
+    }
+    return best;
+}
+
+void appendTemplateFallbackMarker(
+    const cv::Mat& gray,
+    const std::string& dictionary_name,
+    VisionResult& result)
+{
+    if (gray.empty() || !isLiveFrameSize(gray.size())) {
+        return;
+    }
+
+    const auto& templates = markerTemplates(dictionary_name);
+    if (templates.empty()) {
+        return;
+    }
+
+    const int frame_min = std::max(1, std::min(gray.cols, gray.rows));
+    const cv::Point2d frame_center(gray.cols / 2.0, gray.rows / 2.0);
+    TemplateMatch best_match;
+    for (const double size_ratio : {0.28, 0.34, 0.40}) {
+        const int size = std::clamp(
+            static_cast<int>(std::lround(frame_min * size_ratio)),
+            64,
+            std::min(360, static_cast<int>(std::lround(frame_min * 0.42))));
+        for (const double dx_ratio : {-0.04, 0.0, 0.04}) {
+            for (const double dy_ratio : {-0.04, 0.0, 0.04}) {
+                const int cx = static_cast<int>(std::lround(frame_center.x + frame_min * dx_ratio));
+                const int cy = static_cast<int>(std::lround(frame_center.y + frame_min * dy_ratio));
+                const cv::Rect rect(cx - size / 2, cy - size / 2, size, size);
+                const auto match = matchTemplateSquare(gray, templates, rect);
+                if (match.matched && (!best_match.matched || match.score > best_match.score)) {
+                    best_match = match;
+                }
+            }
+        }
+    }
+
+    if (!best_match.matched) {
+        return;
+    }
+
+    const std::vector<cv::Point2f> corners {
+        cv::Point2f(static_cast<float>(best_match.rect.x), static_cast<float>(best_match.rect.y)),
+        cv::Point2f(static_cast<float>(best_match.rect.x + best_match.rect.width), static_cast<float>(best_match.rect.y)),
+        cv::Point2f(static_cast<float>(best_match.rect.x + best_match.rect.width), static_cast<float>(best_match.rect.y + best_match.rect.height)),
+        cv::Point2f(static_cast<float>(best_match.rect.x), static_cast<float>(best_match.rect.y + best_match.rect.height)),
+    };
+    appendMarkerIfUnique(result, makeMarkerObservation(best_match.id, corners));
 }
 
 cv::Mat brightComponentMask(const cv::Mat& image, const cv::Mat& gray)
@@ -568,6 +726,9 @@ VisionResult ArucoDetector::detect(
                 fallback_max_rois,
                 !isLiveFrameSize(image.size()),
                 result);
+            if (result.markers.empty() && isLiveFrameSize(image.size())) {
+                appendTemplateFallbackMarker(gray, config_.dictionary, result);
+            }
         }
     }
 

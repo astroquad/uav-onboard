@@ -314,7 +314,7 @@ std::vector<CenterCandidate> centerCandidates(
             toWorkPoint(
                 {centroids.at<double>(best_label, 0), centroids.at<double>(best_label, 1)},
                 geometry),
-            0.8);
+            0.6);
     }
 
     const int stride = std::max(6, std::min(geometry.work_width, geometry.work_height) / 28);
@@ -361,7 +361,7 @@ std::vector<CenterCandidate> centerCandidates(
                 toWorkPoint(
                     {centroids.at<double>(label, 0), centroids.at<double>(label, 1)},
                     geometry),
-                0.75);
+                1.2);
         }
     }
 
@@ -569,11 +569,11 @@ std::optional<EvaluatedCenter> evaluateCenter(
 
     double type_bonus = 0.0;
     if (detection.type == IntersectionType::Cross) {
-        type_bonus = 0.12;
+        type_bonus = seed_score >= 1.0 ? 0.18 : 0.12;
     } else if (detection.type == IntersectionType::T) {
-        type_bonus = 0.09;
+        type_bonus = seed_score >= 1.0 ? 0.16 : 0.09;
     } else if (detection.type == IntersectionType::L) {
-        type_bonus = 0.06;
+        type_bonus = seed_score >= 1.0 ? 0.20 : 0.06;
     }
 
     EvaluatedCenter evaluated;

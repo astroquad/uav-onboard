@@ -19,4 +19,10 @@ private:
     common::LineConfig config_;
 };
 
+LineDetection applyMarkerCenterTracking(
+    LineDetection line,
+    const std::vector<MarkerObservation>& markers,
+    int frame_width,
+    int frame_height);
+
 } // namespace onboard::vision

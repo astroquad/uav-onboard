@@ -132,6 +132,19 @@ float lineAngleDeg(const std::vector<cv::Point>& contour)
     return static_cast<float>(std::atan2(line[1], line[0]) * 180.0 / CV_PI);
 }
 
+float markerApproxSidePx(const MarkerObservation& marker)
+{
+    float sum = 0.0f;
+    for (std::size_t index = 0; index < marker.corners_px.size(); ++index) {
+        const auto& lhs = marker.corners_px[index];
+        const auto& rhs = marker.corners_px[(index + 1) % marker.corners_px.size()];
+        const float dx = lhs.x - rhs.x;
+        const float dy = lhs.y - rhs.y;
+        sum += std::sqrt(dx * dx + dy * dy);
+    }
+    return sum / static_cast<float>(marker.corners_px.size());
+}
+
 cv::Mat thresholdMask(const cv::Mat& gray, bool light_line, int configured_threshold)
 {
     cv::Mat mask;
@@ -701,6 +714,59 @@ LineDetection LineDetector::detect(const cv::Mat& image) const
 
     LineMaskBuilder mask_builder(config_);
     return detect(mask_builder.build(image));
+}
+
+LineDetection applyMarkerCenterTracking(
+    LineDetection line,
+    const std::vector<MarkerObservation>& markers,
+    int frame_width,
+    int frame_height)
+{
+    if (markers.empty() || frame_width <= 0 || frame_height <= 0) {
+        return line;
+    }
+
+    const MarkerObservation* best_marker = nullptr;
+    double best_score = std::numeric_limits<double>::infinity();
+    const double center_x = frame_width / 2.0;
+    const double center_y = frame_height / 2.0;
+    const double frame_diag = std::max(1.0, std::hypot(center_x, center_y));
+    for (const auto& marker : markers) {
+        if (marker.id < 0 ||
+            marker.center_px.x < 0.0f ||
+            marker.center_px.x >= frame_width ||
+            marker.center_px.y < 0.0f ||
+            marker.center_px.y >= frame_height) {
+            continue;
+        }
+        const double distance_score =
+            std::hypot(marker.center_px.x - center_x, marker.center_px.y - center_y) / frame_diag;
+        const double size_score =
+            markerApproxSidePx(marker) /
+            std::max(1.0, static_cast<double>(std::min(frame_width, frame_height)));
+        const double score = distance_score - 0.20 * size_score;
+        if (score < best_score) {
+            best_score = score;
+            best_marker = &marker;
+        }
+    }
+    if (best_marker == nullptr) {
+        return line;
+    }
+
+    const float tracking_x = best_marker->center_px.x;
+    const float tracking_y = static_cast<float>(frame_height) / 2.0f;
+    line.detected = true;
+    line.raw_detected = true;
+    line.tracking_point_px = {tracking_x, tracking_y};
+    line.raw_tracking_point_px = line.tracking_point_px;
+    line.centroid_px = line.tracking_point_px;
+    line.center_offset_px = tracking_x - static_cast<float>(frame_width) / 2.0f;
+    line.raw_center_offset_px = line.center_offset_px;
+    line.held = false;
+    line.rejected_jump = false;
+    line.confidence = std::max(line.confidence, 0.75f);
+    return line;
 }
 
 } // namespace onboard::vision

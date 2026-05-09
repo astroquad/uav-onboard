@@ -1,4 +1,6 @@
 #include "common/VisionConfig.hpp"
+#include "vision/ArucoDetector.hpp"
+#include "vision/IntersectionDetector.hpp"
 #include "vision/LineDetector.hpp"
 #include "vision/LineMaskBuilder.hpp"
 
@@ -39,6 +41,8 @@ struct Options {
     double roi_top_ratio = -1.0;
     double lookahead_y_ratio = -1.0;
     double lookahead_band_ratio = -1.0;
+    bool with_aruco = false;
+    bool with_intersection = false;
 };
 
 void printUsage()
@@ -68,6 +72,8 @@ void printUsage()
         << "  --roi-top <ratio>    Override ROI top ratio 0.0..1.0\n"
         << "  --lookahead <ratio>  Override tracking point Y ratio 0.0..1.0\n"
         << "  --band <ratio>       Override lookahead band height ratio 0.0..1.0\n"
+        << "  --with-aruco         Build marker-aware line masks using ArUco detections\n"
+        << "  --intersection       Also run intersection detector\n"
         << "  -h, --help           Show this help\n";
 }
 
@@ -138,6 +144,10 @@ Options parseOptions(int argc, char** argv)
             options.lookahead_y_ratio = parseDouble(argv[++i], options.lookahead_y_ratio);
         } else if (arg == "--band" && i + 1 < argc) {
             options.lookahead_band_ratio = parseDouble(argv[++i], options.lookahead_band_ratio);
+        } else if (arg == "--with-aruco") {
+            options.with_aruco = true;
+        } else if (arg == "--intersection") {
+            options.with_intersection = true;
         } else if (arg == "-h" || arg == "--help") {
             printUsage();
             std::exit(0);
@@ -299,10 +309,27 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    std::vector<onboard::vision::MarkerObservation> markers;
+    if (options.with_aruco) {
+        const onboard::vision::ArucoDetector aruco_detector(config.aruco);
+        markers = aruco_detector.detect(image, 0, 0).markers;
+    }
+
     const onboard::vision::LineMaskBuilder mask_builder(config.line);
-    const auto masks = mask_builder.build(image);
+    const auto masks = options.with_aruco
+        ? mask_builder.build(image, markers, config.line.marker_mask_detect_candidates)
+        : mask_builder.build(image);
     const onboard::vision::LineDetector detector(config.line);
-    const auto line = detector.detect(masks);
+    const auto line = onboard::vision::applyMarkerCenterTracking(
+        detector.detect(masks),
+        markers,
+        image.cols,
+        image.rows);
+    onboard::vision::IntersectionDetection intersection;
+    if (options.with_intersection) {
+        const onboard::vision::IntersectionDetector intersection_detector(config.line);
+        intersection = intersection_detector.detect(masks, line);
+    }
     writeOutputs(options, image, masks, line);
 
     std::cout << std::fixed << std::setprecision(2)
@@ -319,6 +346,22 @@ int main(int argc, char** argv)
               << "contours_found=" << line.contours_found << "\n"
               << "candidates_evaluated=" << line.candidates_evaluated << "\n"
               << "roi_pixels=" << line.roi_pixels << "\n";
+    if (options.with_aruco) {
+        std::cout << "markers=" << markers.size() << "\n";
+        for (const auto& marker : markers) {
+            std::cout << "marker_id=" << marker.id
+                      << " marker_center=(" << marker.center_px.x << ','
+                      << marker.center_px.y << ")\n";
+        }
+    }
+    if (options.with_intersection) {
+        std::cout << "ix_type=" << onboard::vision::intersectionTypeName(intersection.type) << "\n"
+                  << "ix_valid=" << (intersection.valid ? "true" : "false") << "\n"
+                  << "ix_detected=" << (intersection.intersection_detected ? "true" : "false") << "\n"
+                  << "ix_score=" << intersection.score << "\n"
+                  << "ix_center=(" << intersection.center_px.x << ','
+                  << intersection.center_px.y << ")\n";
+    }
 
     return line.detected ? 0 : 3;
 }
