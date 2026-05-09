@@ -875,7 +875,10 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
                 std::max(1, options.vision.camera.fps));
             const auto now = std::chrono::steady_clock::now();
             const auto min_period = std::chrono::microseconds(1000000 / send_fps);
+            const bool send_every_processed_frame =
+                send_fps >= std::max(1, options.vision.camera.fps);
             const bool should_send =
+                send_every_processed_frame ||
                 last_video_sent_time.time_since_epoch().count() == 0 ||
                 now - last_video_sent_time >= min_period;
             if (should_send) {
