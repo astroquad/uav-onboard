@@ -274,6 +274,7 @@ void detectInPaddedRoi(
     cv::aruco::ArucoDetector& detector,
     const cv::Rect& source_rect,
     int pad,
+    bool allow_upscale,
     VisionResult& result)
 {
     if (source_rect.empty()) {
@@ -291,7 +292,10 @@ void detectInPaddedRoi(
         cv::BORDER_CONSTANT | cv::BORDER_ISOLATED,
         cv::Scalar(255));
 
-    for (const double scale : {1.0, 2.0}) {
+    const std::array<double, 2> scales {1.0, 2.0};
+    const int scale_count = allow_upscale ? 2 : 1;
+    for (int scale_index = 0; scale_index < scale_count; ++scale_index) {
+        const double scale = scales[static_cast<std::size_t>(scale_index)];
         cv::Mat detector_input = padded;
         if (scale > 1.0) {
             cv::resize(padded, detector_input, cv::Size(), scale, scale, cv::INTER_CUBIC);
@@ -328,6 +332,7 @@ void appendRoiFallbackMarkers(
     cv::aruco::ArucoDetector& detector,
     int max_components,
     int max_rois,
+    bool allow_upscale,
     VisionResult& result)
 {
     const cv::Mat bright = brightComponentMask(image, gray);
@@ -423,6 +428,7 @@ void appendRoiFallbackMarkers(
                         detector,
                         source_rect,
                         std::max(12, size / 2),
+                        allow_upscale,
                         result);
                 }
             }
@@ -486,6 +492,7 @@ void appendTargetedFallbackMarkers(
                         detector,
                         source_rect,
                         std::max(12, size / 2),
+                        true,
                         result);
                 }
             }
@@ -559,6 +566,7 @@ VisionResult ArucoDetector::detect(
                 detector,
                 config_.fallback_max_components,
                 fallback_max_rois,
+                !isLiveFrameSize(image.size()),
                 result);
         }
     }
