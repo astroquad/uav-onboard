@@ -12,6 +12,7 @@
 #include "vision/LineDetector.hpp"
 #include "vision/LineMaskBuilder.hpp"
 #include "vision/LineStabilizer.hpp"
+#include "vision/MarkerStabilizer.hpp"
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -621,6 +622,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     vision::IntersectionStabilizer intersection_stabilizer(options.vision.line);
     mission::IntersectionDecisionEngine intersection_decision_engine(options.vision.intersection_decision);
     mission::GridCoordinateTracker grid_tracker(options.vision.intersection_decision);
+    vision::MarkerStabilizer marker_stabilizer(options.vision.aruco);
 
     std::cout << "vision_debug_node\n"
               << "  destination: " << options.network.gcs_ip << "\n"
@@ -661,8 +663,6 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     double last_video_submit_ms = 0.0;
     std::uint64_t last_telemetry_bytes = 0;
     protocol::SystemTelemetry last_system = readSystemTelemetry();
-    std::vector<vision::MarkerObservation> cached_markers;
-    int cached_marker_age = 1000000;
     RateMeter capture_rate;
     RateMeter processing_rate;
     auto last_video_sent_time = std::chrono::steady_clock::time_point {};
@@ -706,26 +706,25 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         mission::IntersectionDecision intersection_decision;
         mission::GridNodeEvent grid_node;
         std::vector<vision::MarkerObservation> marker_mask_input;
+        std::vector<vision::MarkerObservation> marker_tracking_input;
 
         if (!image.empty()) {
             if (options.enable_aruco) {
                 const int aruco_interval = std::max(1, options.vision.aruco.detect_interval_frames);
                 const bool run_aruco = (processed_count % aruco_interval) == 0;
+                std::vector<vision::MarkerObservation> fresh_markers;
                 if (run_aruco) {
                     const auto aruco_started = std::chrono::steady_clock::now();
                     const auto aruco_result = aruco_detector.detect(image, frame.frame_id, frame.timestamp_ms);
                     const auto aruco_finished = std::chrono::steady_clock::now();
-                    result.markers = aruco_result.markers;
-                    cached_markers = result.markers;
-                    cached_marker_age = 0;
-                    marker_mask_input = result.markers;
+                    fresh_markers = aruco_result.markers;
+                    marker_mask_input = fresh_markers;
                     aruco_latency_ms = std::chrono::duration<double, std::milli>(
                         aruco_finished - aruco_started).count();
-                } else if (!cached_markers.empty() && cached_marker_age < aruco_interval) {
-                    result.markers = cached_markers;
-                    ++cached_marker_age;
-                } else {
-                    ++cached_marker_age;
+                }
+                result.markers = marker_stabilizer.update(fresh_markers);
+                if (marker_stabilizer.ageFrames() <= aruco_interval) {
+                    marker_tracking_input = result.markers;
                 }
             }
 
@@ -738,14 +737,14 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
                 auto raw_line = line_detector.detect(line_masks);
                 raw_line = vision::applyMarkerCenterTracking(
                     raw_line,
-                    result.markers,
+                    marker_tracking_input,
                     frame.width,
                     frame.height);
                 const auto line_finished = std::chrono::steady_clock::now();
                 result.line = line_stabilizer.update(raw_line, frame.width);
                 result.line = vision::applyMarkerCenterTracking(
                     result.line,
-                    result.markers,
+                    marker_tracking_input,
                     frame.width,
                     frame.height);
                 result.line_detected = result.line.detected;

@@ -124,6 +124,8 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             aruco["full_fallback_interval_frames"].value_or(config.aruco.full_fallback_interval_frames);
         config.aruco.full_fallback_max_rois =
             aruco["full_fallback_max_rois"].value_or(config.aruco.full_fallback_max_rois);
+        config.aruco.hold_frames =
+            aruco["hold_frames"].value_or(config.aruco.hold_frames);
     }
 
     if (const auto line = table["line"]) {

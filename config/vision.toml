@@ -128,3 +128,4 @@ fallback_max_components = 12
 fallback_max_rois = 120
 full_fallback_interval_frames = 12
 full_fallback_max_rois = 4
+hold_frames = 9

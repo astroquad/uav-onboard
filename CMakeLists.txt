@@ -95,6 +95,7 @@ if(BUILD_TOOLS)
             src/vision/LineDetector.cpp
             src/vision/LineMaskBuilder.cpp
             src/vision/LineStabilizer.cpp
+            src/vision/MarkerStabilizer.cpp
             src/vision/OpenCvCameraSource.cpp
         )
         target_include_directories(onboard_vision PUBLIC src)

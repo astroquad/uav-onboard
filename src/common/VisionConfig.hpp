@@ -69,6 +69,7 @@ struct ArucoConfig {
     int fallback_max_rois = 120;
     int full_fallback_interval_frames = 12;
     int full_fallback_max_rois = 4;
+    int hold_frames = 9;
 };
 
 struct LineConfig {

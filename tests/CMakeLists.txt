@@ -13,6 +13,14 @@ target_include_directories(test_line_stabilizer PRIVATE ../src)
 target_link_libraries(test_line_stabilizer PRIVATE onboard_core)
 add_test(NAME line_stabilizer COMMAND test_line_stabilizer)
 
+add_executable(test_marker_stabilizer
+    test_marker_stabilizer.cpp
+    ../src/vision/MarkerStabilizer.cpp
+)
+target_include_directories(test_marker_stabilizer PRIVATE ../src)
+target_link_libraries(test_marker_stabilizer PRIVATE onboard_core)
+add_test(NAME marker_stabilizer COMMAND test_marker_stabilizer)
+
 add_executable(test_intersection_stabilizer
     test_intersection_stabilizer.cpp
     ../src/vision/IntersectionStabilizer.cpp
