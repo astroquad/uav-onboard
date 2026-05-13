@@ -49,6 +49,10 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             camera["autofocus_window"].value_or(config.camera.autofocus_window);
         config.camera.lens_position =
             camera["lens_position"].value_or(config.camera.lens_position);
+        config.camera.focus_absolute =
+            camera["focus_absolute"].value_or(config.camera.focus_absolute);
+        config.camera.focus_device =
+            camera["focus_device"].value_or(config.camera.focus_device);
         config.camera.exposure = camera["exposure"].value_or(config.camera.exposure);
         config.camera.shutter_us = camera["shutter_us"].value_or(config.camera.shutter_us);
         config.camera.gain = camera["gain"].value_or(config.camera.gain);

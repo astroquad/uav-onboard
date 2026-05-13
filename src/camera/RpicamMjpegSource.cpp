@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 
 #ifdef _WIN32
@@ -110,6 +112,28 @@ const char* pipeReadMode()
 #endif
 }
 
+void applyV4l2FocusOverride(const RpicamOptions& options)
+{
+#ifndef _WIN32
+    if (options.focus_absolute < 0 || options.focus_device.empty()) {
+        return;
+    }
+
+    std::ostringstream command;
+    command << "v4l2-ctl -d " << shellQuote(options.focus_device)
+            << " --set-ctrl focus_absolute=" << options.focus_absolute
+            << " >/tmp/astroquad_focus.log 2>&1";
+    const int result = std::system(command.str().c_str());
+    if (result != 0) {
+        std::cerr << "warning: failed to set V4L2 focus_absolute="
+                  << options.focus_absolute << " on " << options.focus_device
+                  << "; see /tmp/astroquad_focus.log\n";
+    }
+#else
+    (void)options;
+#endif
+}
+
 } // namespace
 
 RpicamMjpegSource::~RpicamMjpegSource()
@@ -122,6 +146,8 @@ bool RpicamMjpegSource::open(const RpicamOptions& options)
     close();
     options_ = options;
     buffer_.clear();
+
+    applyV4l2FocusOverride(options);
 
     const std::string command = buildCommand(options);
     pipe_ = popen(command.c_str(), pipeReadMode());

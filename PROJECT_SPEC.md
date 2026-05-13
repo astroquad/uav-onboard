@@ -336,8 +336,10 @@ width = 960
 height = 720
 fps = 12
 jpeg_quality = 45
-autofocus_mode = "manual"
-lens_position = 0.67
+autofocus_mode = ""
+lens_position = -1.0
+focus_absolute = 1984
+focus_device = "/dev/v4l-subdev1"
 exposure = "sport"
 
 [debug_video]

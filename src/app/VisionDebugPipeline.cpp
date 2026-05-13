@@ -591,6 +591,8 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     camera_options.autofocus_speed = options.vision.camera.autofocus_speed;
     camera_options.autofocus_window = options.vision.camera.autofocus_window;
     camera_options.lens_position = options.vision.camera.lens_position;
+    camera_options.focus_absolute = options.vision.camera.focus_absolute;
+    camera_options.focus_device = options.vision.camera.focus_device;
     camera_options.exposure = options.vision.camera.exposure;
     camera_options.shutter_us = options.vision.camera.shutter_us;
     camera_options.gain = options.vision.camera.gain;

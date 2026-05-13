@@ -17,6 +17,8 @@ struct CameraConfig {
     std::string autofocus_speed = "normal";
     std::string autofocus_window;
     double lens_position = 0.67;
+    int focus_absolute = -1;
+    std::string focus_device = "/dev/v4l-subdev1";
     std::string exposure = "sport";
     int shutter_us = 0;
     double gain = 0.0;

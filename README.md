@@ -89,14 +89,16 @@ rpicam-vid -t 5000 --nopreview --codec mjpeg --width 640 --height 480 --framerat
 Focus smoke tests:
 
 ```bash
-rpicam-still -t 1000 --nopreview --autofocus-mode continuous -o test_data/images/focus_continuous.jpg
-rpicam-still -t 1000 --nopreview --autofocus-mode auto -o test_data/images/focus_auto.jpg
-rpicam-still -t 1000 --nopreview --autofocus-mode manual --lens-position 0.67 -o test_data/images/focus_manual_067.jpg
+rpicam-hello -t 0 --autofocus-mode manual --lens-position 0 --info-text "lp %lp focus %focus"
+v4l2-ctl -d /dev/v4l-subdev1 --list-ctrls-menus
+v4l2-ctl -d /dev/v4l-subdev1 --set-ctrl focus_absolute=1984
+rpicam-still -t 1000 --nopreview -o test_data/images/focus_v4l2_1984.jpg
 ```
 
-Mission-like runs should prefer stable camera settings over continuous visual
-beauty. Continuous autofocus can hunt while the UAV is moving; manual lens
-position or one-shot autofocus should be compared at the actual flight height.
+On the current IMX519 setup, libcamera reports no AF algorithm, so
+`--lens-position` may show `lp -1.00` and have no effect. The lens hardware is
+available as `/dev/v4l-subdev1` with `focus_absolute`; set it through
+`camera.focus_absolute` in `config/vision.toml`.
 
 The older OpenCV camera smoke tool is still available, but CSI cameras on
 Raspberry Pi OS are validated primarily through `rpicam-*`:
@@ -315,9 +317,10 @@ Latency and stability defaults are configured in `config/vision.toml`:
 - `camera.jpeg_quality = 45`: MJPEG compression is intentionally moderate
   because the competition marker is large enough for detection at the planned
   2m altitude, and lower JPEG size reduces decode and optional UDP video cost.
-- `camera.autofocus_mode = "manual"`, `camera.lens_position = 0.67`: initial
-  mission-like focus default near 1.5m. For bench ArUco tests, override with
-  `--lens-position <1/distance_m>` or edit `config/vision.toml`.
+- `camera.focus_absolute = 1984`, `camera.focus_device = "/dev/v4l-subdev1"`:
+  current IMX519 focus path. This bypasses rpicam `--lens-position`, which is
+  ignored on the current Pi image because libcamera has no AF algorithm for
+  this module.
 - `camera.exposure = "sport"`: initial setting to reduce motion blur.
 - `line.process_width = 480`: line detection keeps more high-altitude line
   pixels than the previous 320px setting while still running on a resized ROI.

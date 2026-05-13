@@ -21,6 +21,8 @@ struct RpicamOptions {
     std::string autofocus_speed;
     std::string autofocus_window;
     double lens_position = -1.0;
+    int focus_absolute = -1;
+    std::string focus_device = "/dev/v4l-subdev1";
     std::string exposure;
     int shutter_us = 0;
     double gain = 0.0;
