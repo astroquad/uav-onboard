@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
 Version: v1.7
-Last updated: 2026-05-01
+Last updated: 2026-05-13
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 ## 1. Channels
@@ -386,7 +386,34 @@ When onboard is configured with `gcs.ip = "255.255.255.255"` or `0.0.0.0`, video
 
 This avoids manual laptop IP entry for normal same-LAN testing. If discovery fails, onboard falls back to the configured destination IP and port.
 
-## 6. Command Channel
+## 6. Hardware and Autopilot Integration Notes
+
+This section is not a wire-format schema change. It records the current MVP hardware and control assumptions so telemetry, command, and MAVLink work stay aligned.
+
+| Device | Connection | Role |
+|---|---|---|
+| Pixhawk1 | Airframe center | Flight controller. Attitude stabilization, motor output, sensor fusion, mode management. |
+| MicoAir MTF-01 Optical Flow & Range Sensor | Pixhawk TELEM2 or SERIAL4/5 | GPS-denied horizontal motion estimate and floor distance. Optical Flow + ToF range input for ArduPilot/EKF. |
+| Raspberry Pi 4 | Pixhawk USB or TELEM1 | OpenCV vision processing, line/intersection/ArUco decisions, MAVLink control command sender. |
+| IMX519 Camera | Raspberry Pi CSI | Downward image input for line center, line angle, and ArUco marker detection. |
+| Power Module | Pixhawk POWER | Pixhawk power and battery voltage/current measurement. |
+| RC Receiver | Pixhawk RC IN | Manual takeover and emergency intervention. |
+| ESC/Motor/PDB | Pixhawk MAIN OUT + power distribution | Motor actuation. |
+| TFmini Plus | Excluded from default build | Backup rangefinder only if MTF-01 range is unstable. |
+| External Compass | Excluded | Initial plan uses Pixhawk internal compass/IMU. |
+
+Primary control mode is GUIDED velocity control through MAVLink `SET_POSITION_TARGET_LOCAL_NED` using body-frame velocity setpoints. This depends on a stable ArduPilot local estimate from optical flow and range data.
+
+Fallback control mode is ALT_HOLD with `RC_CHANNELS_OVERRIDE`. It is reserved for degraded/manual-like testing when GUIDED velocity control or the local estimate is unreliable. Mission logic must stay shared; only the output backend should switch between GUIDED velocity and RC override.
+
+The MAVLink transport must be configurable:
+
+- SITL/Gazebo: UDP or TCP endpoint from the onboard process to ArduPilot SITL.
+- Real Pixhawk: serial or USB MAVLink endpoint from Raspberry Pi 4 to Pixhawk.
+
+The protocol-level expectation is that onboard telemetry eventually reports at least the active control backend, ArduPilot mode, armed state, heartbeat health, battery state, altitude/range health, and failsafe state. Those fields are not yet defined in v1.7.
+
+## 7. Command Channel
 
 The command channel is planned but not implemented in this milestone. Reserved command message types:
 
@@ -395,21 +422,22 @@ The command channel is planned but not implemented in this milestone. Reserved c
 - `emergency_land`
 - `set_marker_count`
 - `request_status`
+- `set_control_backend`
 
 Command messages will use JSON with the same common top-level fields and will receive a `CMD_ACK` telemetry response.
 
-## 7. Current Executables
+## 8. Current Executables
 
 | Executable | Repo | Purpose |
 |---|---|---|
-| `uav_onboard` | onboard | Basic telemetry bring-up sender. |
+| `uav_onboard` | onboard | Current basic telemetry bring-up sender; final onboard mission composition root for vision, mission, control, safety, telemetry, and MAVLink. |
 | `video_streamer` | onboard | Raw MJPEG streaming smoke tool. |
-| `vision_debug_node` | onboard | Pi camera capture, ArUco/line/intersection detection, raw video send, vision telemetry send. |
-| `uav_gcs` | GCS | Basic telemetry receiver. |
+| `vision_debug_node` | onboard | Pi camera capture, ArUco/line/intersection detection, local grid-node decision, raw video send, vision telemetry send. |
+| `uav_gcs` | GCS | Current basic telemetry receiver; final GCS composition root for mission dashboard, command sender, telemetry/video/logging, and safety status. |
 | `uav_gcs_video` | GCS | Raw MJPEG video viewer. |
-| `uav_gcs_vision_debug` | GCS | MJPEG video viewer with vision log window and GCS-side marker/line overlay. |
+| `uav_gcs_vision_debug` | GCS | Vision bring-up/debug executable with MJPEG video viewer, vision log window, and GCS-side marker/line/intersection overlay. |
 
-## 8. Change Log
+## 9. Change Log
 
 | Version | Date | Change |
 |---|---|---|
@@ -423,3 +451,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.5 | 2026-04-29 | No schema change; synchronized example defaults to the performance profile: 960x720 camera, 5 FPS opt-in debug video, and 150us chunk pacing. |
 | v1.6 | 2026-04-30 | Added structured `vision.intersection`, branch ray metadata, `debug.intersection_latency_ms`, and GCS intersection overlay/log support. |
 | v1.7 | 2026-05-01 | Added `vision.intersection_decision`, `vision.grid_node`, branch evidence telemetry, local grid node coordinates, and `debug.intersection_decision_latency_ms`. |
+| v1.7 | 2026-05-13 | No schema change; documented MVP hardware, GUIDED velocity primary control, RC override fallback, and SITL/real-Pixhawk transport assumptions. |

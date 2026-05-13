@@ -3,7 +3,7 @@
 > 제24회 한국로봇항공기경연대회 중급부문 멀티콥터형 드론 실내 조난자 탐색 온보드 소프트웨어 기준 문서  
 > **이 문서는 팀원과 코딩 에이전트가 공통으로 참조하는 Single Source of Truth입니다.**
 
-최종 수정: 2026-04-29
+최종 수정: 2026-05-13
 
 ---
 
@@ -11,11 +11,22 @@
 
 GPS 없는 실내 환경에서, 하향 카메라 기반 라인트레이싱과 ArUco 마커 인식을 통해 격자 구역 내 조난자(마커)를 탐색하고, 탐색 결과를 역순으로 재방문한 뒤 자동 복귀·착륙하는 드론 온보드 소프트웨어를 개발한다.
 
-현재 레포는 최종 미션 소프트웨어 전체 중 **카메라 입력, onboard vision, telemetry, debug video bring-up** 단계까지 구현되어 있다. Mission state machine, grid map, Pixhawk/MAVLink control, safety/failsafe는 목표 아키텍처로 유지하되 아직 placeholder 상태다.
+현재 레포는 최종 미션 소프트웨어 전체 중 **카메라 입력, onboard vision, telemetry, debug video bring-up, intersection decision, local grid-node telemetry** 단계까지 구현되어 있다. 비전 인식은 MVP 기준 거의 완료된 것으로 보고, 다음 핵심 작업은 mission state machine, Pixhawk/MAVLink control, safety/failsafe를 연결하는 것이다.
+
+최종 운용 실행 파일은 `./build/uav_onboard`다. 현재 `uav_onboard`는 basic telemetry bring-up sender에 가깝지만, 최종적으로는 vision, mission, control, safety, telemetry, MAVLink를 조립하는 onboard composition root가 되어야 한다. `vision_debug_node`는 계속 비전 bring-up/debug 실행 파일로 유지한다.
+
+문서 계층:
+
+- 전체 시스템 공통 기준은 `development-log/SYSTEM_SPEC.md`를 따른다.
+- 72시간/1주일 MVP 계획은 `development-log/MVP_PLAN.md`를 따른다.
+- 이 문서는 `uav-onboard` repo의 책임, 모듈, 실행 파일, 빌드/테스트 기준만 상세히 다룬다.
+- `development-log/RESEARCH.md`와 `development-log/PLAN.md`는 매 스텝마다 바뀌는 작업용 scratchpad다.
 
 ---
 
 ## 2. 미션 시나리오 요약
+
+최종 목표 시나리오는 full grid mission이다.
 
 ```text
 [이륙] -> [라인 추종, 격자 진입] -> [Snake 탐색, 교차점마다 ArUco 인식]
@@ -29,13 +40,31 @@ GPS 없는 실내 환경에서, 하향 카메라 기반 라인트레이싱과 Ar
 5. **역순 재방문**: 발견된 마커를 번호 역순으로 재방문한다.
 6. **복귀 및 착륙**: 출발점으로 복귀 후 자동 착륙한다.
 
+### 2.1 Near-Term MVP Scope
+
+72시간 실기체 MVP는 최종 목표의 부분 집합이다.
+
+```text
+[MTF-01 bring-up] -> [자동 이륙] -> [짧은 직선 라인 추종] -> [라인 끝/timeout 안전 착륙]
+```
+
+MVP에서 제외하는 것:
+
+- full snake grid exploration
+- ArUco marker revisit
+- official coordinate conversion
+- GCS full command UI
+- 교차점 회전/분기 의사결정
+
+이 기능들은 최종 목표에 남기되, 첫 실기체 자동비행 gate의 선행 조건으로 두지 않는다.
+
 ---
 
 ## 3. 이 레포의 책임 범위
 
 | 구분 | 내용 |
 |---|---|
-| 담당 | Pi camera frame 획득, ArUco/line detection, vision telemetry 생성, optional raw debug video 송신, 추후 mission state/grid/path/control/MAVLink/safety |
+| 담당 | Pi camera frame 획득, ArUco/line/intersection detection, local grid-node 판단, vision telemetry 생성, optional raw debug video 송신, mission state/grid/path/control/MAVLink/safety |
 | 미담당 | 자세 안정화와 모터 제어는 ArduPilot/Pixhawk 담당, GCS UI/overlay/log window는 `uav-gcs` 담당 |
 
 중요한 역할 분리:
@@ -53,16 +82,19 @@ GPS 없는 실내 환경에서, 하향 카메라 기반 라인트레이싱과 Ar
 |---|---|---|
 | Raspberry Pi camera capture | 구현됨 | `src/camera/RpicamMjpegSource.*` |
 | UDP telemetry sender | 구현됨 | `src/network/UdpTelemetrySender.*` |
-| Telemetry JSON v1.5 serialization | 구현됨 | `src/protocol/TelemetryMessage.*` |
+| Telemetry JSON v1.7 serialization | 구현됨 | `src/protocol/TelemetryMessage.*` |
 | UDP MJPEG debug video chunk 송신 | 구현됨 | `src/video/*` |
 | GCS discovery 수신 후 video unicast | 구현됨 | `tools/vision_debug_node.cpp`, `tools/video_streamer.cpp` |
 | ArUco marker detection | 구현됨 | `src/vision/ArucoDetector.*` |
-| Line tracing MVP | 구현됨 | `src/vision/LineDetector.*` |
+| Marker stabilization | 구현됨 | `src/vision/MarkerStabilizer.*` |
+| Line tracing MVP | 구현됨 | `src/vision/LineMaskBuilder.*`, `src/vision/LineDetector.*` |
 | Line stabilizer | 구현됨 | `src/vision/LineStabilizer.*` |
+| Intersection classifier/stabilizer | 구현됨 | `src/vision/IntersectionDetector.*`, `src/vision/IntersectionStabilizer.*` |
+| Intersection decision/local grid node | 구현됨 | `src/mission/IntersectionDecision.*`, `src/mission/GridCoordinateTracker.*` |
 | Pi 4 + IMX519 camera/focus/exposure config | 구현됨 | `config/vision.toml`, `src/common/VisionConfig.*` |
 | System/camera/debug telemetry | 구현됨 | `src/app/VisionDebugPipeline.cpp` |
-| Mission state machine | 미구현 | `src/mission/.gitkeep` |
-| Grid map/path planner | 미구현 | `src/mission/.gitkeep` |
+| Full mission state machine | 미구현 | planned in `src/mission/` |
+| Full grid map/path planner/revisit policy | 미구현 | planned in `src/mission/` |
 | Pixhawk/MAVLink serial | 미구현 | `src/autopilot/.gitkeep`, `config/autopilot.toml` |
 | Control module | 미구현 | `src/control/.gitkeep` |
 | Safety/failsafe | 미구현 | `src/safety/.gitkeep`, `config/safety.toml` |
@@ -74,15 +106,21 @@ GPS 없는 실내 환경에서, 하향 카메라 기반 라인트레이싱과 Ar
 
 ### 5.1 Target Hardware
 
-| 항목 | 현재 기준 |
-|---|---|
-| Companion computer | Raspberry Pi 4 Model B |
-| Camera | IMX519-78 16MP AF CSI camera |
-| Previous bring-up baseline | Raspberry Pi Zero 2 W + ZeroCam 계열. 현재 기본값은 Pi 4 + IMX519 기준 |
-| Flight controller | Pixhawk 1 / 2.4.8 예정 |
-| Autopilot | ArduPilot ArduCopter 예정 |
-| Pi-GCS 통신 | Wi-Fi UDP telemetry/video, TCP command 예정 |
-| Pi-Pixhawk 통신 | UART MAVLink 예정 |
+| 모델/장치 | 연결 위치 | 역할 |
+|---|---|---|
+| Pixhawk1 | 기체 중앙 | 비행 제어기. 자세 안정화, 모터 출력, 센서 융합, 모드 관리 |
+| MicoAir MTF-01 Optical Flow & Range Sensor | Pixhawk TELEM2 또는 SERIAL4/5 | GPS 없이 수평 이동 추정 + 바닥 거리 측정. Optical Flow + ToF range 통합 |
+| Raspberry Pi 4 | Pixhawk USB 또는 TELEM1 | OpenCV 비전 처리, 라인/교차점/ArUco 판단, MAVLink 제어 명령 전송 |
+| IMX519 Camera | Raspberry Pi CSI | 하향 영상 입력. 라인 중심, 라인 각도, ArUco 마커 인식 |
+| Power Module | Pixhawk POWER | Pixhawk 전원 공급, 배터리 전압/전류 측정 |
+| RC Receiver | Pixhawk RC IN | 수동 조종 takeover, 비상 개입 |
+| ESC/Motor/PDB | Pixhawk MAIN OUT + 전원분배 | 실제 모터 구동 |
+| TFmini Plus | 기본 구성에서는 제외 | MTF-01 range가 불안정할 때 예비 rangefinder |
+| External Compass | 제외 | 일단 Pixhawk 내부 compass/IMU 기준으로 진행 |
+
+제어 primary는 ArduPilot `GUIDED` mode에서 MAVLink `SET_POSITION_TARGET_LOCAL_NED` body-frame velocity setpoint를 보내는 방식이다. 이 방식은 MTF-01 optical flow/range 기반 local estimate가 안정적이어야 한다. `ALT_HOLD + RC_CHANNELS_OVERRIDE`는 fallback backend로만 둔다.
+
+MTF-01 bring-up은 제어 구현 전 gate다. ArduPilot에서 optical flow와 rangefinder가 안정적으로 들어오지 않으면 GUIDED velocity 기반 line-follow 비행은 진행하지 않는다.
 
 ### 5.2 Software Dependencies
 
@@ -106,20 +144,24 @@ GPS 없는 실내 환경에서, 하향 카메라 기반 라인트레이싱과 Ar
 
 ### 6.1 Target Architecture
 
+ROS를 직접 쓰지는 않지만, 목표 구조는 ROS node graph와 비슷하게 모듈 간 입력/출력 타입만 공유하고 내부 상태를 침범하지 않는 형태다.
+
 ```text
-Camera
-  -> Vision
-  -> Mission State Machine
-  -> Control
-  -> Autopilot/MAVLink
-  -> Pixhawk/ArduPilot
+CameraSource
+  -> VisionPipeline
+  -> MissionStateMachine
+  -> GuidanceController
+  -> ControlBackend
+  -> AutopilotMavlinkAdapter
 
 Support:
-  Telemetry -> GCS
-  Command <- GCS
-  Safety/Failsafe
-  Logging
+  SafetyMonitor observes Vision/Mission/Autopilot/GCS state
+  TelemetryPublisher observes state snapshots
+  CommandReceiver injects high-level mission commands
+  DebugVideoPublisher observes camera frames only
 ```
+
+`vision_debug_node`와 최종 `uav_onboard`는 같은 `VisionPipeline`을 재사용할 수 있다. 차이는 composition root다. `vision_debug_node`는 vision + telemetry + optional debug video만 묶고, `uav_onboard`는 vision + mission + control + safety + telemetry + MAVLink를 묶는다.
 
 ### 6.2 Current Implemented Debug Pipeline
 
@@ -136,7 +178,7 @@ IMX519 camera
   -> optional raw MJPEG UDP debug video to GCS
 ```
 
-`vision_debug_node`가 현재 통합 bring-up 실행 파일이다. 기본값은 metadata-only이며, GCS camera/overlay 확인이 필요할 때만 `--video`를 붙인다.
+`vision_debug_node`가 현재 통합 bring-up/debug 실행 파일이다. 기본값은 metadata-only이며, GCS camera/overlay 확인이 필요할 때만 `--video`를 붙인다. 제어 코드는 `VisionDebugPipeline` 내부에 넣지 않는다. vision loop는 typed output을 만들고, mission/control runtime이 그 결과를 구독하거나 callback으로 받아 처리한다.
 
 ---
 
@@ -161,7 +203,9 @@ IMX519 camera
 
 - 상태머신 운용, 격자 좌표 갱신, marker 저장, path planning을 담당한다.
 - Snake 탐색과 역순 marker revisit을 구현해야 한다.
-- 현재는 directory placeholder만 존재한다.
+- 현재 `IntersectionDecision`과 `GridCoordinateTracker`는 구현되어 있으나, 전체 mission state machine과 marker revisit policy는 아직 구현 전이다.
+- 72시간 MVP에서는 축소 상태머신 `IDLE`, `TAKEOFF`, `LINE_FOLLOW`, `LAND`, `COMPLETE`, `ABORT`만 사용한다.
+- Full snake/revisit 상태는 최종 목표에는 남기되 MVP 이후에 활성화한다.
 
 ### 7.4 Control
 
@@ -171,15 +215,17 @@ IMX519 camera
 
 ### 7.5 Autopilot / MAVLink
 
-- Pixhawk와의 MAVLink 직렬 통신만 담당한다.
+- Pixhawk와의 MAVLink 통신만 담당한다.
 - Heartbeat, mode, arm/takeoff/land, velocity setpoint, battery/status 수신을 구현해야 한다.
-- `config/autopilot.toml`은 `/dev/serial0`, `115200`, MAVLink system/component id 후보값을 담고 있다.
+- `config/autopilot.toml`은 현재 `/dev/serial0`, `115200`, MAVLink system/component id 후보값을 담고 있다.
+- SITL/Gazebo 개발에서는 UDP/TCP endpoint를 사용하고, 실기체에서는 serial/USB endpoint를 사용한다. Mission/control 코드는 endpoint 종류를 몰라야 한다.
 
 ### 7.6 Telemetry and Command
 
 - Telemetry는 UDP JSON으로 GCS에 송신한다.
 - Debug vision 단계에서는 processed camera frame마다 telemetry를 송신해 video frame과 `frame_seq`로 맞출 수 있게 한다.
 - Command channel은 TCP JSON으로 계획되어 있으며 아직 구현 전이다.
+- 72시간 MVP에서는 GCS command channel을 필수 구현 범위에서 제외한다. 시작/중단은 onboard CLI/config, RC takeover, Pixhawk mode/land 절차를 우선 사용한다.
 
 ### 7.7 Debug Video
 
@@ -257,7 +303,7 @@ Any state -> EMERGENCY_LAND
 - `uav-onboard/docs/PROTOCOL.md`
 - `uav-gcs/docs/PROTOCOL.md`
 
-현재 version은 v1.5이며 JSON top-level `protocol_version`은 integer `1`이다.
+현재 문서 version은 v1.7이며 JSON top-level `protocol_version`은 호환성을 위해 integer `1`이다.
 
 채널:
 
@@ -406,7 +452,7 @@ Core source:
 
 | 파일 | 역할 |
 |---|---|
-| `src/main.cpp` | basic telemetry bring-up app `uav_onboard` |
+| `src/main.cpp` | 현재 basic telemetry bring-up app `uav_onboard`; 최종 mission runtime composition root로 확장 예정 |
 | `src/app/VisionDebugPipeline.*` | current integrated camera/vision/telemetry/debug-video pipeline |
 | `src/camera/*` | rpicam MJPEG capture and frame model |
 | `src/common/*` | config parsing and time utility |
@@ -516,6 +562,12 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
+최종 onboard runtime 목표:
+
+```bash
+./build/uav_onboard --config config
+```
+
 Metadata-only vision run:
 
 ```bash
@@ -542,16 +594,16 @@ ctest --test-dir build-tests --output-on-failure
 
 | 순서 | 작업 | 이유/검증 |
 |---:|---|---|
-| 1 | 실제 경기장 조건에서 line/ArUco metadata-only 성능 기록 | 현재 vision loop 기준선 확보 |
-| 2 | IMX519 focus/exposure 고정값 후보 확정 | 비행 중 focus hunting 방지 |
-| 3 | IntersectionCandidate telemetry 추가 | line following과 교차점 판단 분리 |
-| 4 | Mission/Grid/MarkerMap data model 구현 | Snake 탐색과 revisit 기반 |
-| 5 | MAVLink serial adapter 구현 | Pixhawk 연결 준비 |
-| 6 | Control module 구현 | line offset/angle -> velocity/yaw 명령 |
-| 7 | Safety monitor 구현 | line/GCS/Pixhawk/battery timeout |
-| 8 | Command channel 구현 | GCS START/ABORT/EMERGENCY LAND |
+| 1 | 비전 기준선 freeze와 smoke 재검증 | 이미 완성된 vision path를 안정 기준으로 고정 |
+| 2 | MAVLink adapter 구현 | SITL/Pixhawk 연결 준비, heartbeat/mode/arm/takeoff/land/velocity |
+| 3 | GUIDED velocity control backend 구현 | A안 primary 제어. line offset/angle -> body velocity/yaw |
+| 4 | RC override fallback backend 구현 | B안 fallback. mission logic은 공유하고 출력만 교체 |
+| 5 | `uav_onboard` mission composition root 확장 | Vision/Mission/Control/Safety/Telemetry/MAVLink 조립 |
+| 6 | Mission state machine 구현 | TAKEOFF/LINE_FOLLOW/GRID_EXPLORE/RETURN/LAND |
+| 7 | Safety monitor 구현 | line/GCS/Pixhawk/battery/RC takeover timeout |
+| 8 | Command channel 구현 | GCS START/ABORT/EMERGENCY LAND/backend 선택 |
 | 9 | File logging 구현 | 비행 후 재현과 보고서 자료 |
-| 10 | End-to-end indoor bench test | 실제 Pixhawk 연결 통합 검증 |
+| 10 | SITL -> props-off bench -> low-altitude grid subset 테스트 | 단계별 통합 검증 |
 
 ---
 

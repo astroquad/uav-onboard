@@ -20,6 +20,42 @@ but new camera defaults and bring-up notes assume the Pi 4 IMX519 setup.
 - `docs/`: design notes and protocol reference
 - `logs/`: runtime logs
 
+## Executable Roles
+
+The onboard codebase should keep debug, staging, and final mission programs
+separate while sharing the same libraries.
+
+Current executables:
+
+- `uav_onboard`: current basic telemetry bring-up sender. This is the final
+  onboard composition root target and should eventually assemble vision,
+  mission, control, safety, telemetry, and MAVLink.
+- `vision_debug_node`: vision bring-up/debug program. It owns camera capture,
+  detector execution, telemetry, and optional debug video. It must not grow
+  MAVLink control logic.
+- `video_streamer`: raw MJPEG video transport smoke tool.
+- `line_detector_tuner`, `aruco_detector_tester`, `grid_image_smoke`,
+  `marker_grid_replay`: offline vision tuning and regression tools.
+
+Allowed staging executables:
+
+- `mission_node` or `line_follow_node`: temporary MVP executables for
+  auto-takeoff, short straight line following, and safe landing. These are
+  acceptable while the mission runtime is still being assembled, but the stable
+  result should be folded back into `uav_onboard`.
+
+Code reuse rule:
+
+- Do not copy detector or debug pipeline code into a mission executable.
+- Split reusable detector execution into a `VisionPipeline`/`VisionRuntime`
+  style library and link it from both `vision_debug_node` and the mission
+  staging executable.
+- CMake target linking is the mechanism for sharing compiled modules, but it is
+  not enough by itself if the runtime loop remains trapped inside
+  `VisionDebugPipeline`.
+- `VisionPipeline` should produce typed vision output. Mission, control,
+  safety, and MAVLink code consume that output outside the vision module.
+
 ## Build
 
 On a clean Raspberry Pi OS Lite 64-bit install, set up build dependencies first:
@@ -244,6 +280,30 @@ classifier. It uses a short branch-evidence window to accept topology, keeps
 node events, and reports `front_available`, `turn_candidate`, `center_y_norm`,
 `approach_phase`, and `overshoot_risk`. These fields are telemetry only; they
 do not command the flight controller.
+
+## Line-Follow MVP Direction
+
+The near-term flight MVP is intentionally smaller than the full grid mission:
+
+```text
+MTF-01 bring-up -> auto takeoff -> short straight line follow -> safe landing
+```
+
+The reduced mission state machine is:
+
+```text
+IDLE -> TAKEOFF -> LINE_FOLLOW -> LAND -> COMPLETE
+any state -> ABORT
+```
+
+Full snake exploration, marker revisit, and official coordinate conversion are
+outside this MVP. They should remain in the long-term mission design, but they
+should not be required before the first short real-aircraft line-follow test.
+
+The first line-follow program may be a temporary `mission_node` or
+`line_follow_node` target. It should still reuse the shared vision library and
+should not duplicate `vision_debug_node` detector code. Once stable, the same
+runtime should become part of `uav_onboard`.
 
 Latency and stability defaults are configured in `config/vision.toml`:
 
