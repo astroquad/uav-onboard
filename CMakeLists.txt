@@ -123,10 +123,22 @@ endif()
 option(BUILD_TOOLS "Build onboard development tools" ON)
 if(BUILD_TOOLS)
     find_package(OpenCV QUIET COMPONENTS core imgcodecs imgproc videoio aruco)
+    find_package(gz-msgs10 QUIET CONFIG)
+    find_package(gz-transport13 QUIET CONFIG)
 
     if(OpenCV_FOUND)
+        set(ONBOARD_GAZEBO_LIBS "")
+        if(gz-msgs10_FOUND AND gz-transport13_FOUND)
+            set(ONBOARD_GAZEBO_LIBS
+                gz-msgs10::gz-msgs10
+                gz-transport13::gz-transport13
+            )
+        endif()
+
         add_library(onboard_vision STATIC
             src/vision/ArucoDetector.cpp
+            src/vision/FakeFrameSource.cpp
+            src/vision/GazeboCameraSource.cpp
             src/vision/IntersectionDetector.cpp
             src/vision/IntersectionStabilizer.cpp
             src/vision/LineDetector.cpp
@@ -134,9 +146,27 @@ if(BUILD_TOOLS)
             src/vision/LineStabilizer.cpp
             src/vision/MarkerStabilizer.cpp
             src/vision/OpenCvCameraSource.cpp
+            src/vision/RpicamFrameSource.cpp
+            src/vision/VisionProcessor.cpp
         )
         target_include_directories(onboard_vision PUBLIC src)
-        target_link_libraries(onboard_vision PUBLIC onboard_core ${OpenCV_LIBS})
+        target_link_libraries(onboard_vision PUBLIC
+            onboard_core
+            onboard_video
+            ${OpenCV_LIBS}
+            ${ONBOARD_GAZEBO_LIBS}
+        )
+        if(ONBOARD_GAZEBO_LIBS)
+            target_compile_definitions(onboard_vision PUBLIC ONBOARD_HAVE_GAZEBO_TRANSPORT=1)
+        endif()
+
+        if(TARGET line_follow_node)
+            target_sources(line_follow_node PRIVATE
+                src/app/VisionDebugPublisher.cpp
+            )
+            target_link_libraries(line_follow_node PRIVATE onboard_vision onboard_video)
+            target_compile_definitions(line_follow_node PRIVATE ONBOARD_LINE_FOLLOW_HAS_VISION=1)
+        endif()
 
         add_executable(camera_preview
             tools/camera_preview.cpp
@@ -163,6 +193,7 @@ if(BUILD_TOOLS)
         add_executable(vision_debug_node
             tools/vision_debug_node.cpp
             src/app/VisionDebugPipeline.cpp
+            src/app/VisionDebugPublisher.cpp
         )
         target_include_directories(vision_debug_node PRIVATE src)
         target_link_libraries(vision_debug_node PRIVATE onboard_core onboard_video onboard_vision)

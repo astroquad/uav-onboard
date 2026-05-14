@@ -32,8 +32,21 @@ LineFollowMissionState LineFollowMission::update(const LineFollowMissionInput& i
         if (input.land_requested) {
             landing_reason_ = "safety land";
             transition(LineFollowMissionState::Land, input.now);
+        } else if (input.marker_detected && input.marker_centered) {
+            transition(LineFollowMissionState::MarkerHover, input.now);
         } else if (elapsed >= config_.line_follow_duration_s) {
             landing_reason_ = "duration complete";
+            transition(LineFollowMissionState::Land, input.now);
+        }
+    }
+
+    if (state_ == LineFollowMissionState::MarkerHover) {
+        const auto elapsed = std::chrono::duration<double>(input.now - state_entered_).count();
+        if (input.land_requested) {
+            landing_reason_ = "safety land";
+            transition(LineFollowMissionState::Land, input.now);
+        } else if (elapsed >= config_.marker_hover_s) {
+            landing_reason_ = "marker hover complete";
             transition(LineFollowMissionState::Land, input.now);
         }
     }
@@ -69,6 +82,8 @@ const char* toString(LineFollowMissionState state)
         return "TAKEOFF";
     case LineFollowMissionState::LineFollow:
         return "LINE_FOLLOW";
+    case LineFollowMissionState::MarkerHover:
+        return "MARKER_HOVER";
     case LineFollowMissionState::Land:
         return "LAND";
     case LineFollowMissionState::Complete:

@@ -585,9 +585,9 @@ GCS camera/overlay까지 확인:
 Tests:
 
 ```bash
-cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
-cmake --build build-tests
-ctest --test-dir build-tests --output-on-failure
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 ---

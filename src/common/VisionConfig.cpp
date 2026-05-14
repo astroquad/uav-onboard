@@ -72,6 +72,17 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.camera.rotation = camera["rotation"].value_or(config.camera.rotation);
     }
 
+    if (const auto source = table["source"]) {
+        config.source.gazebo_topic =
+            source["gazebo_topic"].value_or(config.source.gazebo_topic);
+        config.source.read_timeout_ms =
+            source["read_timeout_ms"].value_or(config.source.read_timeout_ms);
+        config.source.fake_line_offset_px =
+            source["fake_line_offset_px"].value_or(config.source.fake_line_offset_px);
+        config.source.fake_line_angle_deg =
+            source["fake_line_angle_deg"].value_or(config.source.fake_line_angle_deg);
+    }
+
     if (const auto video = table["video"]) {
         config.video.width = video["width"].value_or(config.video.width);
         config.video.height = video["height"].value_or(config.video.height);

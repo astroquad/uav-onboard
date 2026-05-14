@@ -31,6 +31,12 @@ hflip = false
 vflip = false
 rotation = 0
 
+[source]
+gazebo_topic = "/world/astroquad_iris_vision/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image"
+read_timeout_ms = 1000
+fake_line_offset_px = 0.0
+fake_line_angle_deg = 0.0
+
 [video]
 # Legacy video defaults kept for older tooling/config compatibility.
 # Current rpicam capture uses [camera], and best-effort GCS debug video pacing

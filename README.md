@@ -149,9 +149,9 @@ of the future mission-critical vision loop.
 Configure with tests enabled:
 
 ```bash
-cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
-cmake --build build-tests
-ctest --test-dir build-tests --output-on-failure
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 Current focused tests cover telemetry JSON generation, line/intersection
@@ -229,6 +229,33 @@ GCS raw camera/overlay visual tuning examples:
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video --gcs-ip <laptop-ip>
 ./build/vision_debug_node --config config --aruco-only --video --camera-quality 90 --lens-position 1.0
+```
+
+Gazebo SITL vision examples keep the Raspberry Pi defaults untouched and opt
+into the Gazebo camera through `--target sitl` or `--vision gazebo`:
+
+```bash
+# WSL terminal 1: Gazebo + ArduCopter SITL
+bash ~/fly_test.sh
+
+# WSL terminal 2: send Gazebo top-down camera + overlays to Windows GCS
+WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
+./build/vision_debug_node --config config --target sitl --vision gazebo --video --gcs-ip "$WINDOWS_GCS_IP"
+
+# WSL terminal 2: run the SITL line-follow mission with the same GCS video path
+./build/line_follow_node --config config --target sitl --vision gazebo --video --gcs-ip "$WINDOWS_GCS_IP"
+```
+
+Deterministic Gazebo vision fixtures, useful before starting SITL:
+
+```bash
+GZ_SIM_SYSTEM_PLUGIN_PATH="$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}" \
+GZ_SIM_RESOURCE_PATH="$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/worlds:$PWD/sim/gazebo/models:$PWD/sim/gazebo/worlds:${GZ_SIM_RESOURCE_PATH:-}" \
+  gz sim -s -v2 -r sim/gazebo/worlds/astroquad_marker_center_fixture.sdf
+
+./build/vision_debug_node --config config --target sitl --vision gazebo \
+  --gazebo-topic /world/astroquad_marker_center_fixture/model/astroquad_static_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --count 5 --no-telemetry --no-video
 ```
 
 If the GCS camera window says `waiting for video stream...`, check the onboard

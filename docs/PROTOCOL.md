@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
 Version: v1.7
-Last updated: 2026-05-13
+Last updated: 2026-05-14
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 ## 1. Channels
@@ -23,6 +23,7 @@ Ports and destination addresses are configured in each repo's `config/network.to
 - `protocol_version` is currently `1`.
 - UDP telemetry and video are best-effort. Missing packets must not block mission logic.
 - Debug video streaming is never mission-critical. If video sending falls behind, onboard drops old frames and keeps the latest frame/result for vision and telemetry.
+- Runtime selection between fake, Gazebo camera, and Raspberry Pi camera sources does not change the telemetry JSON or MJPEG chunk wire format. Source/runtime identity may be reported in existing debug fields such as `debug.note`.
 
 ## 3. Telemetry JSON
 
@@ -452,3 +453,4 @@ Command messages will use JSON with the same common top-level fields and will re
 | v1.6 | 2026-04-30 | Added structured `vision.intersection`, branch ray metadata, `debug.intersection_latency_ms`, and GCS intersection overlay/log support. |
 | v1.7 | 2026-05-01 | Added `vision.intersection_decision`, `vision.grid_node`, branch evidence telemetry, local grid node coordinates, and `debug.intersection_decision_latency_ms`. |
 | v1.7 | 2026-05-13 | No schema change; documented MVP hardware, GUIDED velocity primary control, RC override fallback, and SITL/real-Pixhawk transport assumptions. |
+| v1.7 | 2026-05-14 | No schema change; synchronized docs after fake/Gazebo/rpicam runtime profile work and documented that frame-source selection preserves the existing telemetry/video wire format. |

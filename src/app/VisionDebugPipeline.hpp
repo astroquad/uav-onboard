@@ -3,6 +3,8 @@
 #include "common/NetworkConfig.hpp"
 #include "common/VisionConfig.hpp"
 
+#include <string>
+
 namespace onboard::app {
 
 struct VisionDebugPipelineOptions {
@@ -13,6 +15,7 @@ struct VisionDebugPipelineOptions {
     bool send_telemetry = true;
     bool enable_aruco = true;
     bool enable_line = true;
+    std::string vision_source = "rpicam";
 };
 
 class VisionDebugPipeline {

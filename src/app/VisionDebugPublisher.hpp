@@ -1,0 +1,75 @@
+#pragma once
+
+#include "common/NetworkConfig.hpp"
+#include "common/VisionConfig.hpp"
+#include "mission/GridCoordinateTracker.hpp"
+#include "mission/IntersectionDecision.hpp"
+#include "vision/FrameSource.hpp"
+#include "vision/VisionProcessor.hpp"
+
+#include <opencv2/core.hpp>
+
+#include <cstdint>
+#include <string>
+
+namespace onboard::app {
+
+struct VisionDebugPublisherOptions {
+    common::NetworkConfig network;
+    common::VisionConfig vision;
+    bool send_video = false;
+    bool send_telemetry = true;
+    std::string note = "vision_debug";
+    std::string camera_sensor_model;
+    int camera_index = 0;
+};
+
+struct VisionDebugPublishInput {
+    vision::Frame frame;
+    cv::Mat image_bgr;
+    vision::VisionProcessingOutput vision_output;
+    mission::IntersectionDecision intersection_decision;
+    mission::GridNodeEvent grid_node;
+    double read_frame_ms = 0.0;
+    double jpeg_decode_ms = 0.0;
+    double processing_latency_ms = 0.0;
+    double intersection_decision_latency_ms = 0.0;
+    double capture_fps = 0.0;
+    double processing_fps = 0.0;
+    std::string camera_status = "streaming";
+};
+
+struct VisionDebugPublishStats {
+    double telemetry_build_ms = 0.0;
+    double telemetry_send_ms = 0.0;
+    double video_submit_ms = 0.0;
+    double video_send_ms = 0.0;
+    std::uint64_t telemetry_bytes = 0;
+    std::uint64_t video_jpeg_bytes = 0;
+    std::uint64_t video_sent_frames = 0;
+    std::uint64_t video_dropped_frames = 0;
+    std::uint64_t video_skipped_frames = 0;
+    std::uint64_t video_chunks_sent = 0;
+    std::uint64_t video_send_failures = 0;
+    int video_chunk_count = 0;
+};
+
+class VisionDebugPublisher {
+public:
+    VisionDebugPublisher();
+    ~VisionDebugPublisher();
+
+    VisionDebugPublisher(const VisionDebugPublisher&) = delete;
+    VisionDebugPublisher& operator=(const VisionDebugPublisher&) = delete;
+
+    bool open(const VisionDebugPublisherOptions& options);
+    VisionDebugPublishStats publish(VisionDebugPublishInput input);
+    void close();
+    std::string lastError() const;
+
+private:
+    struct Impl;
+    Impl* impl_;
+};
+
+} // namespace onboard::app

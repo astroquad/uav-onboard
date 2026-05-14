@@ -2,6 +2,8 @@
 #include "common/NetworkConfig.hpp"
 #include "common/VisionConfig.hpp"
 
+#include <toml++/toml.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -31,6 +33,9 @@ constexpr int kGcsDiscoveryTimeoutMs = 3000;
 struct Options {
     std::string config_dir = "config";
     std::string gcs_ip_override;
+    std::string target;
+    std::string vision_source;
+    std::string gazebo_topic_override;
     int count = 0;
     int video_port_override = 0;
     int camera_width_override = 0;
@@ -64,6 +69,9 @@ void printUsage()
         << "Options:\n"
         << "  --config <dir>       Config directory, default config\n"
         << "  --gcs-ip <ip>        Override GCS destination IP\n"
+        << "  --target <name>      Runtime profile, e.g. sitl or pixhawk1\n"
+        << "  --vision <source>    rpicam, gazebo, or fake; default rpicam\n"
+        << "  --gazebo-topic <t>   Override Gazebo camera image topic\n"
         << "  --port <n>           Override video destination UDP port\n"
         << "  --count <n>          Process n frames, 0 means forever\n"
         << "  --camera-width <n>   Override rpicam capture width\n"
@@ -114,6 +122,12 @@ Options parseOptions(int argc, char** argv)
             options.config_dir = argv[++i];
         } else if (arg == "--gcs-ip" && i + 1 < argc) {
             options.gcs_ip_override = argv[++i];
+        } else if (arg == "--target" && i + 1 < argc) {
+            options.target = argv[++i];
+        } else if (arg == "--vision" && i + 1 < argc) {
+            options.vision_source = argv[++i];
+        } else if (arg == "--gazebo-topic" && i + 1 < argc) {
+            options.gazebo_topic_override = argv[++i];
         } else if (arg == "--port" && i + 1 < argc) {
             options.video_port_override = parseInt(argv[++i], options.video_port_override);
         } else if (arg == "--count" && i + 1 < argc) {
@@ -169,6 +183,62 @@ Options parseOptions(int argc, char** argv)
         }
     }
     return options;
+}
+
+std::string joinConfigPath(const std::string& config_dir, const std::string& filename)
+{
+    if (config_dir.empty()) {
+        return "config/" + filename;
+    }
+    const char last = config_dir.back();
+    if (last == '/' || last == '\\') {
+        return config_dir + filename;
+    }
+    return config_dir + "/" + filename;
+}
+
+void applyRuntimeOverlay(
+    onboard::common::VisionConfig& vision_config,
+    std::string& vision_source,
+    const std::string& config_dir,
+    const std::string& target)
+{
+    if (target.empty()) {
+        return;
+    }
+
+    toml::table table;
+    try {
+        table = toml::parse_file(joinConfigPath(config_dir, "runtime." + target + ".toml"));
+    } catch (const toml::parse_error&) {
+        return;
+    }
+
+    if (const auto runtime = table["runtime"]) {
+        vision_source = runtime["vision"].value_or(vision_source);
+    }
+    if (const auto vision = table["vision"]) {
+        if (const auto source = vision["source"]) {
+            vision_config.source.gazebo_topic =
+                source["gazebo_topic"].value_or(vision_config.source.gazebo_topic);
+            vision_config.source.read_timeout_ms =
+                source["read_timeout_ms"].value_or(vision_config.source.read_timeout_ms);
+        }
+    }
+    if (const auto debug_video = table["debug_video"]) {
+        vision_config.debug_video.enabled =
+            debug_video["enabled"].value_or(vision_config.debug_video.enabled);
+        vision_config.debug_video.send_fps =
+            debug_video["send_fps"].value_or(vision_config.debug_video.send_fps);
+        vision_config.debug_video.jpeg_quality =
+            debug_video["jpeg_quality"].value_or(vision_config.debug_video.jpeg_quality);
+        vision_config.debug_video.chunk_pacing_us =
+            debug_video["chunk_pacing_us"].value_or(vision_config.debug_video.chunk_pacing_us);
+        vision_config.debug_video.send_width =
+            debug_video["send_width"].value_or(vision_config.debug_video.send_width);
+        vision_config.debug_video.send_height =
+            debug_video["send_height"].value_or(vision_config.debug_video.send_height);
+    }
 }
 
 bool isBroadcastAddress(const std::string& ip)
@@ -305,9 +375,29 @@ int main(int argc, char** argv)
     const Options options = parseOptions(argc, argv);
     auto network_config = onboard::common::loadNetworkConfig(options.config_dir);
     auto vision_config = onboard::common::loadVisionConfig(options.config_dir);
+    std::string vision_source = "rpicam";
 
     if (!options.gcs_ip_override.empty()) {
         network_config.gcs_ip = options.gcs_ip_override;
+    }
+    if (options.target == "sitl") {
+        vision_source = "gazebo";
+    } else if (options.target == "pixhawk1") {
+        vision_source = "rpicam";
+    } else if (!options.target.empty()) {
+        std::cerr << "unknown --target: " << options.target << "\n";
+        return 2;
+    }
+    applyRuntimeOverlay(vision_config, vision_source, options.config_dir, options.target);
+    if (!options.vision_source.empty()) {
+        vision_source = options.vision_source;
+    }
+    if (vision_source != "rpicam" && vision_source != "gazebo" && vision_source != "fake") {
+        std::cerr << "unknown --vision: " << vision_source << "\n";
+        return 2;
+    }
+    if (!options.gazebo_topic_override.empty()) {
+        vision_config.source.gazebo_topic = options.gazebo_topic_override;
     }
     if (!options.line_mode_override.empty()) {
         vision_config.line.mode = options.line_mode_override;
@@ -386,6 +476,7 @@ int main(int argc, char** argv)
     pipeline_options.send_telemetry = options.send_telemetry;
     pipeline_options.enable_aruco = options.enable_aruco;
     pipeline_options.enable_line = options.enable_line;
+    pipeline_options.vision_source = vision_source;
 
     onboard::app::VisionDebugPipeline pipeline;
     return pipeline.run(pipeline_options);

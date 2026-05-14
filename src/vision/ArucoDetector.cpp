@@ -28,6 +28,10 @@ struct TemplateMatch {
     cv::Rect rect;
 };
 
+constexpr float kLivePartialMarkerSideRatio = 0.08f;
+constexpr float kLiveMinPlausibleMarkerSideRatio = 0.08f;
+constexpr float kRecordedMinPlausibleMarkerSideRatio = 0.030f;
+
 cv::aruco::PredefinedDictionaryType dictionaryFromName(const std::string& name)
 {
     static const std::map<std::string, cv::aruco::PredefinedDictionaryType> dictionaries = {
@@ -98,7 +102,7 @@ bool isLikelyPartialLiveMarker(const MarkerObservation& marker, const cv::Size& 
         return false;
     }
     const float frame_min = static_cast<float>(std::max(1, std::min(frame_size.width, frame_size.height)));
-    return markerApproxSidePx(marker) < frame_min * 0.22f;
+    return markerApproxSidePx(marker) < frame_min * kLivePartialMarkerSideRatio;
 }
 
 MarkerObservation makeMarkerObservation(int id, const std::vector<cv::Point2f>& corners)
@@ -198,7 +202,9 @@ bool markerShapeLooksPlausible(
     const float max_side = std::max(bounds.width, bounds.height);
     const float frame_min = static_cast<float>(std::max(1, std::min(gray.cols, gray.rows)));
     const bool live_frame = isLiveFrameSize(gray.size());
-    const float min_side_ratio = live_frame ? 0.20f : 0.030f;
+    const float min_side_ratio = live_frame
+        ? kLiveMinPlausibleMarkerSideRatio
+        : kRecordedMinPlausibleMarkerSideRatio;
     const float max_side_ratio = live_frame ? 0.42f : 0.36f;
     if (side_ratio < 0.65f || side_ratio > 1.55f ||
         min_side < std::max(16.0f, frame_min * min_side_ratio) ||

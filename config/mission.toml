@@ -12,3 +12,7 @@ forward_mps = 0.3
 center_error_m = 0.0
 line_angle_deg = 0.0
 duration_s = 3.0
+
+[marker_hover]
+hold_s = 3.0
+center_tolerance_px = 80.0

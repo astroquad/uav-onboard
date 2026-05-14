@@ -3,6 +3,7 @@
 #include "autopilot/MavlinkTransport.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <string>
 
 #include <netinet/in.h>
@@ -26,6 +27,8 @@ private:
     bool have_peer_ = false;
     sockaddr_in peer_addr_ {};
     std::uint8_t parse_channel_ = 0;
+    mavlink_status_t parse_status_ {};
+    std::deque<mavlink_message_t> pending_messages_;
     std::string name_;
 };
 

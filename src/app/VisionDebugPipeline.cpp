@@ -1,18 +1,17 @@
 #include "app/VisionDebugPipeline.hpp"
 
+#include "app/VisionDebugPublisher.hpp"
 #include "camera/RpicamMjpegSource.hpp"
 #include "mission/GridCoordinateTracker.hpp"
 #include "mission/IntersectionDecision.hpp"
 #include "network/UdpTelemetrySender.hpp"
 #include "protocol/TelemetryMessage.hpp"
 #include "video/UdpMjpegStreamer.hpp"
-#include "vision/ArucoDetector.hpp"
+#include "vision/FakeFrameSource.hpp"
+#include "vision/GazeboCameraSource.hpp"
+#include "vision/RpicamFrameSource.hpp"
 #include "vision/IntersectionDetector.hpp"
-#include "vision/IntersectionStabilizer.hpp"
-#include "vision/LineDetector.hpp"
-#include "vision/LineMaskBuilder.hpp"
-#include "vision/LineStabilizer.hpp"
-#include "vision/MarkerStabilizer.hpp"
+#include "vision/VisionProcessor.hpp"
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -554,10 +553,226 @@ private:
     double last_send_ms_ = 0.0;
 };
 
+std::unique_ptr<vision::FrameSource> createFrameSource(const std::string& source)
+{
+    if (source == "fake") {
+        return std::make_unique<vision::FakeFrameSource>();
+    }
+    if (source == "gazebo") {
+        return std::make_unique<vision::GazeboCameraSource>();
+    }
+    if (source == "rpicam") {
+        return std::make_unique<vision::RpicamFrameSource>();
+    }
+    return nullptr;
+}
+
+std::string sensorModelForSource(
+    const std::string& source,
+    const common::VisionConfig& vision_config)
+{
+    if (source == "gazebo") {
+        return "gazebo_downward_camera";
+    }
+    if (source == "fake") {
+        return "fake_frame_source";
+    }
+    return vision_config.camera.sensor_model;
+}
+
+int runFrameSourceVisionDebug(const VisionDebugPipelineOptions& options)
+{
+    auto frame_source = createFrameSource(options.vision_source);
+    if (!frame_source) {
+        std::cerr << "unsupported vision source: " << options.vision_source << "\n";
+        return 2;
+    }
+    if (!frame_source->open(vision::FrameSourceOptions {options.vision})) {
+        std::cerr << "failed to open " << options.vision_source
+                  << " source: " << frame_source->lastError() << "\n";
+        return 1;
+    }
+
+    VisionDebugPublisher publisher;
+    VisionDebugPublisherOptions publisher_options;
+    publisher_options.network = options.network;
+    publisher_options.vision = options.vision;
+    publisher_options.send_video = options.send_video;
+    publisher_options.send_telemetry = options.send_telemetry;
+    publisher_options.note = "vision_debug_node source=" + options.vision_source;
+    publisher_options.camera_sensor_model =
+        sensorModelForSource(options.vision_source, options.vision);
+    publisher_options.camera_index = options.vision.camera.device;
+    if (!publisher.open(publisher_options)) {
+        std::cerr << "failed to open vision debug publisher: "
+                  << publisher.lastError() << "\n";
+        frame_source->close();
+        return 1;
+    }
+
+    vision::VisionProcessor processor(vision::VisionProcessorOptions {
+        options.vision,
+        options.enable_aruco,
+        options.enable_line,
+    });
+    mission::IntersectionDecisionEngine intersection_decision_engine(options.vision.intersection_decision);
+    mission::GridCoordinateTracker grid_tracker(options.vision.intersection_decision);
+
+    std::cout << "vision_debug_node\n"
+              << "  source: " << options.vision_source << "\n"
+              << "  destination: " << options.network.gcs_ip << "\n"
+              << "  telemetry UDP port: " << options.network.telemetry_port << "\n"
+              << "  video UDP port: " << options.network.video_port << "\n"
+              << "  camera: " << publisher_options.camera_sensor_model << "\n"
+              << "  gazebo_topic: " << options.vision.source.gazebo_topic << "\n"
+              << "  video_send_fps: " << options.vision.debug_video.send_fps << "\n"
+              << "  video_chunk_pacing_us: " << options.vision.debug_video.chunk_pacing_us << "\n"
+              << "  aruco_dictionary: " << processor.arucoDictionaryName() << "\n"
+              << "  aruco: " << (options.enable_aruco ? "on" : "off") << "\n"
+              << "  line: " << (options.enable_line && options.vision.line.enabled ? "on" : "off") << "\n"
+              << "  line_mode: " << options.vision.line.mode << "\n"
+              << "  video: " << (options.send_video ? "on best-effort latest-frame" : "off") << "\n"
+              << "  telemetry: " << (options.send_telemetry ? "on" : "off") << "\n"
+              << "  count: " << (options.count == 0 ? std::string("forever") : std::to_string(options.count))
+              << "\n";
+
+    RateMeter capture_rate;
+    RateMeter processing_rate;
+    int processed_count = 0;
+    while (options.count == 0 || processed_count < options.count) {
+        vision::Frame frame;
+        const auto read_started = std::chrono::steady_clock::now();
+        if (!frame_source->read(frame)) {
+            std::cerr << "failed to read " << options.vision_source
+                      << " frame: " << frame_source->lastError() << "\n";
+            publisher.close();
+            frame_source->close();
+            return 1;
+        }
+        const auto read_finished = std::chrono::steady_clock::now();
+        const double read_frame_ms = std::chrono::duration<double, std::milli>(
+            read_finished - read_started).count();
+        const double capture_fps = capture_rate.note(read_finished);
+
+        if (frame.width <= 0) {
+            frame.width = frame.image_bgr.cols;
+        }
+        if (frame.height <= 0) {
+            frame.height = frame.image_bgr.rows;
+        }
+
+        const auto processing_started = std::chrono::steady_clock::now();
+        const auto vision_output = processor.process(
+            frame.image_bgr,
+            vision::VisionFrameMetadata {
+                frame.frame_id,
+                frame.timestamp_ms,
+                frame.width,
+                frame.height,
+            });
+        const vision::VisionResult& result = vision_output.result;
+        double intersection_decision_latency_ms = 0.0;
+        mission::IntersectionDecision intersection_decision;
+        mission::GridNodeEvent grid_node;
+
+        if (!frame.image_bgr.empty() && options.enable_line && options.vision.line.enabled) {
+            const auto decision_started = std::chrono::steady_clock::now();
+            intersection_decision = intersection_decision_engine.update(
+                result.intersection,
+                frame.width,
+                frame.height,
+                frame.frame_id,
+                frame.timestamp_ms,
+                false);
+            if (intersection_decision.event_ready) {
+                grid_node = grid_tracker.update(
+                    intersection_decision,
+                    frame.frame_id,
+                    frame.timestamp_ms);
+            }
+            const auto decision_finished = std::chrono::steady_clock::now();
+            intersection_decision_latency_ms = std::chrono::duration<double, std::milli>(
+                decision_finished - decision_started).count();
+        }
+        const auto processing_finished = std::chrono::steady_clock::now();
+        const double processing_latency_ms = std::chrono::duration<double, std::milli>(
+            processing_finished - processing_started).count();
+        const double processing_fps = processing_rate.note(processing_finished);
+
+        VisionDebugPublishInput publish_input;
+        publish_input.frame = frame;
+        publish_input.image_bgr = frame.image_bgr;
+        publish_input.vision_output = vision_output;
+        publish_input.intersection_decision = intersection_decision;
+        publish_input.grid_node = grid_node;
+        publish_input.read_frame_ms = read_frame_ms;
+        publish_input.jpeg_decode_ms = 0.0;
+        publish_input.processing_latency_ms = processing_latency_ms;
+        publish_input.intersection_decision_latency_ms = intersection_decision_latency_ms;
+        publish_input.capture_fps = capture_fps;
+        publish_input.processing_fps = processing_fps;
+        publish_input.camera_status = frame.image_bgr.empty() ? "decode_failed" : "streaming";
+        const auto publish_stats = publisher.publish(std::move(publish_input));
+        const std::string publish_error = publisher.lastError();
+        if (!publish_error.empty()) {
+            std::cerr << "publish warning: " << publish_error << "\n";
+        }
+
+        ++processed_count;
+        std::cout << "frame=" << frame.frame_id
+                  << " source=" << options.vision_source
+                  << " markers=" << result.markers.size();
+        if (!result.markers.empty()) {
+            std::cout << " marker_id=" << result.markers.front().id;
+        }
+        std::cout << " line=" << (result.line.detected ? "yes" : "no")
+                  << " raw_line=" << (result.line.raw_detected ? "yes" : "no")
+                  << " held=" << (result.line.held ? "yes" : "no")
+                  << " rejected_jump=" << (result.line.rejected_jump ? "yes" : "no")
+                  << " line_conf=" << result.line.confidence
+                  << " ix_type=" << vision::intersectionTypeName(result.intersection.type)
+                  << " ix_raw=" << vision::intersectionTypeName(result.intersection.raw_type)
+                  << " ix_valid=" << (result.intersection.valid ? "yes" : "no")
+                  << " ix_stable=" << (result.intersection.stable ? "yes" : "no")
+                  << " ix_held=" << (result.intersection.held ? "yes" : "no")
+                  << " ix_detected=" << (result.intersection.intersection_detected ? "yes" : "no")
+                  << " ix_score=" << result.intersection.score
+                  << " branches=" << branchScoreSummary(result.intersection)
+                  << " dec_state=" << mission::decisionStateName(intersection_decision.state)
+                  << " dec_action=" << mission::decisionActionName(intersection_decision.action)
+                  << " dec_event=" << (intersection_decision.event_ready ? "yes" : "no")
+                  << " grid_valid=" << (grid_node.valid ? "yes" : "no")
+                  << " read_ms=" << read_frame_ms
+                  << " aruco_ms=" << vision_output.metrics.aruco_latency_ms
+                  << " line_ms=" << vision_output.metrics.line_latency_ms
+                  << " ix_ms=" << vision_output.metrics.intersection_latency_ms
+                  << " dec_ms=" << intersection_decision_latency_ms
+                  << " process_ms=" << processing_latency_ms
+                  << " json_ms=" << publish_stats.telemetry_build_ms
+                  << " tsend_ms=" << publish_stats.telemetry_send_ms
+                  << " vsubmit_ms=" << publish_stats.video_submit_ms
+                  << " vsend_ms=" << publish_stats.video_send_ms
+                  << " jpeg_bytes=" << publish_stats.video_jpeg_bytes
+                  << " video_chunks=" << publish_stats.video_chunk_count
+                  << " video_sent=" << publish_stats.video_sent_frames
+                  << " video_dropped=" << publish_stats.video_dropped_frames
+                  << " video_skipped=" << publish_stats.video_skipped_frames
+                  << "\n";
+    }
+
+    publisher.close();
+    frame_source->close();
+    return 0;
+}
+
 } // namespace
 
 int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 {
+    if (options.vision_source != "rpicam") {
+        return runFrameSourceVisionDebug(options);
+    }
+
     LatestVideoSender video_sender;
     if (options.send_video &&
         !video_sender.start(
@@ -616,15 +831,13 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         return 1;
     }
 
-    const vision::ArucoDetector aruco_detector(options.vision.aruco);
-    const vision::LineMaskBuilder line_mask_builder(options.vision.line);
-    const vision::LineDetector line_detector(options.vision.line);
-    vision::LineStabilizer line_stabilizer(options.vision.line);
-    const vision::IntersectionDetector intersection_detector(options.vision.line);
-    vision::IntersectionStabilizer intersection_stabilizer(options.vision.line);
+    vision::VisionProcessor processor(vision::VisionProcessorOptions {
+        options.vision,
+        options.enable_aruco,
+        options.enable_line,
+    });
     mission::IntersectionDecisionEngine intersection_decision_engine(options.vision.intersection_decision);
     mission::GridCoordinateTracker grid_tracker(options.vision.intersection_decision);
-    vision::MarkerStabilizer marker_stabilizer(options.vision.aruco);
 
     std::cout << "vision_debug_node\n"
               << "  destination: " << options.network.gcs_ip << "\n"
@@ -640,7 +853,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
               << "  exposure: " << options.vision.camera.exposure << "\n"
               << "  video_send_fps: " << options.vision.debug_video.send_fps << "\n"
               << "  video_chunk_pacing_us: " << options.vision.debug_video.chunk_pacing_us << "\n"
-              << "  aruco_dictionary: " << aruco_detector.dictionaryName() << "\n"
+              << "  aruco_dictionary: " << processor.arucoDictionaryName() << "\n"
               << "  aruco: " << (options.enable_aruco ? "on" : "off") << "\n"
               << "  line: " << (options.enable_line && options.vision.line.enabled ? "on" : "off") << "\n"
               << "  line_mode: " << options.vision.line.mode << "\n"
@@ -695,90 +908,40 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         const double jpeg_decode_ms = std::chrono::duration<double, std::milli>(
             decode_finished - decode_started).count();
 
-        vision::VisionResult result;
-        result.frame_seq = frame.frame_id;
-        result.timestamp_ms = frame.timestamp_ms;
-        result.width = frame.width;
-        result.height = frame.height;
-
-        double aruco_latency_ms = 0.0;
-        double line_latency_ms = 0.0;
-        double intersection_latency_ms = 0.0;
+        const auto vision_output = processor.process(
+            image,
+            vision::VisionFrameMetadata {
+                frame.frame_id,
+                frame.timestamp_ms,
+                frame.width,
+                frame.height,
+            });
+        const vision::VisionResult& result = vision_output.result;
+        const double aruco_latency_ms = vision_output.metrics.aruco_latency_ms;
+        const double line_latency_ms = vision_output.metrics.line_latency_ms;
+        const double intersection_latency_ms = vision_output.metrics.intersection_latency_ms;
         double intersection_decision_latency_ms = 0.0;
         mission::IntersectionDecision intersection_decision;
         mission::GridNodeEvent grid_node;
-        std::vector<vision::MarkerObservation> marker_mask_input;
-        std::vector<vision::MarkerObservation> marker_tracking_input;
 
-        if (!image.empty()) {
-            if (options.enable_aruco) {
-                const int aruco_interval = std::max(1, options.vision.aruco.detect_interval_frames);
-                const bool run_aruco = (processed_count % aruco_interval) == 0;
-                std::vector<vision::MarkerObservation> fresh_markers;
-                if (run_aruco) {
-                    const auto aruco_started = std::chrono::steady_clock::now();
-                    const auto aruco_result = aruco_detector.detect(image, frame.frame_id, frame.timestamp_ms);
-                    const auto aruco_finished = std::chrono::steady_clock::now();
-                    fresh_markers = aruco_result.markers;
-                    marker_mask_input = fresh_markers;
-                    aruco_latency_ms = std::chrono::duration<double, std::milli>(
-                        aruco_finished - aruco_started).count();
-                }
-                result.markers = marker_stabilizer.update(fresh_markers);
-                if (marker_stabilizer.ageFrames() <= aruco_interval) {
-                    marker_tracking_input = result.markers;
-                }
-            }
-
-            if (options.enable_line && options.vision.line.enabled) {
-                const auto line_started = std::chrono::steady_clock::now();
-                const auto line_masks = line_mask_builder.build(
-                    image,
-                    marker_mask_input,
-                    options.vision.line.marker_mask_detect_candidates);
-                auto raw_line = line_detector.detect(line_masks);
-                raw_line = vision::applyMarkerCenterTracking(
-                    raw_line,
-                    marker_tracking_input,
-                    frame.width,
-                    frame.height);
-                const auto line_finished = std::chrono::steady_clock::now();
-                result.line = line_stabilizer.update(raw_line, frame.width);
-                result.line = vision::applyMarkerCenterTracking(
-                    result.line,
-                    marker_tracking_input,
-                    frame.width,
-                    frame.height);
-                result.line_detected = result.line.detected;
-                line_latency_ms = std::chrono::duration<double, std::milli>(
-                    line_finished - line_started).count();
-
-                const auto intersection_started = std::chrono::steady_clock::now();
-                const auto raw_intersection = intersection_detector.detect(line_masks, raw_line);
-                result.intersection = intersection_stabilizer.update(raw_intersection);
-                result.intersection_detected = result.intersection.intersection_detected;
-                const auto intersection_finished = std::chrono::steady_clock::now();
-                intersection_latency_ms = std::chrono::duration<double, std::milli>(
-                    intersection_finished - intersection_started).count();
-
-                const auto decision_started = std::chrono::steady_clock::now();
-                intersection_decision = intersection_decision_engine.update(
-                    result.intersection,
-                    frame.width,
-                    frame.height,
+        if (!image.empty() && options.enable_line && options.vision.line.enabled) {
+            const auto decision_started = std::chrono::steady_clock::now();
+            intersection_decision = intersection_decision_engine.update(
+                result.intersection,
+                frame.width,
+                frame.height,
+                frame.frame_id,
+                frame.timestamp_ms,
+                false);
+            if (intersection_decision.event_ready) {
+                grid_node = grid_tracker.update(
+                    intersection_decision,
                     frame.frame_id,
-                    frame.timestamp_ms,
-                    false);
-                if (intersection_decision.event_ready) {
-                    grid_node = grid_tracker.update(
-                        intersection_decision,
-                        frame.frame_id,
-                        frame.timestamp_ms);
-                }
-                const auto decision_finished = std::chrono::steady_clock::now();
-                intersection_decision_latency_ms = std::chrono::duration<double, std::milli>(
-                    decision_finished - decision_started).count();
+                    frame.timestamp_ms);
             }
+            const auto decision_finished = std::chrono::steady_clock::now();
+            intersection_decision_latency_ms = std::chrono::duration<double, std::milli>(
+                decision_finished - decision_started).count();
         }
         const auto processing_finished = std::chrono::steady_clock::now();
         const double processing_fps = processing_rate.note(processing_finished);

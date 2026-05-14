@@ -1,0 +1,15 @@
+[runtime]
+target = "pixhawk1"
+vision = "rpicam"
+
+[transport]
+kind = "serial"
+
+[serial]
+device = "/dev/serial0"
+baudrate = 115200
+
+[safety.timeouts]
+line_lost_ms = 1500
+pixhawk_heartbeat_lost_ms = 2000
+mission_timeout_ms = 300000

@@ -50,6 +50,12 @@ UdpMavlinkTransport::~UdpMavlinkTransport()
 
 bool UdpMavlinkTransport::recvMessage(mavlink_message_t& message, int timeout_ms)
 {
+    if (!pending_messages_.empty()) {
+        message = pending_messages_.front();
+        pending_messages_.pop_front();
+        return true;
+    }
+
     fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(socket_fd_, &readfds);
@@ -80,13 +86,19 @@ bool UdpMavlinkTransport::recvMessage(mavlink_message_t& message, int timeout_ms
     peer_addr_ = source;
     have_peer_ = true;
 
-    mavlink_status_t status {};
     for (ssize_t i = 0; i < received; ++i) {
-        if (mavlink_parse_char(parse_channel_, buffer[i], &message, &status)) {
-            return true;
+        mavlink_message_t parsed {};
+        if (mavlink_parse_char(parse_channel_, buffer[i], &parsed, &parse_status_)) {
+            pending_messages_.push_back(parsed);
         }
     }
-    return false;
+
+    if (pending_messages_.empty()) {
+        return false;
+    }
+    message = pending_messages_.front();
+    pending_messages_.pop_front();
+    return true;
 }
 
 void UdpMavlinkTransport::sendMessage(const mavlink_message_t& message)

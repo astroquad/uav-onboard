@@ -8,6 +8,7 @@ namespace onboard::autopilot {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+constexpr int kMaxPollDrainMessages = 128;
 
 bool heartbeatArmed(const mavlink_heartbeat_t& heartbeat)
 {
@@ -191,6 +192,15 @@ bool AutopilotMavlinkAdapter::poll(int timeout_ms)
         return false;
     }
     processMessage(message);
+
+    for (int drained = 0; drained < kMaxPollDrainMessages; ++drained) {
+        mavlink_message_t pending {};
+        if (!transport_->recvMessage(pending, 0)) {
+            break;
+        }
+        processMessage(pending);
+    }
+
     return true;
 }
 

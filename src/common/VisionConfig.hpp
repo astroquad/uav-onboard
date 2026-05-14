@@ -141,8 +141,16 @@ struct IntersectionDecisionConfig {
     int node_advance_min_frames = 4;
 };
 
+struct FrameSourceConfig {
+    std::string gazebo_topic = "/world/iris_runway/model/iris/link/camera_link/sensor/downward_camera/image";
+    int read_timeout_ms = 1000;
+    double fake_line_offset_px = 0.0;
+    double fake_line_angle_deg = 0.0;
+};
+
 struct VisionConfig {
     CameraConfig camera;
+    FrameSourceConfig source;
     VideoStreamConfig video;
     DebugVideoConfig debug_video;
     ArucoConfig aruco;
