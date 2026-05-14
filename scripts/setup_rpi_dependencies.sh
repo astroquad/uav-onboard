@@ -129,8 +129,16 @@ cat <<'NOTES'
 Dependency setup complete.
 
 Notes:
-- MAVLink C headers are intentionally not installed here. Vendor or generate
-  them later under the project when the exact dialect/version is selected.
+- ArduPilot itself does not need to be installed on the Raspberry Pi just to
+  build or send MAVLink commands. The onboard code uses MAVLink C headers for
+  packet serialization; CMake finds local ArduPilot-generated headers when
+  present, or fetches MAVLink c_library_v2 into the build tree.
+- For offline Raspberry Pi builds, provide MAVLink headers explicitly:
+    cmake -S . -B build -DMAVLINK_INCLUDE_DIR=/path/to/include
+- For Pixhawk serial access, make sure the runtime user can open the serial
+  device, for example:
+    sudo usermod -aG dialout "$USER"
+    # then log out and back in, or reboot
 - For Raspberry Pi 4 + IMX519-78 bring-up, verify the rpicam path before
   running Astroquad:
     rpicam-hello --version

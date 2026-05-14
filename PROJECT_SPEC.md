@@ -3,7 +3,7 @@
 > 제24회 한국로봇항공기경연대회 중급부문 멀티콥터형 드론 실내 조난자 탐색 온보드 소프트웨어 기준 문서  
 > **이 문서는 팀원과 코딩 에이전트가 공통으로 참조하는 Single Source of Truth입니다.**
 
-최종 수정: 2026-05-13
+최종 수정: 2026-05-15
 
 ---
 
@@ -93,11 +93,17 @@ MVP에서 제외하는 것:
 | Intersection decision/local grid node | 구현됨 | `src/mission/IntersectionDecision.*`, `src/mission/GridCoordinateTracker.*` |
 | Pi 4 + IMX519 camera/focus/exposure config | 구현됨 | `config/vision.toml`, `src/common/VisionConfig.*` |
 | System/camera/debug telemetry | 구현됨 | `src/app/VisionDebugPipeline.cpp` |
-| Full mission state machine | 미구현 | planned in `src/mission/` |
+| Gazebo/SITL vision world | 구현됨 | `sim/gazebo/`, `scripts/fly_test.sh`, `config/runtime.sitl.toml` |
+| Runtime frame sources | 구현됨 | `src/vision/FrameSource.hpp`, `FakeFrameSource`, `GazeboCameraSource`, `RpicamFrameSource` |
+| Vision processor library path | 구현됨 | `src/vision/VisionProcessor.*` |
+| GCS publisher reuse | 구현됨 | `src/app/VisionDebugPublisher.*` |
+| Line-follow staging mission | 구현됨/SITL 검증 중 | `tools/line_follow_node.cpp`, `src/mission/LineFollowMission.*` |
+| MAVLink UDP SITL adapter | 구현됨 | `src/autopilot/AutopilotMavlinkAdapter.*`, `UdpMavlinkTransport.*` |
+| Full mission state machine | 부분 구현 | `src/mission/`, full snake/revisit planned |
 | Full grid map/path planner/revisit policy | 미구현 | planned in `src/mission/` |
-| Pixhawk/MAVLink serial | 미구현 | `src/autopilot/.gitkeep`, `config/autopilot.toml` |
-| Control module | 미구현 | `src/control/.gitkeep` |
-| Safety/failsafe | 미구현 | `src/safety/.gitkeep`, `config/safety.toml` |
+| Pixhawk/MAVLink serial | 미구현 | planned serial transport, current SITL UDP transport implemented |
+| Control module | 부분 구현 | `src/control/GuidedVelocityController.*` |
+| Safety/failsafe | 부분 구현 | `src/safety/SafetyMonitor.*`, line/heartbeat/timeout MVP |
 | File logging | 미구현 | `src/logging/.gitkeep`, `logs/.gitkeep` |
 
 ---
@@ -134,9 +140,11 @@ MTF-01 bring-up은 제어 구현 전 gate다. ArduPilot에서 optical flow와 ra
 | Vision | OpenCV 4.x with `aruco` for vision tools/node |
 | Network | UDP socket, Windows compatibility where tools support it |
 | Tests | CTest + lightweight assert-based tests |
-| MAVLink | 아직 vendored/generated headers 없음. exact dialect/version 확정 후 추가 |
+| MAVLink | ArduPilot-generated headers를 우선 사용하고, 없으면 CMake가 MAVLink `c_library_v2` headers를 build tree로 fetch |
 
 `scripts/setup_rpi_dependencies.sh`는 Raspberry Pi OS Lite 64-bit 기준으로 build tools, OpenCV, rpicam/libcamera 계열 package, `iw`, JSON/TOML/dev package를 설치/확인한다.
+
+Raspberry Pi에서도 `line_follow_node`가 빌드되어야 한다. ArduPilot source/build tree가 없는 Pi에서는 CMake `ONBOARD_FETCH_MAVLINK=ON` 기본값이 MAVLink C headers를 자동으로 내려받는다. 오프라인 빌드에서는 `-DMAVLINK_INCLUDE_DIR=/path/to/include`를 명시한다.
 
 ---
 

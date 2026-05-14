@@ -15,3 +15,20 @@ The main world uses the local `iris_with_downward_camera` wrapper around the exi
 `worlds/astroquad_line_camera_fixture.sdf` and `worlds/astroquad_marker_center_fixture.sdf` are detector smoke fixtures. They use `astroquad_static_downward_camera` at 1.2 m AGL so line and marker vision can be checked without starting ArduPilot SITL. The marker fixture uses the same 50 cm x 50 cm ID 1 marker texture as the flight course.
 
 The active ID 1 texture is `models/astroquad_vision_course/materials/textures/aruco_id1.png`. The user-provided `/home/mseoky/test_aruco_marker/aruco2.png` was verified as OpenCV `DICT_4X4_50` ID 1 and copied into that canonical texture name.
+
+Fixture topics:
+
+```text
+/world/astroquad_line_camera_fixture/model/astroquad_static_downward_camera/link/downward_camera_link/sensor/downward_camera/image
+/world/astroquad_marker_center_fixture/model/astroquad_static_downward_camera/link/downward_camera_link/sensor/downward_camera/image
+```
+
+The original `/home/mseoky/test_aruco_marker` files are kept as raw assets. Their verified OpenCV IDs are:
+
+```text
+aruco2.png -> DICT_4X4_50 ID 1
+aruco3.png -> DICT_4X4_50 ID 2
+aruco4.png -> DICT_4X4_50 ID 3
+aruco1.png -> DICT_4X4_50 ID 4
+Vmarker.png -> future vertiport visual, not an ArUco fixture marker
+```

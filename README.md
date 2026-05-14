@@ -158,6 +158,26 @@ Current focused tests cover telemetry JSON generation, line/intersection
 stabilization, and synthetic intersection classification when OpenCV is
 available.
 
+MAVLink headers are required for `line_follow_node` and the autopilot adapter.
+CMake first looks for ArduPilot-generated headers under `~/ardupilot/...` and
+system include paths. If they are not present, it downloads the MAVLink
+`c_library_v2` headers into the build tree and adapts them to the existing
+`mavlink/v2.0/ardupilotmega/mavlink.h` include path. On a Raspberry Pi without
+an ArduPilot checkout, a normal configure should still include
+`line_follow_node`:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+cmake --build build
+```
+
+For offline builds, preinstall/provide the headers and pass the include root
+explicitly:
+
+```bash
+cmake -S . -B build -DMAVLINK_INCLUDE_DIR=/path/to/include
+```
+
 ## Vision Debug: ArUco and Line Tracing
 
 Start `uav_gcs_vision_debug` on the laptop first. Then run this on the
@@ -231,22 +251,73 @@ GCS raw camera/overlay visual tuning examples:
 ./build/vision_debug_node --config config --aruco-only --video --camera-quality 90 --lens-position 1.0
 ```
 
-Gazebo SITL vision examples keep the Raspberry Pi defaults untouched and opt
-into the Gazebo camera through `--target sitl` or `--vision gazebo`:
+### Gazebo SITL Target Commands
 
-```bash
-# WSL terminal 1: Gazebo + ArduCopter SITL
-bash ~/fly_test.sh
+These are the current repeatable commands for the Windows GCS + WSL
+Gazebo/SITL test loop. They keep the Raspberry Pi defaults untouched and opt
+into the Gazebo camera through `--target sitl` or `--vision gazebo`.
 
-# WSL terminal 2: send Gazebo top-down camera + overlays to Windows GCS
-WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
-./build/vision_debug_node --config config --target sitl --vision gazebo --video --gcs-ip "$WINDOWS_GCS_IP"
+Windows GCS:
 
-# WSL terminal 2: run the SITL line-follow mission with the same GCS video path
-./build/line_follow_node --config config --target sitl --vision gazebo --video --gcs-ip "$WINDOWS_GCS_IP"
+```powershell
+cd astroquad\uav-gcs
+.\build\uav_gcs_vision_debug.exe --config config
 ```
 
-Deterministic Gazebo vision fixtures, useful before starting SITL:
+WSL Gazebo/SITL:
+
+```bash
+bash ~/fly_test.sh
+```
+
+WSL vision-only GCS smoke:
+
+```bash
+WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
+
+cd ~/astroquad/uav-onboard
+./build/vision_debug_node \
+  --config config \
+  --target sitl \
+  --vision gazebo \
+  --line-mode light_on_dark \
+  --video \
+  --gcs-ip "$WINDOWS_GCS_IP"
+```
+
+WSL marker fixture smoke:
+
+```bash
+cd ~/astroquad/uav-onboard
+./build/vision_debug_node \
+  --config config \
+  --target sitl \
+  --vision gazebo \
+  --gazebo-topic /world/astroquad_marker_center_fixture/model/astroquad_static_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --aruco-only \
+  --video \
+  --gcs-ip "$WINDOWS_GCS_IP"
+```
+
+WSL vision-driven flight smoke:
+
+```bash
+cd ~/astroquad/uav-onboard
+./build/line_follow_node \
+  --config config \
+  --target sitl \
+  --vision gazebo \
+  --video \
+  --gcs-ip "$WINDOWS_GCS_IP"
+```
+
+Existing real-hardware vision debug path:
+
+```bash
+./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
+```
+
+Deterministic Gazebo vision fixtures can also be run without ArduPilot SITL:
 
 ```bash
 GZ_SIM_SYSTEM_PLUGIN_PATH="$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}" \

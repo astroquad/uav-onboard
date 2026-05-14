@@ -70,6 +70,8 @@ if(WIN32)
     target_link_libraries(onboard_core PUBLIC ws2_32)
 endif()
 
+option(ONBOARD_FETCH_MAVLINK "Download MAVLink C headers when they are not installed locally" ON)
+
 set(MAVLINK_INCLUDE_DIR "" CACHE PATH "Path containing mavlink/v2.0/ardupilotmega/mavlink.h")
 if(NOT MAVLINK_INCLUDE_DIR)
     find_path(DETECTED_MAVLINK_INCLUDE_DIR
@@ -84,6 +86,26 @@ if(NOT MAVLINK_INCLUDE_DIR)
         set(MAVLINK_INCLUDE_DIR "${DETECTED_MAVLINK_INCLUDE_DIR}" CACHE PATH
             "Path containing mavlink/v2.0/ardupilotmega/mavlink.h" FORCE)
     endif()
+endif()
+
+if(NOT MAVLINK_INCLUDE_DIR AND ONBOARD_FETCH_MAVLINK)
+    FetchContent_Declare(
+        mavlink_c_library_v2
+        URL https://github.com/mavlink/c_library_v2/archive/refs/heads/master.tar.gz
+    )
+    FetchContent_MakeAvailable(mavlink_c_library_v2)
+    FetchContent_GetProperties(mavlink_c_library_v2 SOURCE_DIR MAVLINK_C_LIBRARY_V2_SOURCE_DIR)
+
+    set(MAVLINK_COMPAT_INCLUDE_DIR "${CMAKE_BINARY_DIR}/_deps/mavlink_include")
+    file(REMOVE_RECURSE "${MAVLINK_COMPAT_INCLUDE_DIR}/mavlink")
+    file(MAKE_DIRECTORY "${MAVLINK_COMPAT_INCLUDE_DIR}/mavlink")
+    file(CREATE_LINK
+        "${MAVLINK_C_LIBRARY_V2_SOURCE_DIR}"
+        "${MAVLINK_COMPAT_INCLUDE_DIR}/mavlink/v2.0"
+        SYMBOLIC
+        COPY_ON_ERROR)
+    set(MAVLINK_INCLUDE_DIR "${MAVLINK_COMPAT_INCLUDE_DIR}" CACHE PATH
+        "Path containing mavlink/v2.0/ardupilotmega/mavlink.h" FORCE)
 endif()
 
 if(MAVLINK_INCLUDE_DIR AND NOT WIN32)
