@@ -16,6 +16,7 @@
 
 #include <toml++/toml.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <algorithm>
 #include <cmath>
@@ -56,8 +57,9 @@ struct RuntimeConfig {
     onboard::mission::LineFollowMissionConfig mission;
     onboard::control::GuidedVelocityControllerConfig controller;
     onboard::safety::SafetyConfig safety;
-    double fake_center_error_m = 0.0;
-    double fake_line_angle_deg = 0.0;
+    double fake_center_error_norm = 0.0;
+    double fake_line_angle_deg = 90.0;
+    double desired_line_angle_deg = 90.0;
     double marker_center_tolerance_px = 80.0;
     std::string vision_source = "fake";
 };
@@ -176,6 +178,8 @@ std::uint16_t parsePort(const std::string& value, std::uint16_t fallback)
     return static_cast<std::uint16_t>(parsed);
 }
 
+double degToRad(double degrees);
+
 void applyAutopilotUri(RuntimeConfig& config, const std::string& uri)
 {
     if (uri.rfind("udp://", 0) == 0) {
@@ -290,18 +294,70 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
     if (const auto line_follow = table["line_follow"]) {
         config.controller.forward_mps =
             line_follow["forward_mps"].value_or(config.controller.forward_mps);
-        config.fake_center_error_m =
-            line_follow["center_error_m"].value_or(config.fake_center_error_m);
+        config.fake_center_error_norm =
+            line_follow["center_error_norm"].value_or(
+                line_follow["center_error_m"].value_or(config.fake_center_error_norm));
         config.fake_line_angle_deg =
             line_follow["line_angle_deg"].value_or(config.fake_line_angle_deg);
+        config.desired_line_angle_deg =
+            line_follow["desired_angle_deg"].value_or(config.desired_line_angle_deg);
         config.mission.line_follow_duration_s =
             line_follow["duration_s"].value_or(config.mission.line_follow_duration_s);
+    }
+    if (const auto altitude_hold = table["altitude_hold"]) {
+        config.controller.altitude_kp =
+            altitude_hold["kp"].value_or(config.controller.altitude_kp);
+        config.controller.max_vz_down_mps =
+            altitude_hold["max_vz_mps"].value_or(config.controller.max_vz_down_mps);
+        config.controller.altitude_deadband_m =
+            altitude_hold["deadband_m"].value_or(config.controller.altitude_deadband_m);
+    }
+    if (const auto line_controller = table["line_controller"]) {
+        config.controller.offset_kp =
+            line_controller["offset_kp"].value_or(config.controller.offset_kp);
+        config.controller.angle_yaw_kp =
+            line_controller["angle_yaw_kp"].value_or(config.controller.angle_yaw_kp);
+        config.controller.offset_yaw_kp =
+            line_controller["offset_yaw_kp"].value_or(config.controller.offset_yaw_kp);
+        config.controller.max_lateral_mps =
+            line_controller["max_lateral_mps"].value_or(config.controller.max_lateral_mps);
+        config.controller.max_yaw_rate_rad_s =
+            line_controller["max_yaw_rate_rad_s"].value_or(config.controller.max_yaw_rate_rad_s);
+        config.controller.min_confidence =
+            line_controller["min_confidence"].value_or(config.controller.min_confidence);
+        config.controller.offset_deadband_norm =
+            line_controller["offset_deadband_norm"].value_or(config.controller.offset_deadband_norm);
+        const double angle_deadband_deg =
+            line_controller["angle_deadband_deg"].value_or(
+                config.controller.angle_deadband_rad * 180.0 / 3.14159265358979323846);
+        config.controller.angle_deadband_rad = degToRad(angle_deadband_deg);
+        config.controller.invert_lateral =
+            line_controller["invert_lateral"].value_or(config.controller.invert_lateral);
+        config.controller.invert_yaw =
+            line_controller["invert_yaw"].value_or(config.controller.invert_yaw);
     }
     if (const auto marker_hover = table["marker_hover"]) {
         config.mission.marker_hover_s =
             marker_hover["hold_s"].value_or(config.mission.marker_hover_s);
+        config.mission.marker_approach_timeout_s =
+            marker_hover["approach_timeout_s"].value_or(config.mission.marker_approach_timeout_s);
+        config.mission.marker_lost_timeout_s =
+            marker_hover["lost_timeout_s"].value_or(config.mission.marker_lost_timeout_s);
         config.marker_center_tolerance_px =
             marker_hover["center_tolerance_px"].value_or(config.marker_center_tolerance_px);
+        config.controller.marker_x_kp =
+            marker_hover["center_x_kp"].value_or(
+                marker_hover["center_kp"].value_or(config.controller.marker_x_kp));
+        config.controller.marker_y_kp =
+            marker_hover["center_y_kp"].value_or(
+                marker_hover["center_kp"].value_or(config.controller.marker_y_kp));
+        config.controller.max_marker_mps =
+            marker_hover["max_lateral_mps"].value_or(
+                marker_hover["max_marker_mps"].value_or(config.controller.max_marker_mps));
+        config.controller.invert_marker_x =
+            marker_hover["invert_x"].value_or(config.controller.invert_marker_x);
+        config.controller.invert_marker_y =
+            marker_hover["invert_y"].value_or(config.controller.invert_marker_y);
     }
 }
 
@@ -347,22 +403,76 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
         if (const auto takeoff = table["takeoff"]) {
             config.mission.target_altitude_m =
                 takeoff["target_altitude_m"].value_or(config.mission.target_altitude_m);
+            config.mission.altitude_reached_ratio =
+                takeoff["altitude_reached_ratio"].value_or(config.mission.altitude_reached_ratio);
         }
         if (const auto line_follow = table["line_follow"]) {
             config.controller.forward_mps =
                 line_follow["forward_mps"].value_or(config.controller.forward_mps);
-            config.fake_center_error_m =
-                line_follow["center_error_m"].value_or(config.fake_center_error_m);
+            config.fake_center_error_norm =
+                line_follow["center_error_norm"].value_or(
+                    line_follow["center_error_m"].value_or(config.fake_center_error_norm));
             config.fake_line_angle_deg =
                 line_follow["line_angle_deg"].value_or(config.fake_line_angle_deg);
+            config.desired_line_angle_deg =
+                line_follow["desired_angle_deg"].value_or(config.desired_line_angle_deg);
             config.mission.line_follow_duration_s =
                 line_follow["duration_s"].value_or(config.mission.line_follow_duration_s);
+        }
+        if (const auto altitude_hold = table["altitude_hold"]) {
+            config.controller.altitude_kp =
+                altitude_hold["kp"].value_or(config.controller.altitude_kp);
+            config.controller.max_vz_down_mps =
+                altitude_hold["max_vz_mps"].value_or(config.controller.max_vz_down_mps);
+            config.controller.altitude_deadband_m =
+                altitude_hold["deadband_m"].value_or(config.controller.altitude_deadband_m);
+        }
+        if (const auto line_controller = table["line_controller"]) {
+            config.controller.offset_kp =
+                line_controller["offset_kp"].value_or(config.controller.offset_kp);
+            config.controller.angle_yaw_kp =
+                line_controller["angle_yaw_kp"].value_or(config.controller.angle_yaw_kp);
+            config.controller.offset_yaw_kp =
+                line_controller["offset_yaw_kp"].value_or(config.controller.offset_yaw_kp);
+            config.controller.max_lateral_mps =
+                line_controller["max_lateral_mps"].value_or(config.controller.max_lateral_mps);
+            config.controller.max_yaw_rate_rad_s =
+                line_controller["max_yaw_rate_rad_s"].value_or(config.controller.max_yaw_rate_rad_s);
+            config.controller.min_confidence =
+                line_controller["min_confidence"].value_or(config.controller.min_confidence);
+            config.controller.offset_deadband_norm =
+                line_controller["offset_deadband_norm"].value_or(config.controller.offset_deadband_norm);
+            const double angle_deadband_deg =
+                line_controller["angle_deadband_deg"].value_or(
+                    config.controller.angle_deadband_rad * 180.0 / 3.14159265358979323846);
+            config.controller.angle_deadband_rad = degToRad(angle_deadband_deg);
+            config.controller.invert_lateral =
+                line_controller["invert_lateral"].value_or(config.controller.invert_lateral);
+            config.controller.invert_yaw =
+                line_controller["invert_yaw"].value_or(config.controller.invert_yaw);
         }
         if (const auto marker_hover = table["marker_hover"]) {
             config.mission.marker_hover_s =
                 marker_hover["hold_s"].value_or(config.mission.marker_hover_s);
+            config.mission.marker_approach_timeout_s =
+                marker_hover["approach_timeout_s"].value_or(config.mission.marker_approach_timeout_s);
+            config.mission.marker_lost_timeout_s =
+                marker_hover["lost_timeout_s"].value_or(config.mission.marker_lost_timeout_s);
             config.marker_center_tolerance_px =
                 marker_hover["center_tolerance_px"].value_or(config.marker_center_tolerance_px);
+            config.controller.marker_x_kp =
+                marker_hover["center_x_kp"].value_or(
+                    marker_hover["center_kp"].value_or(config.controller.marker_x_kp));
+            config.controller.marker_y_kp =
+                marker_hover["center_y_kp"].value_or(
+                    marker_hover["center_kp"].value_or(config.controller.marker_y_kp));
+            config.controller.max_marker_mps =
+                marker_hover["max_lateral_mps"].value_or(
+                    marker_hover["max_marker_mps"].value_or(config.controller.max_marker_mps));
+            config.controller.invert_marker_x =
+                marker_hover["invert_x"].value_or(config.controller.invert_marker_x);
+            config.controller.invert_marker_y =
+                marker_hover["invert_y"].value_or(config.controller.invert_marker_y);
         }
     } catch (const toml::parse_error&) {
     }
@@ -449,6 +559,24 @@ double degToRad(double degrees)
     return degrees * pi / 180.0;
 }
 
+double radToDeg(double radians)
+{
+    constexpr double pi = 3.14159265358979323846;
+    return radians * 180.0 / pi;
+}
+
+double axialAngleDeltaDeg(double measured_deg, double desired_deg)
+{
+    double delta = measured_deg - desired_deg;
+    while (delta > 90.0) {
+        delta -= 180.0;
+    }
+    while (delta < -90.0) {
+        delta += 180.0;
+    }
+    return delta;
+}
+
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
 std::unique_ptr<onboard::vision::FrameSource> createFrameSource(const std::string& vision_source)
 {
@@ -464,25 +592,57 @@ std::unique_ptr<onboard::vision::FrameSource> createFrameSource(const std::strin
     throw std::runtime_error("unknown vision source: " + vision_source);
 }
 
-onboard::control::LineControlInput toLineControlInput(const onboard::vision::VisionResult& result)
+onboard::control::LineControlInput toLineControlInput(
+    const onboard::vision::VisionResult& result,
+    double desired_line_angle_deg)
 {
     const double half_width = std::max(1.0, static_cast<double>(result.width) * 0.5);
     return onboard::control::LineControlInput {
         result.line.detected,
         result.line.center_offset_px / half_width,
-        degToRad(result.line.angle_deg),
+        degToRad(axialAngleDeltaDeg(result.line.angle_deg, desired_line_angle_deg)),
         result.line.confidence,
+    };
+}
+
+std::optional<onboard::vision::MarkerObservation> selectTargetMarker(
+    const onboard::vision::VisionResult& result)
+{
+    if (result.markers.empty()) {
+        return std::nullopt;
+    }
+    for (const auto& marker : result.markers) {
+        if (marker.id == 1) {
+            return marker;
+        }
+    }
+    return result.markers.front();
+}
+
+onboard::control::MarkerControlInput toMarkerControlInput(
+    const onboard::vision::VisionResult& result)
+{
+    const auto marker = selectTargetMarker(result);
+    if (!marker || result.width <= 0 || result.height <= 0) {
+        return {};
+    }
+    const double half_width = std::max(1.0, static_cast<double>(result.width) * 0.5);
+    const double half_height = std::max(1.0, static_cast<double>(result.height) * 0.5);
+    return onboard::control::MarkerControlInput {
+        true,
+        (marker->center_px.x - static_cast<double>(result.width) * 0.5) / half_width,
+        (marker->center_px.y - static_cast<double>(result.height) * 0.5) / half_height,
     };
 }
 
 bool markerCentered(const onboard::vision::VisionResult& result, double tolerance_px)
 {
-    if (result.markers.empty() || result.width <= 0 || result.height <= 0) {
+    const auto marker = selectTargetMarker(result);
+    if (!marker || result.width <= 0 || result.height <= 0) {
         return false;
     }
-    const auto& marker = result.markers.front();
-    const double dx = marker.center_px.x - static_cast<double>(result.width) * 0.5;
-    const double dy = marker.center_px.y - static_cast<double>(result.height) * 0.5;
+    const double dx = marker->center_px.x - static_cast<double>(result.width) * 0.5;
+    const double dy = marker->center_px.y - static_cast<double>(result.height) * 0.5;
     return std::hypot(dx, dy) <= tolerance_px;
 }
 
@@ -569,6 +729,116 @@ private:
     double rate_ = 0.0;
 };
 
+VisionFrameResult readAndPublishVisionFrame(
+    onboard::vision::FrameSource& source,
+    onboard::vision::VisionProcessor& processor,
+    onboard::app::VisionDebugPublisher* publisher,
+    RateMeter& capture_rate,
+    RateMeter& processing_rate)
+{
+    auto frame_result = readVisionFrameResult(source, processor);
+    const double capture_fps = capture_rate.note(Clock::now());
+    const double processing_fps = processing_rate.note(Clock::now());
+
+    if (publisher) {
+        onboard::app::VisionDebugPublishInput publish_input;
+        publish_input.frame = frame_result.frame;
+        publish_input.image_bgr = frame_result.frame.image_bgr;
+        publish_input.vision_output = frame_result.output;
+        publish_input.read_frame_ms = frame_result.read_frame_ms;
+        publish_input.processing_latency_ms = frame_result.processing_latency_ms;
+        publish_input.capture_fps = capture_fps;
+        publish_input.processing_fps = processing_fps;
+        const auto publish_stats = publisher->publish(std::move(publish_input));
+        const std::string publish_error = publisher->lastError();
+        if (!publish_error.empty()) {
+            std::cerr << "[gcs] warning: " << publish_error << "\n";
+        }
+        (void)publish_stats;
+    }
+
+    return frame_result;
+}
+
+class StartupVisionStreamer {
+public:
+    StartupVisionStreamer(
+        onboard::vision::FrameSource& source,
+        onboard::vision::VisionProcessor& processor,
+        onboard::app::VisionDebugPublisher& publisher,
+        RateMeter& capture_rate,
+        RateMeter& processing_rate,
+        std::chrono::milliseconds period)
+        : source_(source)
+        , processor_(processor)
+        , publisher_(publisher)
+        , capture_rate_(capture_rate)
+        , processing_rate_(processing_rate)
+        , period_(period)
+    {
+    }
+
+    ~StartupVisionStreamer()
+    {
+        stop();
+    }
+
+    StartupVisionStreamer(const StartupVisionStreamer&) = delete;
+    StartupVisionStreamer& operator=(const StartupVisionStreamer&) = delete;
+
+    void start()
+    {
+        if (worker_.joinable()) {
+            return;
+        }
+        running_ = true;
+        worker_ = std::thread([this] { run(); });
+    }
+
+    void stop()
+    {
+        running_ = false;
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    int frames() const
+    {
+        return frames_.load();
+    }
+
+private:
+    void run()
+    {
+        while (running_) {
+            const auto loop_start = Clock::now();
+            try {
+                (void)readAndPublishVisionFrame(
+                    source_,
+                    processor_,
+                    &publisher_,
+                    capture_rate_,
+                    processing_rate_);
+                ++frames_;
+            } catch (const std::exception& error) {
+                std::cerr << "[vision] startup warning: " << error.what() << "\n";
+            }
+            std::this_thread::sleep_until(loop_start + period_);
+        }
+    }
+
+    onboard::vision::FrameSource& source_;
+    onboard::vision::VisionProcessor& processor_;
+    onboard::app::VisionDebugPublisher& publisher_;
+    RateMeter& capture_rate_;
+    RateMeter& processing_rate_;
+    std::chrono::milliseconds period_;
+    std::atomic_bool running_ {false};
+    std::atomic<int> frames_ {0};
+    std::thread worker_;
+};
+
 int runVisionSmoke(const RuntimeConfig& config, int count)
 {
     auto source = createFrameSource(config.vision_source);
@@ -637,6 +907,7 @@ int main(int argc, char** argv)
                   << config.network.video_port
                   << " takeoff_alt=" << config.mission.target_altitude_m
                   << " duration=" << config.mission.line_follow_duration_s
+                  << " desired_angle=" << config.desired_line_angle_deg
                   << " rate_hz=" << config.setpoint_rate_hz << "\n";
 
         auto transport = std::make_unique<onboard::autopilot::UdpMavlinkTransport>(
@@ -656,6 +927,7 @@ int main(int argc, char** argv)
         std::unique_ptr<onboard::app::VisionDebugPublisher> gcs_publisher;
         RateMeter capture_rate;
         RateMeter processing_rate;
+        std::unique_ptr<StartupVisionStreamer> startup_vision_streamer;
         if (config.vision_source != "fake") {
             frame_source = createFrameSource(config.vision_source);
             if (!frame_source->open(onboard::vision::FrameSourceOptions {config.vision})) {
@@ -692,6 +964,21 @@ int main(int argc, char** argv)
                           << " dest=" << config.network.gcs_ip << ':'
                           << config.network.telemetry_port << '/'
                           << config.network.video_port << "\n";
+                if (send_video) {
+                    const int startup_fps = std::clamp(
+                        config.vision.debug_video.send_fps,
+                        1,
+                        std::max(1, config.vision.camera.fps));
+                    startup_vision_streamer = std::make_unique<StartupVisionStreamer>(
+                        *frame_source,
+                        *vision_processor,
+                        *gcs_publisher,
+                        capture_rate,
+                        processing_rate,
+                        std::chrono::milliseconds(1000 / startup_fps));
+                    startup_vision_streamer->start();
+                    std::cout << "[gcs] startup video streaming until line-follow control starts\n";
+                }
             }
         }
 #endif
@@ -722,6 +1009,13 @@ int main(int argc, char** argv)
             throw std::runtime_error("timed out waiting for takeoff altitude");
         }
 
+#if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
+        if (startup_vision_streamer) {
+            startup_vision_streamer->stop();
+            std::cout << "[gcs] startup_video_frames=" << startup_vision_streamer->frames() << "\n";
+        }
+#endif
+
         const auto altitude = autopilot.bestAltitudeM();
         mission.update(onboard::mission::LineFollowMissionInput {
             altitude.has_value(),
@@ -737,50 +1031,47 @@ int main(int argc, char** argv)
 
         const auto period = std::chrono::duration<double>(
             1.0 / static_cast<double>(std::max(1, config.setpoint_rate_hz)));
-        const auto line_angle_rad = degToRad(config.fake_line_angle_deg);
+        const auto fake_angle_error_rad =
+            degToRad(axialAngleDeltaDeg(
+                config.fake_line_angle_deg,
+                config.desired_line_angle_deg));
         const onboard::control::LineControlInput fake_line {
             true,
-            config.fake_center_error_m,
-            line_angle_rad,
+            config.fake_center_error_norm,
+            fake_angle_error_rad,
             1.0,
         };
+        const onboard::control::MarkerControlInput fake_marker {};
+        auto last_control_log = Clock::now();
+        auto last_state = mission.state();
 
         while (mission.state() == onboard::mission::LineFollowMissionState::LineFollow ||
+               mission.state() == onboard::mission::LineFollowMissionState::MarkerApproach ||
                mission.state() == onboard::mission::LineFollowMissionState::MarkerHover) {
             const auto loop_start = Clock::now();
             autopilot.poll(1);
 
             onboard::control::LineControlInput line_input = fake_line;
+            onboard::control::MarkerControlInput marker_input = fake_marker;
             bool marker_detected = false;
             bool marker_is_centered = false;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
             if (frame_source && vision_processor) {
                 try {
-                    auto frame_result = readVisionFrameResult(*frame_source, *vision_processor);
+                    auto frame_result = readAndPublishVisionFrame(
+                        *frame_source,
+                        *vision_processor,
+                        gcs_publisher.get(),
+                        capture_rate,
+                        processing_rate);
                     const auto& result = frame_result.output.result;
-                    const double capture_fps = capture_rate.note(Clock::now());
-                    const double processing_fps = processing_rate.note(Clock::now());
-                    line_input = toLineControlInput(result);
-                    marker_detected = !result.markers.empty();
+                    line_input = toLineControlInput(result, config.desired_line_angle_deg);
+                    marker_input = toMarkerControlInput(result);
+                    marker_detected = marker_input.marker_detected;
                     marker_is_centered = markerCentered(result, config.marker_center_tolerance_px);
-                    if (gcs_publisher) {
-                        onboard::app::VisionDebugPublishInput publish_input;
-                        publish_input.frame = frame_result.frame;
-                        publish_input.image_bgr = frame_result.frame.image_bgr;
-                        publish_input.vision_output = frame_result.output;
-                        publish_input.read_frame_ms = frame_result.read_frame_ms;
-                        publish_input.processing_latency_ms = frame_result.processing_latency_ms;
-                        publish_input.capture_fps = capture_fps;
-                        publish_input.processing_fps = processing_fps;
-                        const auto publish_stats = gcs_publisher->publish(std::move(publish_input));
-                        const std::string publish_error = gcs_publisher->lastError();
-                        if (!publish_error.empty()) {
-                            std::cerr << "[gcs] warning: " << publish_error << "\n";
-                        }
-                        (void)publish_stats;
-                    }
                     if (marker_detected) {
-                        std::cout << "[vision] marker id=" << result.markers.front().id
+                        const auto marker = selectTargetMarker(result);
+                        std::cout << "[vision] marker id=" << (marker ? marker->id : -1)
                                   << " centered=" << (marker_is_centered ? "yes" : "no")
                                   << " line=" << (line_input.line_detected ? "yes" : "no")
                                   << " offset_px=" << result.line.center_offset_px << "\n";
@@ -794,7 +1085,7 @@ int main(int argc, char** argv)
 
             const auto safety_decision = safety.update(onboard::safety::SafetyInput {
                 autopilot.state().heartbeat_seen,
-                line_input.line_detected,
+                line_input.line_detected || marker_detected,
                 loop_start,
                 autopilot.state().last_heartbeat_time,
             });
@@ -806,9 +1097,10 @@ int main(int argc, char** argv)
 
             const bool safety_land =
                 safety_decision.action == onboard::safety::SafetyAction::Land;
+            const auto altitude_now = autopilot.bestAltitudeM();
             mission.update(onboard::mission::LineFollowMissionInput {
-                true,
-                autopilot.bestAltitudeM().value_or(0.0),
+                altitude_now.has_value(),
+                altitude_now.value_or(0.0),
                 line_input.line_detected,
                 marker_detected,
                 marker_is_centered,
@@ -816,27 +1108,110 @@ int main(int argc, char** argv)
                 false,
                 loop_start,
             });
+            if (mission.state() != last_state) {
+                std::cout << "[mission] " << toString(mission.state()) << "\n";
+                last_state = mission.state();
+            }
             if (mission.state() != onboard::mission::LineFollowMissionState::LineFollow &&
+                mission.state() != onboard::mission::LineFollowMissionState::MarkerApproach &&
                 mission.state() != onboard::mission::LineFollowMissionState::MarkerHover) {
                 break;
             }
 
+            const onboard::control::AltitudeControlInput altitude_input {
+                altitude_now.has_value(),
+                altitude_now.value_or(config.mission.target_altitude_m),
+                config.mission.target_altitude_m,
+            };
+            onboard::control::ControlSetpoint setpoint;
             if (mission.state() == onboard::mission::LineFollowMissionState::MarkerHover) {
-                autopilot.sendBodyVelocity({});
+                setpoint = controller.stop(altitude_input);
+            } else if (mission.state() == onboard::mission::LineFollowMissionState::MarkerApproach) {
+                if (marker_detected) {
+                    setpoint = controller.updateMarker(marker_input, altitude_input);
+                } else if (line_input.line_detected) {
+                    setpoint = controller.updateLine(line_input, altitude_input);
+                } else {
+                    setpoint = controller.stop(altitude_input);
+                }
             } else {
-                autopilot.sendBodyVelocity(toAutopilotCommand(controller.update(line_input)));
+                setpoint = controller.updateLine(line_input, altitude_input);
+            }
+            autopilot.sendBodyVelocity(toAutopilotCommand(setpoint));
+
+            if (loop_start - last_control_log >= std::chrono::seconds(1)) {
+                const auto& ap_state = autopilot.state();
+                std::cout << "[control] state=" << toString(mission.state())
+                          << " mode=" << ap_state.mode_name
+                          << " alt=" << altitude_now.value_or(-1.0)
+                          << " local_xy=(" << ap_state.local_x_m.value_or(-999.0)
+                          << ',' << ap_state.local_y_m.value_or(-999.0) << ')'
+                          << " vel_ned=(" << ap_state.local_vx_mps.value_or(-999.0)
+                          << ',' << ap_state.local_vy_mps.value_or(-999.0)
+                          << ',' << ap_state.local_vz_mps.value_or(-999.0) << ')'
+                          << " line=" << (line_input.line_detected ? "yes" : "no")
+                          << " off_norm=" << line_input.center_error_norm
+                          << " angle_err_deg=" << radToDeg(line_input.angle_error_rad)
+                          << " marker=" << (marker_detected ? "yes" : "no")
+                          << " marker_x_norm=" << marker_input.center_error_x_norm
+                          << " marker_y_norm=" << marker_input.center_error_y_norm
+                          << " marker_centered=" << (marker_is_centered ? "yes" : "no")
+                          << " vx=" << setpoint.vx_forward_mps
+                          << " vy=" << setpoint.vy_right_mps
+                          << " vz_down=" << setpoint.vz_down_mps
+                          << " yaw_rate=" << setpoint.yaw_rate_rad_s << "\n";
+                last_control_log = loop_start;
             }
             std::this_thread::sleep_until(loop_start + period);
         }
 
-        autopilot.sendBodyVelocity({});
+        autopilot.sendBodyVelocity(toAutopilotCommand(
+            controller.stop(onboard::control::AltitudeControlInput {
+                autopilot.bestAltitudeM().has_value(),
+                autopilot.bestAltitudeM().value_or(config.mission.target_altitude_m),
+                config.mission.target_altitude_m,
+            })));
         if (mission.state() == onboard::mission::LineFollowMissionState::Abort) {
             std::cerr << "[mission] ABORT reason=" << mission.landingReason() << "\n";
         } else {
             std::cout << "[mission] LAND reason=" << mission.landingReason() << "\n";
         }
         autopilot.setLandMode(std::chrono::seconds(10));
-        autopilot.waitDisarmed(std::chrono::seconds(30));
+        const auto disarm_deadline = Clock::now() + std::chrono::seconds(30);
+        bool disarmed = false;
+        int landing_video_frames = 0;
+        while (Clock::now() < disarm_deadline) {
+            const auto loop_start = Clock::now();
+            autopilot.poll(1);
+#if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
+            if (frame_source && vision_processor && gcs_publisher) {
+                try {
+                    (void)readAndPublishVisionFrame(
+                        *frame_source,
+                        *vision_processor,
+                        gcs_publisher.get(),
+                        capture_rate,
+                        processing_rate);
+                    ++landing_video_frames;
+                } catch (const std::exception& error) {
+                    std::cerr << "[vision] landing warning: " << error.what() << "\n";
+                }
+            }
+#endif
+            if (autopilot.state().heartbeat_seen && !autopilot.state().armed) {
+                disarmed = true;
+                break;
+            }
+            std::this_thread::sleep_until(loop_start + period);
+        }
+        if (!disarmed) {
+            throw std::runtime_error("timed out waiting for disarmed state");
+        }
+#if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
+        if (gcs_publisher) {
+            std::cout << "[gcs] landing_video_frames=" << landing_video_frames << "\n";
+        }
+#endif
         mission.markComplete();
         std::cout << "[mission] COMPLETE\n";
         return 0;

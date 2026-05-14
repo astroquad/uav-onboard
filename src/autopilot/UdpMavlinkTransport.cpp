@@ -51,8 +51,11 @@ UdpMavlinkTransport::~UdpMavlinkTransport()
 bool UdpMavlinkTransport::recvMessage(mavlink_message_t& message, int timeout_ms)
 {
     if (!pending_messages_.empty()) {
-        message = pending_messages_.front();
+        const auto pending = pending_messages_.front();
         pending_messages_.pop_front();
+        message = pending.message;
+        last_message_source_ = pending.source;
+        have_last_message_source_ = true;
         return true;
     }
 
@@ -83,28 +86,28 @@ bool UdpMavlinkTransport::recvMessage(mavlink_message_t& message, int timeout_ms
         return false;
     }
 
-    peer_addr_ = source;
-    have_peer_ = true;
-
     for (ssize_t i = 0; i < received; ++i) {
         mavlink_message_t parsed {};
         if (mavlink_parse_char(parse_channel_, buffer[i], &parsed, &parse_status_)) {
-            pending_messages_.push_back(parsed);
+            pending_messages_.push_back(PendingMessage { parsed, source });
         }
     }
 
     if (pending_messages_.empty()) {
         return false;
     }
-    message = pending_messages_.front();
+    const auto pending = pending_messages_.front();
     pending_messages_.pop_front();
+    message = pending.message;
+    last_message_source_ = pending.source;
+    have_last_message_source_ = true;
     return true;
 }
 
 void UdpMavlinkTransport::sendMessage(const mavlink_message_t& message)
 {
     if (!have_peer_) {
-        throw std::runtime_error("no MAVLink peer known yet; wait for heartbeat first");
+        throw std::runtime_error("no MAVLink autopilot peer pinned yet; wait for heartbeat first");
     }
 
     std::uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
@@ -119,6 +122,15 @@ void UdpMavlinkTransport::sendMessage(const mavlink_message_t& message)
     if (sent != static_cast<ssize_t>(length)) {
         throw std::runtime_error("sendto() failed");
     }
+}
+
+void UdpMavlinkTransport::pinPeerFromLastMessage()
+{
+    if (!have_last_message_source_) {
+        return;
+    }
+    peer_addr_ = last_message_source_;
+    have_peer_ = true;
 }
 
 } // namespace onboard::autopilot

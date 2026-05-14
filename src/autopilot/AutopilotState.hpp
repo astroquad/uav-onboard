@@ -15,7 +15,12 @@ struct AutopilotState {
     std::uint32_t custom_mode = 0;
     std::string mode_name = "unknown";
     std::optional<double> distance_sensor_m;
+    std::optional<double> local_x_m;
+    std::optional<double> local_y_m;
     std::optional<double> local_altitude_m;
+    std::optional<double> local_vx_mps;
+    std::optional<double> local_vy_mps;
+    std::optional<double> local_vz_mps;
     std::optional<double> relative_altitude_m;
     std::chrono::steady_clock::time_point last_heartbeat_time {};
 };

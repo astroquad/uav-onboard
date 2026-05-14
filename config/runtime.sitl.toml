@@ -23,9 +23,28 @@ jpeg_quality = 70
 chunk_pacing_us = 150
 
 [line_follow]
-forward_mps = 0.3
-duration_s = 15.0
+forward_mps = 0.25
+desired_angle_deg = 90.0
+duration_s = 60.0
+
+[line_controller]
+offset_kp = 0.35
+angle_yaw_kp = 1.0
+offset_yaw_kp = 0.25
+max_lateral_mps = 0.35
+max_yaw_rate_rad_s = 0.6
+min_confidence = 0.35
+offset_deadband_norm = 0.03
+angle_deadband_deg = 3.0
+invert_lateral = false
+invert_yaw = false
 
 [marker_hover]
 hold_s = 3.0
-center_tolerance_px = 80.0
+center_tolerance_px = 30.0
+center_kp = 0.35
+max_marker_mps = 0.30
+approach_timeout_s = 25.0
+lost_timeout_s = 5.0
+invert_x = false
+invert_y = true

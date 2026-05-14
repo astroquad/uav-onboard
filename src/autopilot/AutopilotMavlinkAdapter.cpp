@@ -35,6 +35,17 @@ std::string copterModeName(std::uint32_t custom_mode)
     }
 }
 
+bool isConfiguredTargetSystem(const mavlink_message_t& message, const MavlinkIds& ids)
+{
+    return ids.target_system == 0 || message.sysid == ids.target_system;
+}
+
+bool isAutopilotHeartbeat(const mavlink_heartbeat_t& heartbeat)
+{
+    return heartbeat.type != MAV_TYPE_GCS &&
+           heartbeat.autopilot != MAV_AUTOPILOT_INVALID;
+}
+
 } // namespace
 
 AutopilotMavlinkAdapter::AutopilotMavlinkAdapter(
@@ -206,13 +217,13 @@ bool AutopilotMavlinkAdapter::poll(int timeout_ms)
 
 std::optional<double> AutopilotMavlinkAdapter::bestAltitudeM() const
 {
-    if (state_.distance_sensor_m) {
-        return state_.distance_sensor_m;
-    }
     if (state_.local_altitude_m) {
         return state_.local_altitude_m;
     }
-    return state_.relative_altitude_m;
+    if (state_.relative_altitude_m) {
+        return state_.relative_altitude_m;
+    }
+    return state_.distance_sensor_m;
 }
 
 void AutopilotMavlinkAdapter::sendCommandLong(
@@ -285,6 +296,10 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
     if (message.msgid == MAVLINK_MSG_ID_HEARTBEAT) {
         mavlink_heartbeat_t heartbeat {};
         mavlink_msg_heartbeat_decode(&message, &heartbeat);
+        if (!isConfiguredTargetSystem(message, ids_) || !isAutopilotHeartbeat(heartbeat)) {
+            return;
+        }
+        transport_->pinPeerFromLastMessage();
         state_.heartbeat_seen = true;
         state_.target_system = message.sysid;
         state_.target_component =
@@ -293,7 +308,14 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
         state_.mode_name = copterModeName(heartbeat.custom_mode);
         state_.armed = heartbeatArmed(heartbeat);
         state_.last_heartbeat_time = Clock::now();
-    } else if (message.msgid == MAVLINK_MSG_ID_DISTANCE_SENSOR) {
+        return;
+    }
+
+    if (!isConfiguredTargetSystem(message, ids_)) {
+        return;
+    }
+
+    if (message.msgid == MAVLINK_MSG_ID_DISTANCE_SENSOR) {
         mavlink_distance_sensor_t distance {};
         mavlink_msg_distance_sensor_decode(&message, &distance);
         if (distance.current_distance > 0) {
@@ -303,7 +325,12 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
         mavlink_local_position_ned_t position {};
         mavlink_msg_local_position_ned_decode(&message, &position);
         if (std::isfinite(position.z)) {
+            state_.local_x_m = position.x;
+            state_.local_y_m = position.y;
             state_.local_altitude_m = -position.z;
+            state_.local_vx_mps = position.vx;
+            state_.local_vy_mps = position.vy;
+            state_.local_vz_mps = position.vz;
         }
     } else if (message.msgid == MAVLINK_MSG_ID_GLOBAL_POSITION_INT) {
         mavlink_global_position_int_t position {};

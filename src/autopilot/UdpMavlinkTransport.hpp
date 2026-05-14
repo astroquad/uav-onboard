@@ -21,14 +21,22 @@ public:
     bool recvMessage(mavlink_message_t& message, int timeout_ms) override;
     void sendMessage(const mavlink_message_t& message) override;
     const std::string& name() const override { return name_; }
+    void pinPeerFromLastMessage() override;
 
 private:
+    struct PendingMessage {
+        mavlink_message_t message {};
+        sockaddr_in source {};
+    };
+
     int socket_fd_ = -1;
     bool have_peer_ = false;
     sockaddr_in peer_addr_ {};
+    bool have_last_message_source_ = false;
+    sockaddr_in last_message_source_ {};
     std::uint8_t parse_channel_ = 0;
     mavlink_status_t parse_status_ {};
-    std::deque<mavlink_message_t> pending_messages_;
+    std::deque<PendingMessage> pending_messages_;
     std::string name_;
 };
 

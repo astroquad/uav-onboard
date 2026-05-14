@@ -311,6 +311,17 @@ cd ~/astroquad/uav-onboard
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
 
+`line_follow_node --video` owns the Gazebo camera, vision processing, GCS
+telemetry, and GCS video stream for the flight run. Do not run
+`vision_debug_node` at the same time during flight; use it only for vision-only
+smoke tests without `line_follow_node`.
+
+Gazebo downward-camera zoom is set in
+`sim/gazebo/models/iris_with_downward_camera/model.sdf` at
+`<horizontal_fov>`. Larger values zoom out and smaller values zoom in. Restart
+Gazebo with `bash ~/fly_test.sh` after changing this SDF; a C++ rebuild is not
+needed for FOV-only edits.
+
 Existing real-hardware vision debug path:
 
 ```bash
