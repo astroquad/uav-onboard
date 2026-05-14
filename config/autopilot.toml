@@ -1,7 +1,15 @@
+[transport]
+kind = "udp"
+listen_host = "0.0.0.0"
+listen_port = 14550
+
 [serial]
 device = "/dev/serial0"
 baudrate = 115200
 
 [mavlink]
-system_id = 1
+system_id = 191
 component_id = 191
+target_system = 1
+target_component = 1
+setpoint_rate_hz = 20

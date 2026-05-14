@@ -36,6 +36,13 @@ target_include_directories(test_intersection_decision PRIVATE ../src)
 target_link_libraries(test_intersection_decision PRIVATE onboard_core)
 add_test(NAME intersection_decision COMMAND test_intersection_decision)
 
+add_executable(test_guided_velocity_controller
+    test_guided_velocity_controller.cpp
+)
+target_include_directories(test_guided_velocity_controller PRIVATE ../src)
+target_link_libraries(test_guided_velocity_controller PRIVATE onboard_core)
+add_test(NAME guided_velocity_controller COMMAND test_guided_velocity_controller)
+
 if(TARGET onboard_vision)
     add_executable(test_intersection_detector
         test_intersection_detector.cpp

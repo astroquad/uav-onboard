@@ -6,3 +6,9 @@ snake_start_direction = "east"
 
 [takeoff]
 target_altitude_m = 1.2
+
+[line_follow]
+forward_mps = 0.3
+center_error_m = 0.0
+line_angle_deg = 0.0
+duration_s = 3.0

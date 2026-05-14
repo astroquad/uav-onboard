@@ -19,8 +19,6 @@ function(ensure_header_dependency dep_name dep_url dep_include_subdir dep_header
     FetchContent_Declare(
         ${dep_name}
         URL ${dep_url}
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        TLS_VERIFY FALSE
     )
     FetchContent_MakeAvailable(${dep_name})
     FetchContent_GetProperties(${dep_name} SOURCE_DIR dep_source_dir)
@@ -53,10 +51,13 @@ add_library(onboard_core STATIC
     src/common/NetworkConfig.cpp
     src/common/Time.cpp
     src/common/VisionConfig.cpp
+    src/control/GuidedVelocityController.cpp
     src/mission/GridCoordinateTracker.cpp
     src/mission/IntersectionDecision.cpp
+    src/mission/LineFollowMission.cpp
     src/network/UdpTelemetrySender.cpp
     src/protocol/TelemetryMessage.cpp
+    src/safety/SafetyMonitor.cpp
 )
 
 target_include_directories(onboard_core PUBLIC
@@ -67,6 +68,36 @@ target_link_libraries(onboard_core PUBLIC onboard_dependencies)
 
 if(WIN32)
     target_link_libraries(onboard_core PUBLIC ws2_32)
+endif()
+
+set(MAVLINK_INCLUDE_DIR "" CACHE PATH "Path containing mavlink/v2.0/ardupilotmega/mavlink.h")
+if(NOT MAVLINK_INCLUDE_DIR)
+    find_path(DETECTED_MAVLINK_INCLUDE_DIR
+        mavlink/v2.0/ardupilotmega/mavlink.h
+        HINTS
+            "$ENV{HOME}/ardupilot/build/sitl/libraries/GCS_MAVLink/include"
+            "$ENV{HOME}/ardupilot/libraries/GCS_MAVLink/include"
+            "/usr/local/include"
+            "/usr/include"
+    )
+    if(DETECTED_MAVLINK_INCLUDE_DIR)
+        set(MAVLINK_INCLUDE_DIR "${DETECTED_MAVLINK_INCLUDE_DIR}" CACHE PATH
+            "Path containing mavlink/v2.0/ardupilotmega/mavlink.h" FORCE)
+    endif()
+endif()
+
+if(MAVLINK_INCLUDE_DIR AND NOT WIN32)
+    add_library(onboard_autopilot STATIC
+        src/autopilot/AutopilotMavlinkAdapter.cpp
+        src/autopilot/UdpMavlinkTransport.cpp
+    )
+    target_include_directories(onboard_autopilot PUBLIC
+        src
+        ${MAVLINK_INCLUDE_DIR}
+    )
+    target_link_libraries(onboard_autopilot PUBLIC onboard_core)
+else()
+    message(WARNING "MAVLink headers were not found or platform is unsupported; line_follow_node will not be built.")
 endif()
 
 add_library(onboard_video STATIC
@@ -82,6 +113,12 @@ add_executable(uav_onboard
 )
 
 target_link_libraries(uav_onboard PRIVATE onboard_core)
+
+if(TARGET onboard_autopilot)
+    add_executable(line_follow_node tools/line_follow_node.cpp)
+    target_include_directories(line_follow_node PRIVATE src)
+    target_link_libraries(line_follow_node PRIVATE onboard_core onboard_autopilot)
+endif()
 
 option(BUILD_TOOLS "Build onboard development tools" ON)
 if(BUILD_TOOLS)
