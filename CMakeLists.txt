@@ -117,8 +117,8 @@ if(MAVLINK_INCLUDE_DIR AND NOT WIN32)
         src/autopilot/AutopilotMavlinkAdapter.cpp
         src/autopilot/UdpMavlinkTransport.cpp
     )
-    target_include_directories(onboard_autopilot PUBLIC
-        src
+    target_include_directories(onboard_autopilot PUBLIC src)
+    target_include_directories(onboard_autopilot SYSTEM PUBLIC
         ${MAVLINK_INCLUDE_DIR}
     )
     target_link_libraries(onboard_autopilot PUBLIC onboard_core)
