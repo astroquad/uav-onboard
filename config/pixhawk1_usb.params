@@ -43,8 +43,9 @@ EK3_SRC1_YAW = 1
 # SERIAL2 is TELEM2 on Pixhawk1. 23 = RC input.
 # RC_PROTOCOLS=512 restricts detection to CRSF for ELRS.
 # RC_OPTIONS preserves the previously observed bits 5 and 8 from 288, then
-# adds bit 9 for ELRS/CRSF mode/rate-message suppression.
+# adds bit 13 for ELRS CRSF 420K baud compatibility.
 SERIAL2_PROTOCOL = 23
 BRD_SER2_RTSCTS = 0
 RC_PROTOCOLS = 512
-RC_OPTIONS = 800
+RC_OPTIONS = 8480
+RSSI_TYPE = 3

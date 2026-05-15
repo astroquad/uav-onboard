@@ -45,7 +45,8 @@ port = "Pixhawk1 TELEM2"
 serial2_protocol = 23
 brd_ser2_rtscts = 0
 rc_protocols = 512
-rc_options = 800
+rc_options = 8480
+rssi_type = 3
 
 [safety_gate]
 # Current observed values were ARMING_CHECK=0 and BATT_MONITOR=0. Those are
