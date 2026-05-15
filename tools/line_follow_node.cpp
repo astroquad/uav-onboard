@@ -1,5 +1,5 @@
-#include "app/VisionDebugPublisher.hpp"
 #include "autopilot/AutopilotMavlinkAdapter.hpp"
+#include "autopilot/SerialMavlinkTransport.hpp"
 #include "autopilot/UdpMavlinkTransport.hpp"
 #include "common/NetworkConfig.hpp"
 #include "common/VisionConfig.hpp"
@@ -8,6 +8,7 @@
 #include "safety/SafetyMonitor.hpp"
 
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
+#include "app/VisionDebugPublisher.hpp"
 #include "vision/FakeFrameSource.hpp"
 #include "vision/GazeboCameraSource.hpp"
 #include "vision/RpicamFrameSource.hpp"
@@ -75,9 +76,14 @@ struct Options {
     int telemetry_port_override = 0;
     int video_port_override = 0;
     int vision_smoke_count = 0;
+    int smoke_duration_ms = 10000;
     bool send_video = false;
     bool send_video_overridden = false;
     bool send_telemetry = true;
+    bool mavlink_smoke = false;
+    bool no_arm = false;
+    bool dry_run = false;
+    bool allow_arm_takeoff = false;
 };
 
 std::string joinConfigPath(const std::string& config_dir, const std::string& filename)
@@ -111,6 +117,11 @@ void printUsage()
         << "  --no-video                  Disable GCS MJPEG debug streaming\n"
         << "  --no-telemetry              Disable GCS telemetry streaming\n"
         << "  --vision-smoke-count <n>    Read/process n vision frames and exit before MAVLink\n"
+        << "  --mavlink-smoke             Heartbeat/stream smoke only; no mode/arm/takeoff\n"
+        << "  --no-arm                    Real Pixhawk safety mode; no mode/arm/takeoff\n"
+        << "  --dry-run                   Real Pixhawk safety mode; no command-producing mission\n"
+        << "  --allow-arm-takeoff         Explicitly allow real serial arm/takeoff path\n"
+        << "  --smoke-duration-ms <n>     MAVLink smoke duration, default 10000\n"
         << "  --mission-timeout-ms <n>    Override safety mission timeout\n"
         << "  -h, --help                  Show this help\n";
 }
@@ -155,6 +166,16 @@ Options parseOptions(int argc, char** argv)
             options.send_telemetry = false;
         } else if (arg == "--vision-smoke-count" && i + 1 < argc) {
             options.vision_smoke_count = parseInt(argv[++i], 0);
+        } else if (arg == "--mavlink-smoke") {
+            options.mavlink_smoke = true;
+        } else if (arg == "--no-arm") {
+            options.no_arm = true;
+        } else if (arg == "--dry-run") {
+            options.dry_run = true;
+        } else if (arg == "--allow-arm-takeoff") {
+            options.allow_arm_takeoff = true;
+        } else if (arg == "--smoke-duration-ms" && i + 1 < argc) {
+            options.smoke_duration_ms = parseInt(argv[++i], options.smoke_duration_ms);
         } else if (arg == "--mission-timeout-ms" && i + 1 < argc) {
             options.mission_timeout_ms = parseInt(argv[++i], 0);
         } else if (arg == "-h" || arg == "--help") {
@@ -889,19 +910,26 @@ int main(int argc, char** argv)
         }
 #endif
 
-        if (config.endpoint.kind == TransportKind::Serial) {
-            std::cerr
-                << "target " << config.endpoint.label
-                << " selected serial endpoint " << config.endpoint.serial_device
-                << ':' << config.endpoint.serial_baudrate << "\n"
-                << "serial transport is intentionally not implemented in this step; "
-                << "use --target sitl for the approved SITL smoke test\n";
+        const bool real_serial_target = config.endpoint.kind == TransportKind::Serial;
+        if (real_serial_target &&
+            !options.mavlink_smoke &&
+            !options.no_arm &&
+            !options.dry_run &&
+            !options.allow_arm_takeoff) {
+            std::cerr << "target " << config.endpoint.label
+                      << " selected real serial endpoint " << config.endpoint.serial_device
+                      << ':' << config.endpoint.serial_baudrate << "\n"
+                      << "refusing to run the automatic arm/takeoff mission on real Pixhawk without "
+                      << "--mavlink-smoke, --no-arm, --dry-run, or --allow-arm-takeoff\n";
             return 2;
         }
 
         std::cout << "[line_follow_node] target=" << config.endpoint.label
                   << " vision=" << config.vision_source
-                  << " udp_port=" << config.endpoint.listen_port
+                  << " endpoint="
+                  << (config.endpoint.kind == TransportKind::Serial
+                          ? config.endpoint.serial_device + ":" + std::to_string(config.endpoint.serial_baudrate)
+                          : "udp:" + std::to_string(config.endpoint.listen_port))
                   << " gcs=" << config.network.gcs_ip << ':'
                   << config.network.telemetry_port << '/'
                   << config.network.video_port
@@ -910,16 +938,59 @@ int main(int argc, char** argv)
                   << " desired_angle=" << config.desired_line_angle_deg
                   << " rate_hz=" << config.setpoint_rate_hz << "\n";
 
-        auto transport = std::make_unique<onboard::autopilot::UdpMavlinkTransport>(
-            config.endpoint.listen_port,
-            MAVLINK_COMM_0,
-            config.endpoint.label);
+        std::unique_ptr<onboard::autopilot::MavlinkTransport> transport;
+        if (config.endpoint.kind == TransportKind::Serial) {
+            transport = std::make_unique<onboard::autopilot::SerialMavlinkTransport>(
+                config.endpoint.serial_device,
+                config.endpoint.serial_baudrate,
+                MAVLINK_COMM_0,
+                config.endpoint.label);
+        } else {
+            transport = std::make_unique<onboard::autopilot::UdpMavlinkTransport>(
+                config.endpoint.listen_port,
+                MAVLINK_COMM_0,
+                config.endpoint.label);
+        }
         onboard::autopilot::AutopilotMavlinkAdapter autopilot(
             std::move(transport),
             config.mavlink);
         onboard::control::GuidedVelocityController controller(config.controller);
         onboard::mission::LineFollowMission mission(config.mission);
         onboard::safety::SafetyMonitor safety(config.safety);
+
+        if (options.mavlink_smoke || options.no_arm || options.dry_run) {
+            std::cout << "[mavlink] safety smoke mode: no mode/arm/takeoff/velocity commands\n";
+            std::cout << "[mavlink] waiting for heartbeat...\n";
+            autopilot.waitHeartbeat(std::chrono::seconds(30));
+            std::cout << "[mavlink] heartbeat ok system="
+                      << static_cast<int>(autopilot.state().target_system)
+                      << " component=" << static_cast<int>(autopilot.state().target_component)
+                      << " mode=" << autopilot.state().mode_name
+                      << " armed=" << (autopilot.state().armed ? "true" : "false") << "\n";
+            autopilot.requestDefaultStreams();
+            const auto smoke_deadline =
+                Clock::now() + std::chrono::milliseconds(std::max(1000, options.smoke_duration_ms));
+            auto last_smoke_log = Clock::now() - std::chrono::seconds(1);
+            while (Clock::now() < smoke_deadline) {
+                autopilot.poll(200);
+                const auto now = Clock::now();
+                if (now - last_smoke_log >= std::chrono::seconds(1)) {
+                    const auto& ap_state = autopilot.state();
+                    std::cout << "[mavlink-smoke] mode=" << ap_state.mode_name
+                              << " armed=" << (ap_state.armed ? "true" : "false")
+                              << " alt=" << autopilot.bestAltitudeM().value_or(-1.0)
+                              << " local_xy=(" << ap_state.local_x_m.value_or(-999.0)
+                              << ',' << ap_state.local_y_m.value_or(-999.0) << ')'
+                              << " vel_ned=(" << ap_state.local_vx_mps.value_or(-999.0)
+                              << ',' << ap_state.local_vy_mps.value_or(-999.0)
+                              << ',' << ap_state.local_vz_mps.value_or(-999.0) << ')'
+                              << " range=" << ap_state.distance_sensor_m.value_or(-1.0)
+                              << "\n";
+                    last_smoke_log = now;
+                }
+            }
+            return 0;
+        }
 
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         std::unique_ptr<onboard::vision::FrameSource> frame_source;

@@ -1,0 +1,45 @@
+# Pixhawk1 USB bench gate expectations for Astroquad.
+# This file is checked by humans and mavlink_probe output; it is not applied
+# directly. Use pixhawk1_usb.params for parameter writes.
+
+[identity]
+sysid = 1
+firmware_family = "ArduCopter"
+frame_class = 1
+frame_type = 1
+
+[mavlink]
+device = "/dev/serial/by-id/usb-ArduPilot_fmuv2_260034001451373037353835-if00"
+baudrate = 115200
+
+[optical_flow]
+flow_type = 5
+ek3_flow_use = 1
+
+[rangefinder]
+rngfnd1_type = 10
+rngfnd1_orient = 25
+rngfnd1_min_cm = 1
+rngfnd1_max_cm = 800
+
+[ekf3_no_gps_optical_flow]
+ahrs_ekf_type = 3
+ek3_enable = 1
+ek3_src1_posxy = 0
+ek3_src1_velxy = 5
+ek3_src1_posz = 1
+ek3_src1_velz = 0
+ek3_src1_yaw = 1
+
+[telemetry_gate]
+heartbeat_required = true
+local_position_ned_required = true
+range_required = true
+optical_flow_required = true
+rc_channels_required = true
+
+[safety_gate]
+# Current observed values were ARMING_CHECK=0 and BATT_MONITOR=0. Those are
+# bench-observed facts, not final flight-ready expectations.
+arming_check_should_not_be_zero_for_flight = true
+battery_monitor_should_not_be_zero_for_flight = true

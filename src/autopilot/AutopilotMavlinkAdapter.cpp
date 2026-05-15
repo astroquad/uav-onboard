@@ -74,6 +74,21 @@ void AutopilotMavlinkAdapter::requestDefaultStreams()
     requestMessageInterval(MAVLINK_MSG_ID_DISTANCE_SENSOR, 10.0);
     requestMessageInterval(MAVLINK_MSG_ID_LOCAL_POSITION_NED, 10.0);
     requestMessageInterval(MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 5.0);
+#ifdef MAVLINK_MSG_ID_RANGEFINDER
+    requestMessageInterval(MAVLINK_MSG_ID_RANGEFINDER, 10.0);
+#endif
+#ifdef MAVLINK_MSG_ID_OPTICAL_FLOW
+    requestMessageInterval(MAVLINK_MSG_ID_OPTICAL_FLOW, 10.0);
+#endif
+#ifdef MAVLINK_MSG_ID_OPTICAL_FLOW_RAD
+    requestMessageInterval(MAVLINK_MSG_ID_OPTICAL_FLOW_RAD, 10.0);
+#endif
+#ifdef MAVLINK_MSG_ID_EKF_STATUS_REPORT
+    requestMessageInterval(MAVLINK_MSG_ID_EKF_STATUS_REPORT, 5.0);
+#endif
+#ifdef MAVLINK_MSG_ID_RC_CHANNELS
+    requestMessageInterval(MAVLINK_MSG_ID_RC_CHANNELS, 5.0);
+#endif
 }
 
 void AutopilotMavlinkAdapter::setGuidedMode(std::chrono::seconds timeout)
@@ -321,6 +336,14 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
         if (distance.current_distance > 0) {
             state_.distance_sensor_m = distance.current_distance / 100.0;
         }
+#ifdef MAVLINK_MSG_ID_RANGEFINDER
+    } else if (message.msgid == MAVLINK_MSG_ID_RANGEFINDER) {
+        mavlink_rangefinder_t rangefinder {};
+        mavlink_msg_rangefinder_decode(&message, &rangefinder);
+        if (std::isfinite(rangefinder.distance) && rangefinder.distance > 0.0f) {
+            state_.distance_sensor_m = rangefinder.distance;
+        }
+#endif
     } else if (message.msgid == MAVLINK_MSG_ID_LOCAL_POSITION_NED) {
         mavlink_local_position_ned_t position {};
         mavlink_msg_local_position_ned_decode(&message, &position);

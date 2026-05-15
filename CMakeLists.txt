@@ -115,6 +115,7 @@ endif()
 if(MAVLINK_INCLUDE_DIR AND NOT WIN32)
     add_library(onboard_autopilot STATIC
         src/autopilot/AutopilotMavlinkAdapter.cpp
+        src/autopilot/SerialMavlinkTransport.cpp
         src/autopilot/UdpMavlinkTransport.cpp
     )
     target_include_directories(onboard_autopilot PUBLIC src)
@@ -144,6 +145,14 @@ if(TARGET onboard_autopilot)
     add_executable(line_follow_node tools/line_follow_node.cpp)
     target_include_directories(line_follow_node PRIVATE src)
     target_link_libraries(line_follow_node PRIVATE onboard_core onboard_autopilot)
+
+    add_executable(mavlink_probe tools/mavlink_probe.cpp)
+    target_include_directories(mavlink_probe PRIVATE src)
+    target_link_libraries(mavlink_probe PRIVATE onboard_core onboard_autopilot)
+
+    add_executable(mavlink_motor_test tools/mavlink_motor_test.cpp)
+    target_include_directories(mavlink_motor_test PRIVATE src)
+    target_link_libraries(mavlink_motor_test PRIVATE onboard_core onboard_autopilot)
 endif()
 
 option(BUILD_TOOLS "Build onboard development tools" ON)

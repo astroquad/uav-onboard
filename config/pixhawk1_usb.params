@@ -1,0 +1,40 @@
+# Astroquad Pixhawk1 + MTF-01 USB bench parameter target.
+#
+# Apply only after a no-arm mavlink_probe run confirms heartbeat and the
+# operator is ready to change Pixhawk parameters:
+#
+#   ./build/mavlink_probe --config config --target pixhawk1 \
+#     --param-file config/pixhawk1_usb.params
+#
+#   ./build/mavlink_probe --config config --target pixhawk1 \
+#     --param-file config/pixhawk1_usb.params \
+#     --apply-params --i-understand-this-writes-pixhawk-params
+#
+# This file intentionally avoids motor, arming, and battery-monitor changes.
+# Battery monitor and final arming checks must be set after confirming the
+# actual power module/current sensor wiring.
+
+AHRS_EKF_TYPE = 3
+EK3_ENABLE = 1
+
+# MTF-01 optical flow and rangefinder.
+FLOW_TYPE = 5
+EK3_FLOW_USE = 1
+RNGFND1_TYPE = 10
+RNGFND1_ORIENT = 25
+RNGFND1_MIN_CM = 1
+RNGFND1_MAX_CM = 800
+RNGFND1_GNDCLEAR = 10
+WPNAV_RFND_USE = 1
+
+# No-GPS optical-flow EKF source set.
+# POSXY=0: no horizontal position source.
+# VELXY=5: optical flow horizontal velocity.
+# POSZ=1: barometer height.
+# VELZ=0: no vertical velocity source.
+# YAW=1: compass yaw.
+EK3_SRC1_POSXY = 0
+EK3_SRC1_VELXY = 5
+EK3_SRC1_POSZ = 1
+EK3_SRC1_VELZ = 0
+EK3_SRC1_YAW = 1

@@ -6,7 +6,7 @@ vision = "rpicam"
 kind = "serial"
 
 [serial]
-device = "/dev/serial0"
+device = "/dev/serial/by-id/usb-ArduPilot_fmuv2_260034001451373037353835-if00"
 baudrate = 115200
 
 [safety.timeouts]

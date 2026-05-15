@@ -87,4 +87,11 @@ if(TARGET onboard_autopilot)
     target_include_directories(test_udp_mavlink_transport PRIVATE ../src)
     target_link_libraries(test_udp_mavlink_transport PRIVATE onboard_autopilot onboard_core)
     add_test(NAME udp_mavlink_transport COMMAND test_udp_mavlink_transport)
+
+    add_executable(test_serial_mavlink_transport
+        test_serial_mavlink_transport.cpp
+    )
+    target_include_directories(test_serial_mavlink_transport PRIVATE ../src)
+    target_link_libraries(test_serial_mavlink_transport PRIVATE onboard_autopilot onboard_core)
+    add_test(NAME serial_mavlink_transport COMMAND test_serial_mavlink_transport)
 endif()
