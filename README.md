@@ -322,6 +322,78 @@ Gazebo downward-camera zoom is set in
 Gazebo with `bash ~/fly_test.sh` after changing this SDF; a C++ rebuild is not
 needed for FOV-only edits.
 
+### Pixhawk1 Real-Hardware Bench Commands
+
+These commands are for the Raspberry Pi 4 connected to the real Pixhawk1 over
+USB serial. They are intended for bench bring-up before any real line-follow
+flight. Keep propellers removed for all motor checks.
+
+No-arm MAVLink/MTF-01 telemetry probe:
+
+```bash
+cd /home/astroquad/astroquad/uav-onboard
+
+./build/mavlink_probe --config config --target pixhawk1 \
+  --duration-ms 12000 --strict-local-estimate
+```
+
+This should print a Pixhawk heartbeat, mode/armed state, local position,
+rangefinder/distance sensor, optical flow quality, and EKF flags. It only sends
+GCS heartbeat and stream requests; it does not arm, change mode, take off, or
+send velocity commands.
+
+No-arm `line_follow_node` serial smoke:
+
+```bash
+cd /home/astroquad/astroquad/uav-onboard
+
+./build/line_follow_node --config config --target pixhawk1 \
+  --mavlink-smoke --smoke-duration-ms 5000 --no-telemetry
+```
+
+This validates that the mission executable can select the Pixhawk serial
+transport from config. In smoke mode it does not arm, change mode, take off, or
+send velocity commands.
+
+Pixhawk parameter compare:
+
+```bash
+cd /home/astroquad/astroquad/uav-onboard
+
+./build/mavlink_probe --config config --target pixhawk1 \
+  --duration-ms 12000 --param-file config/pixhawk1_usb.params
+```
+
+Apply the tracked Pixhawk parameter file only after the no-arm probe succeeds:
+
+```bash
+cd /home/astroquad/astroquad/uav-onboard
+
+./build/mavlink_probe --config config --target pixhawk1 \
+  --duration-ms 12000 \
+  --param-file config/pixhawk1_usb.params \
+  --apply-params --i-understand-this-writes-pixhawk-params
+```
+
+Low-throttle motor command check:
+
+```bash
+cd /home/astroquad/astroquad/uav-onboard
+
+./build/mavlink_motor_test --config config --target pixhawk1 \
+  --motor 1 --percent 5 --seconds 1 --props-removed
+```
+
+Expected result: motor 1 spins briefly at low throttle and the tool prints
+`COMMAND_ACK result=0`. Repeat with `--motor 2`, `--motor 3`, and `--motor 4`
+to check each motor output. If the command is accepted but a motor does not
+spin, check the safety switch, ESC power, MAIN OUT signal wiring, ESC
+calibration, motor order, and motor PWM parameters before increasing throttle.
+
+Do not run the real serial mission path with `--allow-arm-takeoff` until RC
+takeover, battery/failsafe behavior, motor order, prop direction, and a short
+manual hover are verified.
+
 Existing real-hardware vision debug path:
 
 ```bash
