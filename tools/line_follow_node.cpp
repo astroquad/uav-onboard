@@ -956,7 +956,7 @@ bool waitTakeoffAltitudeWithHold(
 
 void holdAnchoredAltitude(
     onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
-    const onboard::control::GuidedVelocityController& controller,
+    onboard::control::GuidedVelocityController& controller,
     const LocalHoldAnchor& anchor,
     double target_altitude_m,
     std::chrono::duration<double> duration,
