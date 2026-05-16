@@ -12,6 +12,7 @@ LineFollowMission::LineFollowMission(LineFollowMissionConfig config)
 void LineFollowMission::startTakeoff(std::chrono::steady_clock::time_point now)
 {
     transition(LineFollowMissionState::Takeoff, now);
+    last_line_seen_at_ = now;
 }
 
 LineFollowMissionState LineFollowMission::update(const LineFollowMissionInput& input)
@@ -33,12 +34,18 @@ LineFollowMissionState LineFollowMission::update(const LineFollowMissionInput& i
 
     if (state_ == LineFollowMissionState::LineFollow) {
         const auto elapsed = std::chrono::duration<double>(input.now - state_entered_).count();
+        if (input.line_detected) {
+            last_line_seen_at_ = input.now;
+        }
+        const auto line_lost_elapsed =
+            std::chrono::duration<double>(input.now - last_line_seen_at_).count();
         if (input.land_requested) {
             landing_reason_ = "safety land";
             transition(LineFollowMissionState::Land, input.now);
         } else if (input.marker_detected) {
             transition(LineFollowMissionState::MarkerApproach, input.now);
-        } else if (!input.line_detected) {
+        } else if (!input.line_detected &&
+                   line_lost_elapsed >= config_.line_lost_timeout_s) {
             landing_reason_ = "line end";
             transition(LineFollowMissionState::Land, input.now);
         } else if (elapsed >= config_.line_follow_duration_s) {
@@ -112,6 +119,9 @@ void LineFollowMission::transition(
 {
     state_ = state;
     state_entered_ = now;
+    if (state == LineFollowMissionState::LineFollow) {
+        last_line_seen_at_ = now;
+    }
 }
 
 const char* toString(LineFollowMissionState state)

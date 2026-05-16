@@ -76,6 +76,8 @@ struct Options {
     std::optional<int> mission_timeout_ms;
     int telemetry_port_override = 0;
     int video_port_override = 0;
+    int debug_video_fps_override = 0;
+    bool debug_video_fps_specified = false;
     int vision_smoke_count = 0;
     int smoke_duration_ms = 10000;
     bool send_video = false;
@@ -85,6 +87,7 @@ struct Options {
     bool no_arm = false;
     bool dry_run = false;
     bool allow_arm_takeoff = false;
+    bool unsafe_assume_rc_present = false;
 };
 
 std::string joinConfigPath(const std::string& config_dir, const std::string& filename)
@@ -114,6 +117,7 @@ void printUsage()
         << "  --gcs-ip <ip>               Override GCS telemetry/video destination IP\n"
         << "  --telemetry-port <n>        Override GCS telemetry UDP port\n"
         << "  --video-port <n>            Override GCS video UDP port\n"
+        << "  --fps <n>                   Override GCS debug video send FPS\n"
         << "  --gazebo-topic <topic>      Override Gazebo camera image topic\n"
         << "  --video                     Enable best-effort GCS MJPEG debug streaming\n"
         << "  --no-video                  Disable GCS MJPEG debug streaming\n"
@@ -123,6 +127,7 @@ void printUsage()
         << "  --no-arm                    Real Pixhawk safety mode; no mode/arm/takeoff\n"
         << "  --dry-run                   Real Pixhawk safety mode; no command-producing mission\n"
         << "  --allow-arm-takeoff         Explicitly allow real serial arm/takeoff path\n"
+        << "  --unsafe-assume-rc-present  Bypass MAVLink RC gate for real-flight debugging\n"
         << "  --smoke-duration-ms <n>     MAVLink smoke duration, default 10000\n"
         << "  --mission-timeout-ms <n>    Override safety mission timeout\n"
         << "  -h, --help                  Show this help\n";
@@ -165,6 +170,9 @@ Options parseOptions(int argc, char** argv)
             options.telemetry_port_override = parseInt(argv[++i], 0);
         } else if (arg == "--video-port" && i + 1 < argc) {
             options.video_port_override = parseInt(argv[++i], 0);
+        } else if (arg == "--fps" && i + 1 < argc) {
+            options.debug_video_fps_override = parseInt(argv[++i], 0);
+            options.debug_video_fps_specified = true;
         } else if (arg == "--gazebo-topic" && i + 1 < argc) {
             options.gazebo_topic_override = argv[++i];
         } else if (arg == "--video") {
@@ -185,6 +193,8 @@ Options parseOptions(int argc, char** argv)
             options.dry_run = true;
         } else if (arg == "--allow-arm-takeoff") {
             options.allow_arm_takeoff = true;
+        } else if (arg == "--unsafe-assume-rc-present") {
+            options.unsafe_assume_rc_present = true;
         } else if (arg == "--smoke-duration-ms" && i + 1 < argc) {
             options.smoke_duration_ms = parseInt(argv[++i], options.smoke_duration_ms);
         } else if (arg == "--mission-timeout-ms" && i + 1 < argc) {
@@ -343,6 +353,8 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
             line_follow["desired_angle_deg"].value_or(config.desired_line_angle_deg);
         config.mission.line_follow_duration_s =
             line_follow["duration_s"].value_or(config.mission.line_follow_duration_s);
+        config.mission.line_lost_timeout_s =
+            line_follow["lost_timeout_s"].value_or(config.mission.line_lost_timeout_s);
     }
     if (const auto altitude_hold = table["altitude_hold"]) {
         config.controller.altitude_kp =
@@ -458,6 +470,8 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
                 line_follow["desired_angle_deg"].value_or(config.desired_line_angle_deg);
             config.mission.line_follow_duration_s =
                 line_follow["duration_s"].value_or(config.mission.line_follow_duration_s);
+            config.mission.line_lost_timeout_s =
+                line_follow["lost_timeout_s"].value_or(config.mission.line_lost_timeout_s);
         }
         if (const auto altitude_hold = table["altitude_hold"]) {
             config.controller.altitude_kp =
@@ -583,6 +597,13 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
         config.network.video_port =
             static_cast<std::uint16_t>(options.video_port_override);
     }
+    if (options.debug_video_fps_specified) {
+        if (options.debug_video_fps_override <= 0) {
+            throw std::runtime_error("--fps must be positive");
+        }
+        config.vision.debug_video.send_fps = options.debug_video_fps_override;
+        config.vision.debug_video.enabled = true;
+    }
     if (!options.gazebo_topic_override.empty()) {
         config.vision.source.gazebo_topic = options.gazebo_topic_override;
     }
@@ -591,6 +612,10 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
             throw std::runtime_error("unknown --line-mode: " + options.line_mode_override);
         }
         config.vision.line.mode = options.line_mode_override;
+    }
+    if (options.unsafe_assume_rc_present) {
+        config.safety.assume_rc_present = true;
+        config.safety.rc_required = false;
     }
 
     return config;
@@ -680,6 +705,17 @@ bool waitRcReady(
               << " rssi=" << state.rc_rssi.value_or(-1)
               << " required=true\n";
     return false;
+}
+
+bool nearGroundAndStable(const onboard::autopilot::AutopilotState& state)
+{
+    if (!state.distance_sensor_m || *state.distance_sensor_m > 0.30) {
+        return false;
+    }
+    const double vx = std::abs(state.local_vx_mps.value_or(0.0));
+    const double vy = std::abs(state.local_vy_mps.value_or(0.0));
+    const double vz = std::abs(state.local_vz_mps.value_or(0.0));
+    return vx < 0.35 && vy < 0.35 && vz < 0.35;
 }
 
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
@@ -773,8 +809,10 @@ onboard::vision::VisionResult readVisionResult(
 struct VisionFrameResult {
     onboard::vision::Frame frame;
     onboard::vision::VisionProcessingOutput output;
+    onboard::app::VisionDebugPublishStats publish_stats;
     double read_frame_ms = 0.0;
     double processing_latency_ms = 0.0;
+    bool published = false;
 };
 
 VisionFrameResult readVisionFrameResult(
@@ -855,11 +893,12 @@ VisionFrameResult readAndPublishVisionFrame(
         publish_input.capture_fps = capture_fps;
         publish_input.processing_fps = processing_fps;
         const auto publish_stats = publisher->publish(std::move(publish_input));
+        frame_result.publish_stats = publish_stats;
+        frame_result.published = true;
         const std::string publish_error = publisher->lastError();
         if (!publish_error.empty()) {
             std::cerr << "[gcs] warning: " << publish_error << "\n";
         }
-        (void)publish_stats;
     }
 
     return frame_result;
@@ -1019,11 +1058,17 @@ int main(int argc, char** argv)
                   << config.network.video_port
                   << " takeoff_alt=" << config.mission.target_altitude_m
                   << " duration=" << config.mission.line_follow_duration_s
+                  << " line_lost_timeout=" << config.mission.line_lost_timeout_s
                   << " desired_angle=" << config.desired_line_angle_deg
                   << " line_mode=" << config.vision.line.mode
+                  << " video_fps=" << config.vision.debug_video.send_fps
                   << " rc_required=" << (config.safety.rc_required ? "true" : "false")
                   << " assume_rc=" << (config.safety.assume_rc_present ? "true" : "false")
                   << " rate_hz=" << config.setpoint_rate_hz << "\n";
+        if (options.unsafe_assume_rc_present) {
+            std::cerr
+                << "[safety] WARNING: --unsafe-assume-rc-present bypasses the MAVLink RC gate\n";
+        }
 
         std::unique_ptr<onboard::autopilot::MavlinkTransport> transport;
         if (config.endpoint.kind == TransportKind::Serial) {
@@ -1209,6 +1254,10 @@ int main(int argc, char** argv)
         auto last_control_log = Clock::now();
         auto last_state = mission.state();
         bool operator_takeover = false;
+#if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
+        int mission_vision_frames = 0;
+        onboard::app::VisionDebugPublishStats mission_publish_stats;
+#endif
 
         while (mission.state() == onboard::mission::LineFollowMissionState::LineFollow ||
                mission.state() == onboard::mission::LineFollowMissionState::MarkerApproach ||
@@ -1230,6 +1279,10 @@ int main(int argc, char** argv)
                         capture_rate,
                         processing_rate);
                     const auto& result = frame_result.output.result;
+                    ++mission_vision_frames;
+                    if (frame_result.published) {
+                        mission_publish_stats = frame_result.publish_stats;
+                    }
                     line_input = toLineControlInput(result, config.desired_line_angle_deg);
                     marker_input = toMarkerControlInput(result);
                     marker_detected = marker_input.marker_detected;
@@ -1332,7 +1385,17 @@ int main(int argc, char** argv)
                           << " vx=" << setpoint.vx_forward_mps
                           << " vy=" << setpoint.vy_right_mps
                           << " vz_down=" << setpoint.vz_down_mps
-                          << " yaw_rate=" << setpoint.yaw_rate_rad_s << "\n";
+                          << " yaw_rate=" << setpoint.yaw_rate_rad_s;
+#if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
+                if (gcs_publisher) {
+                    std::cout << " vision_frames=" << mission_vision_frames
+                              << " video_sent=" << mission_publish_stats.video_sent_frames
+                              << " video_drop=" << mission_publish_stats.video_dropped_frames
+                              << " video_skip=" << mission_publish_stats.video_skipped_frames
+                              << " video_fail=" << mission_publish_stats.video_send_failures;
+                }
+#endif
+                std::cout << "\n";
                 last_control_log = loop_start;
             }
             std::this_thread::sleep_until(loop_start + period);
@@ -1343,6 +1406,16 @@ int main(int argc, char** argv)
             std::cerr << "[safety] operator takeover detected; not sending LAND or velocity commands\n";
             return 2;
         }
+
+#if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
+        if (gcs_publisher) {
+            std::cout << "[gcs] mission_vision_frames=" << mission_vision_frames
+                      << " video_sent=" << mission_publish_stats.video_sent_frames
+                      << " video_drop=" << mission_publish_stats.video_dropped_frames
+                      << " video_skip=" << mission_publish_stats.video_skipped_frames
+                      << " video_fail=" << mission_publish_stats.video_send_failures << "\n";
+        }
+#endif
 
         autopilot.sendBodyVelocity(toAutopilotCommand(
             controller.stop(onboard::control::AltitudeControlInput {
@@ -1356,21 +1429,29 @@ int main(int argc, char** argv)
             std::cout << "[mission] LAND reason=" << mission.landingReason() << "\n";
         }
         autopilot.setLandMode(std::chrono::seconds(10));
-        const auto disarm_deadline = Clock::now() + std::chrono::seconds(30);
+        const auto disarm_deadline = Clock::now() + std::chrono::seconds(60);
         bool disarmed = false;
+        bool disarm_requested = false;
+        auto near_ground_since = Clock::time_point {};
         int landing_video_frames = 0;
+#if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
+        onboard::app::VisionDebugPublishStats landing_publish_stats;
+#endif
         while (Clock::now() < disarm_deadline) {
             const auto loop_start = Clock::now();
             autopilot.poll(1);
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
             if (frame_source && vision_processor && gcs_publisher) {
                 try {
-                    (void)readAndPublishVisionFrame(
+                    auto frame_result = readAndPublishVisionFrame(
                         *frame_source,
                         *vision_processor,
                         gcs_publisher.get(),
                         capture_rate,
                         processing_rate);
+                    if (frame_result.published) {
+                        landing_publish_stats = frame_result.publish_stats;
+                    }
                     ++landing_video_frames;
                 } catch (const std::exception& error) {
                     std::cerr << "[vision] landing warning: " << error.what() << "\n";
@@ -1381,14 +1462,49 @@ int main(int argc, char** argv)
                 disarmed = true;
                 break;
             }
+            if (nearGroundAndStable(autopilot.state())) {
+                if (near_ground_since.time_since_epoch().count() == 0) {
+                    near_ground_since = loop_start;
+                }
+                const auto near_ground_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        loop_start - near_ground_since)
+                        .count();
+                if (!disarm_requested && near_ground_ms >= 2000) {
+                    std::cout << "[mission] landed estimate range="
+                              << autopilot.state().distance_sensor_m.value_or(-1.0)
+                              << "m; sending disarm\n";
+                    disarm_requested = true;
+                    try {
+                        autopilot.disarm(std::chrono::seconds(10));
+                        disarmed = true;
+                        break;
+                    } catch (const std::exception& error) {
+                        std::cerr << "[safety] disarm retry failed: "
+                                  << error.what() << "\n";
+                    }
+                }
+            } else {
+                near_ground_since = Clock::time_point {};
+            }
             std::this_thread::sleep_until(loop_start + period);
         }
         if (!disarmed) {
-            throw std::runtime_error("timed out waiting for disarmed state");
+            if (nearGroundAndStable(autopilot.state())) {
+                std::cout << "[mission] final near-ground disarm attempt\n";
+                autopilot.disarm(std::chrono::seconds(10));
+                disarmed = true;
+            } else {
+                throw std::runtime_error("timed out waiting for disarmed state");
+            }
         }
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         if (gcs_publisher) {
-            std::cout << "[gcs] landing_video_frames=" << landing_video_frames << "\n";
+            std::cout << "[gcs] landing_video_frames=" << landing_video_frames
+                      << " video_sent=" << landing_publish_stats.video_sent_frames
+                      << " video_drop=" << landing_publish_stats.video_dropped_frames
+                      << " video_skip=" << landing_publish_stats.video_skipped_frames
+                      << " video_fail=" << landing_publish_stats.video_send_failures << "\n";
         }
 #endif
         mission.markComplete();

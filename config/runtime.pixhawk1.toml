@@ -10,7 +10,7 @@ device = "/dev/serial/by-id/usb-ArduPilot_fmuv2_260034001451373037353835-if00"
 baudrate = 115200
 
 [safety.timeouts]
-line_lost_ms = 1500
+line_lost_ms = 5000
 pixhawk_heartbeat_lost_ms = 2000
 mission_timeout_ms = 300000
 

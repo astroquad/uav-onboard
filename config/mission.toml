@@ -19,6 +19,7 @@ center_error_norm = 0.0
 line_angle_deg = 90.0
 desired_angle_deg = 90.0
 duration_s = 60.0
+lost_timeout_s = 3.0
 
 [line_controller]
 offset_kp = 0.35

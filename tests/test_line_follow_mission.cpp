@@ -9,6 +9,7 @@ int main()
     config.target_altitude_m = 1.0;
     config.altitude_reached_ratio = 0.8;
     config.line_follow_duration_s = 30.0;
+    config.line_lost_timeout_s = 3.0;
     config.marker_approach_timeout_s = 5.0;
     config.marker_hover_s = 3.0;
     config.marker_lost_timeout_s = 2.0;
@@ -68,8 +69,23 @@ int main()
     assert(line_end_mission.update(input(0.9, true, false, false, 1)) ==
            onboard::mission::LineFollowMissionState::LineFollow);
     assert(line_end_mission.update(input(1.0, false, false, false, 2)) ==
+           onboard::mission::LineFollowMissionState::LineFollow);
+    assert(line_end_mission.update(input(1.0, false, false, false, 3)) ==
+           onboard::mission::LineFollowMissionState::LineFollow);
+    assert(line_end_mission.update(input(1.0, false, false, false, 4)) ==
            onboard::mission::LineFollowMissionState::Land);
     assert(line_end_mission.landingReason() == "line end");
+
+    onboard::mission::LineFollowMission reacquire_mission(config);
+    reacquire_mission.startTakeoff(started);
+    assert(reacquire_mission.update(input(0.9, true, false, false, 1)) ==
+           onboard::mission::LineFollowMissionState::LineFollow);
+    assert(reacquire_mission.update(input(1.0, false, false, false, 3)) ==
+           onboard::mission::LineFollowMissionState::LineFollow);
+    assert(reacquire_mission.update(input(1.0, true, false, false, 4)) ==
+           onboard::mission::LineFollowMissionState::LineFollow);
+    assert(reacquire_mission.update(input(1.0, false, false, false, 6)) ==
+           onboard::mission::LineFollowMissionState::LineFollow);
 
     return 0;
 }
