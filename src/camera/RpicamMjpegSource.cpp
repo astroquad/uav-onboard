@@ -7,9 +7,11 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <thread>
 
 #ifdef _WIN32
 #define popen _popen
@@ -128,6 +130,8 @@ void applyV4l2FocusOverride(const RpicamOptions& options)
         std::cerr << "warning: failed to set V4L2 focus_absolute="
                   << options.focus_absolute << " on " << options.focus_device
                   << "; see /tmp/astroquad_focus.log\n";
+    } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 #else
     (void)options;
