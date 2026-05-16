@@ -183,6 +183,52 @@ void AutopilotMavlinkAdapter::sendBodyVelocity(const BodyVelocityCommand& comman
     transport_->sendMessage(message);
 }
 
+void AutopilotMavlinkAdapter::sendLocalNedPositionTarget(
+    const LocalNedPositionTargetCommand& command)
+{
+    std::uint16_t type_mask =
+        POSITION_TARGET_TYPEMASK_VX_IGNORE |
+        POSITION_TARGET_TYPEMASK_VY_IGNORE |
+        POSITION_TARGET_TYPEMASK_AX_IGNORE |
+        POSITION_TARGET_TYPEMASK_AY_IGNORE |
+        POSITION_TARGET_TYPEMASK_AZ_IGNORE |
+        POSITION_TARGET_TYPEMASK_YAW_IGNORE;
+    if (!command.z_m) {
+        type_mask |= POSITION_TARGET_TYPEMASK_Z_IGNORE;
+    }
+    if (!command.vz_down_mps) {
+        type_mask |= POSITION_TARGET_TYPEMASK_VZ_IGNORE;
+    }
+
+    const auto time_boot_ms = static_cast<std::uint32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now().time_since_epoch())
+            .count());
+
+    mavlink_message_t message {};
+    mavlink_msg_set_position_target_local_ned_pack(
+        ids_.system_id,
+        ids_.component_id,
+        &message,
+        time_boot_ms,
+        state_.target_system,
+        state_.target_component,
+        MAV_FRAME_LOCAL_NED,
+        type_mask,
+        command.x_m,
+        command.y_m,
+        command.z_m.value_or(0.0f),
+        0.0f,
+        0.0f,
+        command.vz_down_mps.value_or(0.0f),
+        0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        command.yaw_rate_rad_s);
+    transport_->sendMessage(message);
+}
+
 bool AutopilotMavlinkAdapter::waitAltitudeReached(
     double target_altitude_m,
     double ratio,
@@ -347,9 +393,12 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
     } else if (message.msgid == MAVLINK_MSG_ID_LOCAL_POSITION_NED) {
         mavlink_local_position_ned_t position {};
         mavlink_msg_local_position_ned_decode(&message, &position);
-        if (std::isfinite(position.z)) {
+        if (std::isfinite(position.x) &&
+            std::isfinite(position.y) &&
+            std::isfinite(position.z)) {
             state_.local_x_m = position.x;
             state_.local_y_m = position.y;
+            state_.local_z_m = position.z;
             state_.local_altitude_m = -position.z;
             state_.local_vx_mps = position.vx;
             state_.local_vy_mps = position.vy;
@@ -359,6 +408,36 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
         mavlink_global_position_int_t position {};
         mavlink_msg_global_position_int_decode(&message, &position);
         state_.relative_altitude_m = position.relative_alt / 1000.0;
+#ifdef MAVLINK_MSG_ID_OPTICAL_FLOW
+    } else if (message.msgid == MAVLINK_MSG_ID_OPTICAL_FLOW) {
+        mavlink_optical_flow_t flow {};
+        mavlink_msg_optical_flow_decode(&message, &flow);
+        state_.optical_flow_quality = flow.quality;
+        const float ground_distance = flow.ground_distance;
+        if (std::isfinite(ground_distance) && ground_distance > 0.0f) {
+            state_.optical_flow_ground_distance_m = ground_distance;
+        }
+        state_.last_optical_flow_time = Clock::now();
+#endif
+#ifdef MAVLINK_MSG_ID_OPTICAL_FLOW_RAD
+    } else if (message.msgid == MAVLINK_MSG_ID_OPTICAL_FLOW_RAD) {
+        mavlink_optical_flow_rad_t flow {};
+        mavlink_msg_optical_flow_rad_decode(&message, &flow);
+        state_.optical_flow_quality = flow.quality;
+        const float distance = flow.distance;
+        if (std::isfinite(distance) && distance > 0.0f) {
+            state_.optical_flow_ground_distance_m = distance;
+        }
+        state_.last_optical_flow_time = Clock::now();
+#endif
+#ifdef MAVLINK_MSG_ID_EKF_STATUS_REPORT
+    } else if (message.msgid == MAVLINK_MSG_ID_EKF_STATUS_REPORT) {
+        mavlink_ekf_status_report_t ekf {};
+        mavlink_msg_ekf_status_report_decode(&message, &ekf);
+        const std::uint16_t flags = ekf.flags;
+        state_.ekf_flags = flags;
+        state_.last_ekf_status_time = Clock::now();
+#endif
 #ifdef MAVLINK_MSG_ID_RC_CHANNELS
     } else if (message.msgid == MAVLINK_MSG_ID_RC_CHANNELS) {
         mavlink_rc_channels_t channels {};

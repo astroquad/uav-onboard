@@ -19,6 +19,7 @@ enum class LineFollowMissionState {
 struct LineFollowMissionConfig {
     double target_altitude_m = 2.0;
     double altitude_reached_ratio = 0.9;
+    double takeoff_settle_s = 2.0;
     double line_follow_duration_s = 60.0;
     double line_lost_timeout_s = 3.0;
     double marker_approach_timeout_s = 5.0;

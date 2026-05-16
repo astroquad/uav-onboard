@@ -24,6 +24,7 @@ public:
     void disarm(std::chrono::seconds timeout);
     void takeoff(double target_altitude_m);
     void sendBodyVelocity(const BodyVelocityCommand& command);
+    void sendLocalNedPositionTarget(const LocalNedPositionTargetCommand& command);
     bool waitAltitudeReached(double target_altitude_m, double ratio, std::chrono::seconds timeout);
     bool waitDisarmed(std::chrono::seconds timeout);
     bool poll(int timeout_ms);

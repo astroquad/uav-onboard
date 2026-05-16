@@ -319,6 +319,14 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
                 rc["rc_lost_ms"].value_or(config.safety.rc_lost_ms);
         }
     }
+    if (const auto takeoff = table["takeoff"]) {
+        config.mission.target_altitude_m =
+            takeoff["target_altitude_m"].value_or(config.mission.target_altitude_m);
+        config.mission.altitude_reached_ratio =
+            takeoff["altitude_reached_ratio"].value_or(config.mission.altitude_reached_ratio);
+        config.mission.takeoff_settle_s =
+            takeoff["settle_s"].value_or(config.mission.takeoff_settle_s);
+    }
     if (const auto vision = table["vision"]) {
         if (const auto source = vision["source"]) {
             config.vision.source.gazebo_topic =
@@ -457,6 +465,8 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
                 takeoff["target_altitude_m"].value_or(config.mission.target_altitude_m);
             config.mission.altitude_reached_ratio =
                 takeoff["altitude_reached_ratio"].value_or(config.mission.altitude_reached_ratio);
+            config.mission.takeoff_settle_s =
+                takeoff["settle_s"].value_or(config.mission.takeoff_settle_s);
         }
         if (const auto line_follow = table["line_follow"]) {
             config.controller.forward_mps =
@@ -716,6 +726,225 @@ bool nearGroundAndStable(const onboard::autopilot::AutopilotState& state)
     const double vy = std::abs(state.local_vy_mps.value_or(0.0));
     const double vz = std::abs(state.local_vz_mps.value_or(0.0));
     return vx < 0.35 && vy < 0.35 && vz < 0.35;
+}
+
+struct LocalHoldAnchor {
+    double x_m = 0.0;
+    double y_m = 0.0;
+    std::optional<double> z_m;
+};
+
+std::optional<LocalHoldAnchor> captureLocalHoldAnchor(
+    const onboard::autopilot::AutopilotState& state)
+{
+    if (!state.local_x_m || !state.local_y_m) {
+        return std::nullopt;
+    }
+    return LocalHoldAnchor {
+        *state.local_x_m,
+        *state.local_y_m,
+        state.local_z_m,
+    };
+}
+
+void sendAnchoredVelocitySetpoint(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    const LocalHoldAnchor& anchor,
+    const onboard::control::ControlSetpoint& setpoint)
+{
+    autopilot.sendLocalNedPositionTarget(onboard::autopilot::LocalNedPositionTargetCommand {
+        static_cast<float>(anchor.x_m),
+        static_cast<float>(anchor.y_m),
+        std::nullopt,
+        std::optional<float> {setpoint.vz_down_mps},
+        setpoint.yaw_rate_rad_s,
+    });
+}
+
+void sendAnchoredDescentSetpoint(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    const LocalHoldAnchor& anchor,
+    float vz_down_mps)
+{
+    autopilot.sendLocalNedPositionTarget(onboard::autopilot::LocalNedPositionTargetCommand {
+        static_cast<float>(anchor.x_m),
+        static_cast<float>(anchor.y_m),
+        std::nullopt,
+        std::optional<float> {vz_down_mps},
+        0.0f,
+    });
+}
+
+bool lineTrackingActive(
+    const onboard::control::LineControlInput& line,
+    const onboard::control::GuidedVelocityControllerConfig& controller)
+{
+    return line.line_detected && line.confidence >= controller.min_confidence;
+}
+
+bool recent(Clock::time_point timestamp, Clock::time_point now, int max_age_ms)
+{
+    if (timestamp.time_since_epoch().count() == 0) {
+        return false;
+    }
+    const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - timestamp).count();
+    return age_ms >= 0 && age_ms <= max_age_ms;
+}
+
+bool ekfRelativeAidingReady(
+    const onboard::autopilot::AutopilotState& state,
+    Clock::time_point now)
+{
+    constexpr std::uint16_t kEkfAttitude = 1u << 0;
+    constexpr std::uint16_t kEkfVelocityHoriz = 1u << 1;
+    constexpr std::uint16_t kEkfPosHorizRel = 1u << 3;
+    constexpr std::uint16_t kEkfPredPosHorizRel = 1u << 8;
+
+    if (!state.ekf_flags || !recent(state.last_ekf_status_time, now, 1500)) {
+        return false;
+    }
+    const auto flags = *state.ekf_flags;
+    return (flags & kEkfAttitude) != 0 &&
+           (flags & kEkfVelocityHoriz) != 0 &&
+           ((flags & kEkfPosHorizRel) != 0 || (flags & kEkfPredPosHorizRel) != 0);
+}
+
+bool opticalFlowReady(
+    const onboard::autopilot::AutopilotState& state,
+    Clock::time_point now)
+{
+    if (!state.optical_flow_quality || !recent(state.last_optical_flow_time, now, 1500)) {
+        return false;
+    }
+    return *state.optical_flow_quality >= 50;
+}
+
+bool localHoldEstimateReady(
+    const onboard::autopilot::AutopilotState& state,
+    Clock::time_point now)
+{
+    const bool local_position_ready =
+        state.local_x_m.has_value() &&
+        state.local_y_m.has_value() &&
+        state.local_z_m.has_value() &&
+        state.local_vx_mps.has_value() &&
+        state.local_vy_mps.has_value() &&
+        state.local_vz_mps.has_value();
+    const bool range_ready =
+        state.distance_sensor_m.has_value() &&
+        *state.distance_sensor_m >= 0.03 &&
+        *state.distance_sensor_m <= 8.0;
+    return local_position_ready &&
+           range_ready &&
+           opticalFlowReady(state, now) &&
+           ekfRelativeAidingReady(state, now);
+}
+
+void printLocalEstimateStatus(const onboard::autopilot::AutopilotState& state)
+{
+    std::cout << "[preflight] local_xy=(" << state.local_x_m.value_or(-999.0)
+              << ',' << state.local_y_m.value_or(-999.0) << ')'
+              << " z=" << state.local_z_m.value_or(-999.0)
+              << " vel_ned=(" << state.local_vx_mps.value_or(-999.0)
+              << ',' << state.local_vy_mps.value_or(-999.0)
+              << ',' << state.local_vz_mps.value_or(-999.0) << ')'
+              << " range=" << state.distance_sensor_m.value_or(-1.0)
+              << " flow_q=" << state.optical_flow_quality.value_or(-1)
+              << " flow_dist=" << state.optical_flow_ground_distance_m.value_or(-1.0)
+              << " ekf_flags=0x" << std::hex << state.ekf_flags.value_or(0)
+              << std::dec << "\n";
+}
+
+bool waitLocalHoldEstimateReady(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    std::chrono::seconds timeout)
+{
+    std::cout << "[preflight] waiting for local XY hold estimate: local position, range, optical flow, EKF\n";
+    const auto deadline = Clock::now() + timeout;
+    auto ready_since = Clock::time_point {};
+    auto last_log = Clock::now() - std::chrono::seconds(1);
+    while (Clock::now() < deadline) {
+        autopilot.poll(100);
+        const auto now = Clock::now();
+        const bool ready = localHoldEstimateReady(autopilot.state(), now);
+        if (ready) {
+            if (ready_since.time_since_epoch().count() == 0) {
+                ready_since = now;
+            }
+            if (now - ready_since >= std::chrono::milliseconds(1500)) {
+                printLocalEstimateStatus(autopilot.state());
+                std::cout << "[preflight] local XY hold estimate ready\n";
+                return true;
+            }
+        } else {
+            ready_since = Clock::time_point {};
+        }
+        if (now - last_log >= std::chrono::seconds(1)) {
+            printLocalEstimateStatus(autopilot.state());
+            last_log = now;
+        }
+    }
+    std::cerr << "[preflight] local XY hold estimate not ready before timeout\n";
+    printLocalEstimateStatus(autopilot.state());
+    return false;
+}
+
+bool waitTakeoffAltitudeWithHold(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    const onboard::control::GuidedVelocityController& controller,
+    const LocalHoldAnchor& anchor,
+    double target_altitude_m,
+    double ratio,
+    std::chrono::seconds timeout,
+    std::chrono::duration<double> period)
+{
+    const auto deadline = Clock::now() + timeout;
+    while (Clock::now() < deadline) {
+        const auto loop_start = Clock::now();
+        autopilot.poll(20);
+        const auto altitude = autopilot.bestAltitudeM();
+        const onboard::control::AltitudeControlInput altitude_input {
+            altitude.has_value(),
+            altitude.value_or(target_altitude_m),
+            target_altitude_m,
+        };
+        sendAnchoredVelocitySetpoint(
+            autopilot,
+            anchor,
+            controller.holdAltitude(altitude_input));
+        if (altitude && *altitude >= target_altitude_m * ratio) {
+            return true;
+        }
+        std::this_thread::sleep_until(loop_start + period);
+    }
+    return false;
+}
+
+void holdAnchoredAltitude(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    const onboard::control::GuidedVelocityController& controller,
+    const LocalHoldAnchor& anchor,
+    double target_altitude_m,
+    std::chrono::duration<double> duration,
+    std::chrono::duration<double> period)
+{
+    const auto deadline = Clock::now() + duration;
+    while (Clock::now() < deadline) {
+        const auto loop_start = Clock::now();
+        autopilot.poll(20);
+        const auto altitude = autopilot.bestAltitudeM();
+        const onboard::control::AltitudeControlInput altitude_input {
+            altitude.has_value(),
+            altitude.value_or(target_altitude_m),
+            target_altitude_m,
+        };
+        sendAnchoredVelocitySetpoint(
+            autopilot,
+            anchor,
+            controller.stop(altitude_input));
+        std::this_thread::sleep_until(loop_start + period);
+    }
 }
 
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
@@ -1057,6 +1286,7 @@ int main(int argc, char** argv)
                   << config.network.telemetry_port << '/'
                   << config.network.video_port
                   << " takeoff_alt=" << config.mission.target_altitude_m
+                  << " takeoff_settle=" << config.mission.takeoff_settle_s
                   << " duration=" << config.mission.line_follow_duration_s
                   << " line_lost_timeout=" << config.mission.line_lost_timeout_s
                   << " desired_angle=" << config.desired_line_angle_deg
@@ -1113,10 +1343,14 @@ int main(int argc, char** argv)
                               << " alt=" << autopilot.bestAltitudeM().value_or(-1.0)
                               << " local_xy=(" << ap_state.local_x_m.value_or(-999.0)
                               << ',' << ap_state.local_y_m.value_or(-999.0) << ')'
+                              << " local_z=" << ap_state.local_z_m.value_or(-999.0)
                               << " vel_ned=(" << ap_state.local_vx_mps.value_or(-999.0)
                               << ',' << ap_state.local_vy_mps.value_or(-999.0)
                               << ',' << ap_state.local_vz_mps.value_or(-999.0) << ')'
                               << " range=" << ap_state.distance_sensor_m.value_or(-1.0)
+                              << " flow_q=" << ap_state.optical_flow_quality.value_or(-1)
+                              << " ekf_flags=0x" << std::hex
+                              << ap_state.ekf_flags.value_or(0) << std::dec
                               << " rc_channels=" << ap_state.rc_channel_count.value_or(0)
                               << " rc_rssi=" << ap_state.rc_rssi.value_or(-1)
                               << "\n";
@@ -1200,22 +1434,59 @@ int main(int argc, char** argv)
             std::cerr << "[safety] refusing GUIDED/arm/takeoff until RC input is visible\n";
             return 2;
         }
+        if (real_serial_target &&
+            !waitLocalHoldEstimateReady(autopilot, std::chrono::seconds(15))) {
+            std::cerr << "[safety] refusing GUIDED/arm/takeoff until optical-flow local hold is ready\n";
+            return 2;
+        }
+        const auto takeoff_anchor = captureLocalHoldAnchor(autopilot.state());
+        if (real_serial_target && !takeoff_anchor) {
+            std::cerr << "[safety] refusing takeoff: local XY anchor is unavailable\n";
+            return 2;
+        }
         autopilot.setGuidedMode(std::chrono::seconds(10));
         std::cout << "[mavlink] GUIDED confirmed\n";
         autopilot.arm(std::chrono::seconds(30));
         std::cout << "[mavlink] armed\n";
 
+        const auto period = std::chrono::duration<double>(
+            1.0 / static_cast<double>(std::max(1, config.setpoint_rate_hz)));
         const auto mission_started_at = Clock::now();
         mission.startTakeoff(mission_started_at);
         safety.startMission(mission_started_at);
 
         autopilot.takeoff(config.mission.target_altitude_m);
-        std::cout << "[mission] TAKEOFF target=" << config.mission.target_altitude_m << "m\n";
-        if (!autopilot.waitAltitudeReached(
-                config.mission.target_altitude_m,
-                config.mission.altitude_reached_ratio,
-                std::chrono::seconds(30))) {
+        std::cout << "[mission] TAKEOFF target=" << config.mission.target_altitude_m << "m";
+        if (takeoff_anchor) {
+            std::cout << " hold_xy=(" << takeoff_anchor->x_m << ',' << takeoff_anchor->y_m << ')';
+        }
+        std::cout << "\n";
+        const bool takeoff_altitude_reached = takeoff_anchor
+            ? waitTakeoffAltitudeWithHold(
+                  autopilot,
+                  controller,
+                  *takeoff_anchor,
+                  config.mission.target_altitude_m,
+                  config.mission.altitude_reached_ratio,
+                  std::chrono::seconds(30),
+                  period)
+            : autopilot.waitAltitudeReached(
+                  config.mission.target_altitude_m,
+                  config.mission.altitude_reached_ratio,
+                  std::chrono::seconds(30));
+        if (!takeoff_altitude_reached) {
             throw std::runtime_error("timed out waiting for takeoff altitude");
+        }
+        if (takeoff_anchor && config.mission.takeoff_settle_s > 0.0) {
+            std::cout << "[mission] TAKEOFF altitude reached; holding XY settle_s="
+                      << config.mission.takeoff_settle_s << "\n";
+            holdAnchoredAltitude(
+                autopilot,
+                controller,
+                *takeoff_anchor,
+                config.mission.target_altitude_m,
+                std::chrono::duration<double>(config.mission.takeoff_settle_s),
+                period);
         }
 
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
@@ -1238,8 +1509,6 @@ int main(int argc, char** argv)
         });
         std::cout << "[mission] " << toString(mission.state()) << "\n";
 
-        const auto period = std::chrono::duration<double>(
-            1.0 / static_cast<double>(std::max(1, config.setpoint_rate_hz)));
         const auto fake_angle_error_rad =
             degToRad(axialAngleDeltaDeg(
                 config.fake_line_angle_deg,
@@ -1254,6 +1523,8 @@ int main(int argc, char** argv)
         auto last_control_log = Clock::now();
         auto last_state = mission.state();
         bool operator_takeover = false;
+        std::optional<LocalHoldAnchor> active_hold_anchor;
+        bool hold_anchor_warning_logged = false;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         int mission_vision_frames = 0;
         onboard::app::VisionDebugPublishStats mission_publish_stats;
@@ -1301,10 +1572,11 @@ int main(int argc, char** argv)
             }
 #endif
 
+            const bool line_tracking_ready = lineTrackingActive(line_input, config.controller);
             const auto& ap_state_for_safety = autopilot.state();
             const auto safety_decision = safety.update(onboard::safety::SafetyInput {
                 ap_state_for_safety.heartbeat_seen,
-                line_input.line_detected || marker_detected,
+                line_tracking_ready || marker_detected,
                 loop_start,
                 ap_state_for_safety.last_heartbeat_time,
                 ap_state_for_safety.rc_channel_count.has_value(),
@@ -1327,7 +1599,7 @@ int main(int argc, char** argv)
             mission.update(onboard::mission::LineFollowMissionInput {
                 altitude_now.has_value(),
                 altitude_now.value_or(0.0),
-                line_input.line_detected,
+                line_tracking_ready,
                 marker_detected,
                 marker_is_centered,
                 safety_land,
@@ -1350,20 +1622,56 @@ int main(int argc, char** argv)
                 config.mission.target_altitude_m,
             };
             onboard::control::ControlSetpoint setpoint;
+            bool use_local_hold = false;
+            std::string hold_reason;
             if (mission.state() == onboard::mission::LineFollowMissionState::MarkerHover) {
                 setpoint = controller.stop(altitude_input);
+                use_local_hold = true;
+                hold_reason = "marker_hover";
             } else if (mission.state() == onboard::mission::LineFollowMissionState::MarkerApproach) {
                 if (marker_detected) {
                     setpoint = controller.updateMarker(marker_input, altitude_input);
-                } else if (line_input.line_detected) {
+                    active_hold_anchor.reset();
+                } else if (line_tracking_ready) {
                     setpoint = controller.updateLine(line_input, altitude_input);
+                    active_hold_anchor.reset();
                 } else {
                     setpoint = controller.stop(altitude_input);
+                    use_local_hold = true;
+                    hold_reason = "marker_approach_no_target";
                 }
             } else {
-                setpoint = controller.updateLine(line_input, altitude_input);
+                if (line_tracking_ready) {
+                    setpoint = controller.updateLine(line_input, altitude_input);
+                    active_hold_anchor.reset();
+                } else {
+                    setpoint = controller.stop(altitude_input);
+                    use_local_hold = true;
+                    hold_reason = line_input.line_detected ? "line_low_confidence" : "line_lost";
+                }
             }
-            autopilot.sendBodyVelocity(toAutopilotCommand(setpoint));
+            std::string command_frame = "body_vel";
+            if (use_local_hold) {
+                if (!active_hold_anchor) {
+                    active_hold_anchor = captureLocalHoldAnchor(autopilot.state());
+                    if (active_hold_anchor) {
+                        std::cout << "[control] hold_anchor reason=" << hold_reason
+                                  << " xy=(" << active_hold_anchor->x_m
+                                  << ',' << active_hold_anchor->y_m << ")\n";
+                    } else if (!hold_anchor_warning_logged) {
+                        std::cerr << "[control] warning: local hold requested but local XY is unavailable; using body zero velocity\n";
+                        hold_anchor_warning_logged = true;
+                    }
+                }
+                if (active_hold_anchor) {
+                    sendAnchoredVelocitySetpoint(autopilot, *active_hold_anchor, setpoint);
+                    command_frame = "local_hold";
+                } else {
+                    autopilot.sendBodyVelocity(toAutopilotCommand(setpoint));
+                }
+            } else {
+                autopilot.sendBodyVelocity(toAutopilotCommand(setpoint));
+            }
 
             if (loop_start - last_control_log >= std::chrono::seconds(1)) {
                 const auto& ap_state = autopilot.state();
@@ -1376,6 +1684,7 @@ int main(int argc, char** argv)
                           << ',' << ap_state.local_vy_mps.value_or(-999.0)
                           << ',' << ap_state.local_vz_mps.value_or(-999.0) << ')'
                           << " line=" << (line_input.line_detected ? "yes" : "no")
+                          << " line_conf=" << line_input.confidence
                           << " off_norm=" << line_input.center_error_norm
                           << " angle_err_deg=" << radToDeg(line_input.angle_error_rad)
                           << " marker=" << (marker_detected ? "yes" : "no")
@@ -1385,7 +1694,12 @@ int main(int argc, char** argv)
                           << " vx=" << setpoint.vx_forward_mps
                           << " vy=" << setpoint.vy_right_mps
                           << " vz_down=" << setpoint.vz_down_mps
-                          << " yaw_rate=" << setpoint.yaw_rate_rad_s;
+                          << " yaw_rate=" << setpoint.yaw_rate_rad_s
+                          << " cmd=" << command_frame;
+                if (active_hold_anchor) {
+                    std::cout << " hold_xy=(" << active_hold_anchor->x_m
+                              << ',' << active_hold_anchor->y_m << ')';
+                }
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
                 if (gcs_publisher) {
                     std::cout << " vision_frames=" << mission_vision_frames
@@ -1417,18 +1731,33 @@ int main(int argc, char** argv)
         }
 #endif
 
-        autopilot.sendBodyVelocity(toAutopilotCommand(
-            controller.stop(onboard::control::AltitudeControlInput {
-                autopilot.bestAltitudeM().has_value(),
-                autopilot.bestAltitudeM().value_or(config.mission.target_altitude_m),
-                config.mission.target_altitude_m,
-            })));
+        auto landing_anchor = captureLocalHoldAnchor(autopilot.state());
+        if (!landing_anchor && active_hold_anchor) {
+            landing_anchor = active_hold_anchor;
+        }
+        const onboard::control::AltitudeControlInput landing_altitude_input {
+            autopilot.bestAltitudeM().has_value(),
+            autopilot.bestAltitudeM().value_or(config.mission.target_altitude_m),
+            config.mission.target_altitude_m,
+        };
+        const auto stop_setpoint = controller.stop(landing_altitude_input);
+        if (landing_anchor) {
+            sendAnchoredVelocitySetpoint(autopilot, *landing_anchor, stop_setpoint);
+        } else {
+            autopilot.sendBodyVelocity(toAutopilotCommand(stop_setpoint));
+        }
         if (mission.state() == onboard::mission::LineFollowMissionState::Abort) {
             std::cerr << "[mission] ABORT reason=" << mission.landingReason() << "\n";
         } else {
             std::cout << "[mission] LAND reason=" << mission.landingReason() << "\n";
         }
-        autopilot.setLandMode(std::chrono::seconds(10));
+        if (landing_anchor) {
+            std::cout << "[mission] GUIDED_DESCENT hold_xy=("
+                      << landing_anchor->x_m << ',' << landing_anchor->y_m << ")\n";
+        } else {
+            std::cerr << "[mission] local XY unavailable; falling back to LAND mode\n";
+            autopilot.setLandMode(std::chrono::seconds(10));
+        }
         const auto disarm_deadline = Clock::now() + std::chrono::seconds(60);
         bool disarmed = false;
         bool disarm_requested = false;
@@ -1463,6 +1792,9 @@ int main(int argc, char** argv)
                 break;
             }
             if (nearGroundAndStable(autopilot.state())) {
+                if (landing_anchor) {
+                    sendAnchoredDescentSetpoint(autopilot, *landing_anchor, 0.0f);
+                }
                 if (near_ground_since.time_since_epoch().count() == 0) {
                     near_ground_since = loop_start;
                 }
@@ -1487,7 +1819,38 @@ int main(int argc, char** argv)
             } else {
                 near_ground_since = Clock::time_point {};
             }
+            if (landing_anchor) {
+                float descent_mps = 0.25f;
+                const auto range = autopilot.state().distance_sensor_m;
+                if (range && *range < 0.8) {
+                    descent_mps = 0.15f;
+                }
+                if (range && *range < 0.45) {
+                    descent_mps = 0.10f;
+                }
+                sendAnchoredDescentSetpoint(autopilot, *landing_anchor, descent_mps);
+            }
             std::this_thread::sleep_until(loop_start + period);
+        }
+        if (!disarmed && landing_anchor) {
+            std::cerr << "[mission] guided landing timeout; falling back to LAND mode\n";
+            autopilot.setLandMode(std::chrono::seconds(10));
+            const auto land_mode_deadline = Clock::now() + std::chrono::seconds(30);
+            while (Clock::now() < land_mode_deadline) {
+                autopilot.poll(200);
+                if (autopilot.state().heartbeat_seen && !autopilot.state().armed) {
+                    disarmed = true;
+                    break;
+                }
+                if (nearGroundAndStable(autopilot.state())) {
+                    std::cout << "[mission] landed estimate after LAND fallback range="
+                              << autopilot.state().distance_sensor_m.value_or(-1.0)
+                              << "m; sending disarm\n";
+                    autopilot.disarm(std::chrono::seconds(10));
+                    disarmed = true;
+                    break;
+                }
+            }
         }
         if (!disarmed) {
             if (nearGroundAndStable(autopilot.state())) {

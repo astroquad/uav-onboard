@@ -88,6 +88,13 @@ if(TARGET onboard_autopilot)
     target_link_libraries(test_autopilot_poll_drain PRIVATE onboard_autopilot onboard_core)
     add_test(NAME autopilot_poll_drain COMMAND test_autopilot_poll_drain)
 
+    add_executable(test_autopilot_setpoints
+        test_autopilot_setpoints.cpp
+    )
+    target_include_directories(test_autopilot_setpoints PRIVATE ../src)
+    target_link_libraries(test_autopilot_setpoints PRIVATE onboard_autopilot onboard_core)
+    add_test(NAME autopilot_setpoints COMMAND test_autopilot_setpoints)
+
     add_executable(test_udp_mavlink_transport
         test_udp_mavlink_transport.cpp
     )

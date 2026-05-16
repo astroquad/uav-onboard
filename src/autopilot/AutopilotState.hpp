@@ -18,15 +18,21 @@ struct AutopilotState {
     std::optional<double> distance_sensor_m;
     std::optional<double> local_x_m;
     std::optional<double> local_y_m;
+    std::optional<double> local_z_m;
     std::optional<double> local_altitude_m;
     std::optional<double> local_vx_mps;
     std::optional<double> local_vy_mps;
     std::optional<double> local_vz_mps;
     std::optional<double> relative_altitude_m;
+    std::optional<int> optical_flow_quality;
+    std::optional<double> optical_flow_ground_distance_m;
+    std::optional<std::uint16_t> ekf_flags;
     std::optional<int> rc_channel_count;
     std::optional<int> rc_rssi;
     std::array<std::uint16_t, 18> rc_channels_pwm {};
     std::chrono::steady_clock::time_point last_heartbeat_time {};
+    std::chrono::steady_clock::time_point last_optical_flow_time {};
+    std::chrono::steady_clock::time_point last_ekf_status_time {};
     std::chrono::steady_clock::time_point last_rc_channels_time {};
 };
 
@@ -41,6 +47,14 @@ struct BodyVelocityCommand {
     float vx_forward_mps = 0.0f;
     float vy_right_mps = 0.0f;
     float vz_down_mps = 0.0f;
+    float yaw_rate_rad_s = 0.0f;
+};
+
+struct LocalNedPositionTargetCommand {
+    float x_m = 0.0f;
+    float y_m = 0.0f;
+    std::optional<float> z_m;
+    std::optional<float> vz_down_mps;
     float yaw_rate_rad_s = 0.0f;
 };
 
