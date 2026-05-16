@@ -415,6 +415,9 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
             marker_hover["approach_timeout_s"].value_or(config.mission.marker_approach_timeout_s);
         config.mission.marker_lost_timeout_s =
             marker_hover["lost_timeout_s"].value_or(config.mission.marker_lost_timeout_s);
+        config.mission.marker_hover_recenter_timeout_s =
+            marker_hover["recenter_timeout_s"].value_or(
+                config.mission.marker_hover_recenter_timeout_s);
         config.marker_center_tolerance_px =
             marker_hover["center_tolerance_px"].value_or(config.marker_center_tolerance_px);
         config.controller.marker_x_kp =
@@ -426,6 +429,17 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
         config.controller.max_marker_mps =
             marker_hover["max_lateral_mps"].value_or(
                 marker_hover["max_marker_mps"].value_or(config.controller.max_marker_mps));
+        config.controller.marker_deadband_norm =
+            marker_hover["deadband_norm"].value_or(
+                marker_hover["center_deadband_norm"].value_or(
+                    config.controller.marker_deadband_norm));
+        config.controller.marker_output_ema_alpha =
+            marker_hover["output_ema_alpha"].value_or(
+                config.controller.marker_output_ema_alpha);
+        config.controller.max_marker_rate_mps =
+            marker_hover["max_marker_rate_mps"].value_or(
+                marker_hover["max_lateral_rate_mps"].value_or(
+                    config.controller.max_marker_rate_mps));
         config.controller.invert_marker_x =
             marker_hover["invert_x"].value_or(config.controller.invert_marker_x);
         config.controller.invert_marker_y =
@@ -542,6 +556,9 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
                 marker_hover["approach_timeout_s"].value_or(config.mission.marker_approach_timeout_s);
             config.mission.marker_lost_timeout_s =
                 marker_hover["lost_timeout_s"].value_or(config.mission.marker_lost_timeout_s);
+            config.mission.marker_hover_recenter_timeout_s =
+                marker_hover["recenter_timeout_s"].value_or(
+                    config.mission.marker_hover_recenter_timeout_s);
             config.marker_center_tolerance_px =
                 marker_hover["center_tolerance_px"].value_or(config.marker_center_tolerance_px);
             config.controller.marker_x_kp =
@@ -553,6 +570,17 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
             config.controller.max_marker_mps =
                 marker_hover["max_lateral_mps"].value_or(
                     marker_hover["max_marker_mps"].value_or(config.controller.max_marker_mps));
+            config.controller.marker_deadband_norm =
+                marker_hover["deadband_norm"].value_or(
+                    marker_hover["center_deadband_norm"].value_or(
+                        config.controller.marker_deadband_norm));
+            config.controller.marker_output_ema_alpha =
+                marker_hover["output_ema_alpha"].value_or(
+                    config.controller.marker_output_ema_alpha);
+            config.controller.max_marker_rate_mps =
+                marker_hover["max_marker_rate_mps"].value_or(
+                    marker_hover["max_lateral_rate_mps"].value_or(
+                        config.controller.max_marker_rate_mps));
             config.controller.invert_marker_x =
                 marker_hover["invert_x"].value_or(config.controller.invert_marker_x);
             config.controller.invert_marker_y =
@@ -746,6 +774,38 @@ bool nearGroundAndStable(const onboard::autopilot::AutopilotState& state)
     const double vy = std::abs(state.local_vy_mps.value_or(0.0));
     const double vz = std::abs(state.local_vz_mps.value_or(0.0));
     return vx < 0.35 && vy < 0.35 && vz < 0.35;
+}
+
+std::optional<double> landingHeightM(const onboard::autopilot::AutopilotState& state)
+{
+    if (state.distance_sensor_m) {
+        return state.distance_sensor_m;
+    }
+    if (state.local_altitude_m) {
+        return state.local_altitude_m;
+    }
+    if (state.relative_altitude_m) {
+        return state.relative_altitude_m;
+    }
+    return std::nullopt;
+}
+
+bool lowEnoughForLandMode(const onboard::autopilot::AutopilotState& state)
+{
+    const auto height = landingHeightM(state);
+    return height && *height <= 0.55;
+}
+
+bool touchdownLikely(const onboard::autopilot::AutopilotState& state)
+{
+    const auto height = landingHeightM(state);
+    if (!height || *height > 0.14) {
+        return false;
+    }
+    const double vx = std::abs(state.local_vx_mps.value_or(0.0));
+    const double vy = std::abs(state.local_vy_mps.value_or(0.0));
+    const double vz = std::abs(state.local_vz_mps.value_or(0.0));
+    return vx < 0.12 && vy < 0.12 && vz < 0.10;
 }
 
 struct LocalHoldAnchor {
@@ -1322,6 +1382,14 @@ int main(int argc, char** argv)
                   << " lat_rate=" << config.controller.max_lateral_rate_mps
                   << " yaw_rate_change=" << config.controller.max_yaw_rate_change_rad_s
                   << " fwd_conf_scale=" << config.controller.forward_confidence_scale << "\n";
+        std::cout << "[control] marker center_x_kp=" << config.controller.marker_x_kp
+                  << " center_y_kp=" << config.controller.marker_y_kp
+                  << " max_marker=" << config.controller.max_marker_mps
+                  << " deadband=" << config.controller.marker_deadband_norm
+                  << " ema_alpha=" << config.controller.marker_output_ema_alpha
+                  << " marker_rate=" << config.controller.max_marker_rate_mps
+                  << " hover_recenter_timeout="
+                  << config.mission.marker_hover_recenter_timeout_s << "\n";
         if (options.unsafe_assume_rc_present) {
             std::cerr
                 << "[safety] WARNING: --unsafe-assume-rc-present bypasses the MAVLink RC gate\n";
@@ -1581,10 +1649,18 @@ int main(int argc, char** argv)
                     marker_is_centered = markerCentered(result, config.marker_center_tolerance_px);
                     if (marker_detected) {
                         const auto marker = selectTargetMarker(result);
+                        const double marker_dx_px = marker
+                            ? marker->center_px.x - static_cast<double>(result.width) * 0.5
+                            : 0.0;
+                        const double marker_dy_px = marker
+                            ? marker->center_px.y - static_cast<double>(result.height) * 0.5
+                            : 0.0;
                         std::cout << "[vision] marker id=" << (marker ? marker->id : -1)
                                   << " centered=" << (marker_is_centered ? "yes" : "no")
                                   << " line=" << (line_input.line_detected ? "yes" : "no")
-                                  << " offset_px=" << result.line.center_offset_px << "\n";
+                                  << " marker_dx_px=" << marker_dx_px
+                                  << " marker_dy_px=" << marker_dy_px
+                                  << " line_offset_px=" << result.line.center_offset_px << "\n";
                     }
                 } catch (const std::exception& error) {
                     std::cerr << "[vision] warning: " << error.what() << "\n";
@@ -1789,15 +1865,20 @@ int main(int argc, char** argv)
         }
         if (landing_anchor) {
             std::cout << "[mission] GUIDED_DESCENT hold_xy=("
-                      << landing_anchor->x_m << ',' << landing_anchor->y_m << ")\n";
+                      << landing_anchor->x_m << ',' << landing_anchor->y_m
+                      << ") until low altitude, then LAND mode\n";
         } else {
-            std::cerr << "[mission] local XY unavailable; falling back to LAND mode\n";
+            std::cerr << "[mission] local XY unavailable; using LAND mode\n";
             autopilot.setLandMode(std::chrono::seconds(10));
         }
-        const auto disarm_deadline = Clock::now() + std::chrono::seconds(60);
+        const auto landing_started_at = Clock::now();
+        const auto disarm_deadline = landing_started_at + std::chrono::seconds(90);
         bool disarmed = false;
+        bool land_mode_requested = !landing_anchor;
         bool disarm_requested = false;
-        auto near_ground_since = Clock::time_point {};
+        auto land_mode_since = land_mode_requested ? Clock::now() : Clock::time_point {};
+        auto touchdown_stable_since = Clock::time_point {};
+        auto last_disarm_request = Clock::time_point {};
         int landing_video_frames = 0;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         onboard::app::VisionDebugPublishStats landing_publish_stats;
@@ -1806,7 +1887,9 @@ int main(int argc, char** argv)
             const auto loop_start = Clock::now();
             autopilot.poll(1);
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
-            if (frame_source && vision_processor && gcs_publisher) {
+            const bool skip_landing_video =
+                land_mode_requested && touchdownLikely(autopilot.state());
+            if (frame_source && vision_processor && gcs_publisher && !skip_landing_video) {
                 try {
                     auto frame_result = readAndPublishVisionFrame(
                         *frame_source,
@@ -1827,35 +1910,19 @@ int main(int argc, char** argv)
                 disarmed = true;
                 break;
             }
-            if (nearGroundAndStable(autopilot.state())) {
-                if (landing_anchor) {
-                    sendAnchoredDescentSetpoint(autopilot, *landing_anchor, 0.0f);
-                }
-                if (near_ground_since.time_since_epoch().count() == 0) {
-                    near_ground_since = loop_start;
-                }
-                const auto near_ground_ms =
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        loop_start - near_ground_since)
-                        .count();
-                if (!disarm_requested && near_ground_ms >= 2000) {
-                    std::cout << "[mission] landed estimate range="
-                              << autopilot.state().distance_sensor_m.value_or(-1.0)
-                              << "m; sending disarm\n";
-                    disarm_requested = true;
-                    try {
-                        autopilot.disarm(std::chrono::seconds(10));
-                        disarmed = true;
-                        break;
-                    } catch (const std::exception& error) {
-                        std::cerr << "[safety] disarm retry failed: "
-                                  << error.what() << "\n";
-                    }
-                }
-            } else {
-                near_ground_since = Clock::time_point {};
+
+            if (!land_mode_requested &&
+                (lowEnoughForLandMode(autopilot.state()) ||
+                 loop_start - landing_started_at >= std::chrono::seconds(20))) {
+                std::cout << "[mission] LAND_MODE height="
+                          << landingHeightM(autopilot.state()).value_or(-1.0)
+                          << "m\n";
+                autopilot.setLandMode(std::chrono::seconds(10));
+                land_mode_requested = true;
+                land_mode_since = Clock::now();
             }
-            if (landing_anchor) {
+
+            if (!land_mode_requested && landing_anchor) {
                 float descent_mps = 0.25f;
                 const auto range = autopilot.state().distance_sensor_m;
                 if (range && *range < 0.8) {
@@ -1865,36 +1932,52 @@ int main(int argc, char** argv)
                     descent_mps = 0.10f;
                 }
                 sendAnchoredDescentSetpoint(autopilot, *landing_anchor, descent_mps);
+            } else if (land_mode_requested && touchdownLikely(autopilot.state())) {
+                if (touchdown_stable_since.time_since_epoch().count() == 0) {
+                    touchdown_stable_since = loop_start;
+                }
+                const auto touchdown_stable_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        loop_start - touchdown_stable_since)
+                        .count();
+                const bool land_mode_settled =
+                    land_mode_since.time_since_epoch().count() != 0 &&
+                    loop_start - land_mode_since >= std::chrono::seconds(5);
+                const bool retry_due =
+                    last_disarm_request.time_since_epoch().count() == 0 ||
+                    loop_start - last_disarm_request >= std::chrono::seconds(4);
+                if (touchdown_stable_ms >= 6000 && land_mode_settled && retry_due) {
+                    std::cout << "[mission] touchdown stable height="
+                              << landingHeightM(autopilot.state()).value_or(-1.0)
+                              << "m; requesting disarm\n";
+                    autopilot.requestDisarm();
+                    disarm_requested = true;
+                    last_disarm_request = loop_start;
+                }
+            } else {
+                touchdown_stable_since = Clock::time_point {};
             }
             std::this_thread::sleep_until(loop_start + period);
         }
-        if (!disarmed && landing_anchor) {
-            std::cerr << "[mission] guided landing timeout; falling back to LAND mode\n";
-            autopilot.setLandMode(std::chrono::seconds(10));
-            const auto land_mode_deadline = Clock::now() + std::chrono::seconds(30);
-            while (Clock::now() < land_mode_deadline) {
-                autopilot.poll(200);
-                if (autopilot.state().heartbeat_seen && !autopilot.state().armed) {
-                    disarmed = true;
-                    break;
-                }
-                if (nearGroundAndStable(autopilot.state())) {
-                    std::cout << "[mission] landed estimate after LAND fallback range="
-                              << autopilot.state().distance_sensor_m.value_or(-1.0)
-                              << "m; sending disarm\n";
-                    autopilot.disarm(std::chrono::seconds(10));
-                    disarmed = true;
-                    break;
-                }
-            }
-        }
         if (!disarmed) {
-            if (nearGroundAndStable(autopilot.state())) {
-                std::cout << "[mission] final near-ground disarm attempt\n";
-                autopilot.disarm(std::chrono::seconds(10));
-                disarmed = true;
-            } else {
+            if (!land_mode_requested) {
+                std::cerr << "[mission] landing timeout before LAND mode; switching to LAND\n";
+                autopilot.setLandMode(std::chrono::seconds(10));
+            }
+            if (touchdownLikely(autopilot.state())) {
+                std::cout << "[mission] final touchdown disarm request height="
+                          << landingHeightM(autopilot.state()).value_or(-1.0) << "m\n";
+                autopilot.requestDisarm();
+                disarmed = autopilot.waitDisarmed(std::chrono::seconds(10));
+            }
+            if (!disarmed && !disarm_requested) {
+                disarmed = autopilot.waitDisarmed(std::chrono::seconds(10));
+            }
+            if (!disarmed) {
                 throw std::runtime_error("timed out waiting for disarmed state");
+            }
+            if (disarmed) {
+                disarmed = true;
             }
         }
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)

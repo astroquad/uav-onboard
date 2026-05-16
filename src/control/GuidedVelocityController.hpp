@@ -24,6 +24,9 @@ struct GuidedVelocityControllerConfig {
     double marker_x_kp = 0.25;
     double marker_y_kp = 0.25;
     double max_marker_mps = 0.25;
+    double marker_deadband_norm = 0.03;
+    double marker_output_ema_alpha = 1.0;
+    double max_marker_rate_mps = 0.0;
     bool invert_marker_x = false;
     bool invert_marker_y = false;
 
@@ -52,7 +55,7 @@ public:
         const AltitudeControlInput& altitude);
     ControlSetpoint updateMarker(
         const MarkerControlInput& marker,
-        const AltitudeControlInput& altitude) const;
+        const AltitudeControlInput& altitude);
     ControlSetpoint holdAltitude(const AltitudeControlInput& altitude) const;
     ControlSetpoint update(const LineControlInput& input);
     ControlSetpoint stop(const AltitudeControlInput& altitude = {});
@@ -65,6 +68,7 @@ private:
 
     // Apply EMA smoothing and rate limiting to lateral and yaw outputs
     void smoothOutput(double& lateral, double& yaw_rate);
+    void smoothMarkerOutput(double& forward, double& lateral);
 
     GuidedVelocityControllerConfig config_;
 
@@ -72,6 +76,9 @@ private:
     bool has_prev_output_ = false;
     double prev_lateral_ = 0.0;
     double prev_yaw_rate_ = 0.0;
+    bool has_prev_marker_output_ = false;
+    double prev_marker_forward_ = 0.0;
+    double prev_marker_lateral_ = 0.0;
 };
 
 } // namespace onboard::control

@@ -24,6 +24,9 @@ LineFollowMissionState LineFollowMission::update(const LineFollowMissionInput& i
 
     if (input.marker_detected) {
         last_marker_seen_at_ = input.now;
+        if (input.marker_centered) {
+            last_marker_centered_at_ = input.now;
+        }
     }
 
     if (state_ == LineFollowMissionState::Takeoff &&
@@ -62,6 +65,7 @@ LineFollowMissionState LineFollowMission::update(const LineFollowMissionInput& i
             landing_reason_ = "safety land";
             transition(LineFollowMissionState::Land, input.now);
         } else if (input.marker_centered) {
+            last_marker_centered_at_ = input.now;
             transition(LineFollowMissionState::MarkerHover, input.now);
         } else if (elapsed >= config_.marker_approach_timeout_s &&
                    !input.marker_detected &&
@@ -80,22 +84,27 @@ LineFollowMissionState LineFollowMission::update(const LineFollowMissionInput& i
         const auto elapsed = std::chrono::duration<double>(input.now - state_entered_).count();
         const auto marker_lost_elapsed =
             std::chrono::duration<double>(input.now - last_marker_seen_at_).count();
+        const auto marker_uncentered_elapsed =
+            std::chrono::duration<double>(input.now - last_marker_centered_at_).count();
         if (input.land_requested) {
             landing_reason_ = "safety land";
             transition(LineFollowMissionState::Land, input.now);
+        } else if (elapsed >= config_.marker_hover_s) {
+            landing_reason_ = "marker hover complete";
+            transition(LineFollowMissionState::Land, input.now);
         } else if (!input.marker_detected &&
-                   input.line_detected) {
+                   input.line_detected &&
+                   marker_lost_elapsed > config_.marker_hover_recenter_timeout_s) {
             transition(LineFollowMissionState::MarkerApproach, input.now);
         } else if (!input.marker_detected &&
                    !input.line_detected &&
                    marker_lost_elapsed >= config_.marker_lost_timeout_s) {
             landing_reason_ = "marker and line lost";
             transition(LineFollowMissionState::Land, input.now);
-        } else if (input.marker_detected && !input.marker_centered) {
+        } else if (input.marker_detected &&
+                   !input.marker_centered &&
+                   marker_uncentered_elapsed > config_.marker_hover_recenter_timeout_s) {
             transition(LineFollowMissionState::MarkerApproach, input.now);
-        } else if (elapsed >= config_.marker_hover_s) {
-            landing_reason_ = "marker hover complete";
-            transition(LineFollowMissionState::Land, input.now);
         }
     }
 
@@ -121,6 +130,8 @@ void LineFollowMission::transition(
     state_entered_ = now;
     if (state == LineFollowMissionState::LineFollow) {
         last_line_seen_at_ = now;
+    } else if (state == LineFollowMissionState::MarkerHover) {
+        last_marker_centered_at_ = now;
     }
 }
 

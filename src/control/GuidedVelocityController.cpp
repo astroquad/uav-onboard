@@ -37,6 +37,9 @@ void GuidedVelocityController::resetSmoothing()
     has_prev_output_ = false;
     prev_lateral_ = 0.0;
     prev_yaw_rate_ = 0.0;
+    has_prev_marker_output_ = false;
+    prev_marker_forward_ = 0.0;
+    prev_marker_lateral_ = 0.0;
 }
 
 void GuidedVelocityController::smoothOutput(double& lateral, double& yaw_rate)
@@ -62,6 +65,28 @@ void GuidedVelocityController::smoothOutput(double& lateral, double& yaw_rate)
 
     prev_lateral_ = lateral;
     prev_yaw_rate_ = yaw_rate;
+}
+
+void GuidedVelocityController::smoothMarkerOutput(double& forward, double& lateral)
+{
+    const double alpha = std::clamp(config_.marker_output_ema_alpha, 0.05, 1.0);
+
+    if (!has_prev_marker_output_) {
+        has_prev_marker_output_ = true;
+        prev_marker_forward_ = 0.0;
+        prev_marker_lateral_ = 0.0;
+    }
+
+    if (alpha < 1.0) {
+        forward = emaFilter(prev_marker_forward_, forward, alpha);
+        lateral = emaFilter(prev_marker_lateral_, lateral, alpha);
+    }
+
+    forward = rateLimitStep(prev_marker_forward_, forward, config_.max_marker_rate_mps);
+    lateral = rateLimitStep(prev_marker_lateral_, lateral, config_.max_marker_rate_mps);
+
+    prev_marker_forward_ = forward;
+    prev_marker_lateral_ = lateral;
 }
 
 ControlSetpoint GuidedVelocityController::updateLine(
@@ -117,19 +142,27 @@ ControlSetpoint GuidedVelocityController::updateLine(
 
 ControlSetpoint GuidedVelocityController::updateMarker(
     const MarkerControlInput& marker,
-    const AltitudeControlInput& altitude) const
+    const AltitudeControlInput& altitude)
 {
     ControlSetpoint output = holdAltitude(altitude);
     if (!marker.marker_detected) {
+        double zero_forward = 0.0;
+        double zero_lateral = 0.0;
+        smoothMarkerOutput(zero_forward, zero_lateral);
         return output;
     }
 
+    const double marker_x_error =
+        applyDeadband(marker.center_error_x_norm, config_.marker_deadband_norm);
+    const double marker_y_error =
+        applyDeadband(marker.center_error_y_norm, config_.marker_deadband_norm);
+
     double lateral = std::clamp(
-        config_.marker_x_kp * marker.center_error_x_norm,
+        config_.marker_x_kp * marker_x_error,
         -config_.max_marker_mps,
         config_.max_marker_mps);
     double forward = std::clamp(
-        config_.marker_y_kp * marker.center_error_y_norm,
+        config_.marker_y_kp * marker_y_error,
         -config_.max_marker_mps,
         config_.max_marker_mps);
     if (config_.invert_marker_x) {
@@ -138,6 +171,8 @@ ControlSetpoint GuidedVelocityController::updateMarker(
     if (config_.invert_marker_y) {
         forward = -forward;
     }
+
+    smoothMarkerOutput(forward, lateral);
 
     output.vx_forward_mps = static_cast<float>(forward);
     output.vy_right_mps = static_cast<float>(lateral);
@@ -166,6 +201,9 @@ ControlSetpoint GuidedVelocityController::stop(const AltitudeControlInput& altit
     double zero_lat = 0.0;
     double zero_yaw = 0.0;
     smoothOutput(zero_lat, zero_yaw);
+    double zero_forward = 0.0;
+    double zero_marker_lat = 0.0;
+    smoothMarkerOutput(zero_forward, zero_marker_lat);
     return holdAltitude(altitude);
 }
 

@@ -55,8 +55,12 @@ output_ema_alpha = 0.4
 [marker_hover]
 hold_s = 3.0
 center_tolerance_px = 30.0
-center_kp = 0.35
-max_marker_mps = 0.30
+recenter_timeout_s = 1.25
+center_kp = 0.20
+max_marker_mps = 0.15
+deadband_norm = 0.04
+output_ema_alpha = 0.35
+max_marker_rate_mps = 0.012
 approach_timeout_s = 25.0
 lost_timeout_s = 5.0
 invert_x = false

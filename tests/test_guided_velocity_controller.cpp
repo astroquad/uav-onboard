@@ -25,6 +25,12 @@ onboard::control::GuidedVelocityControllerConfig baseConfig()
     config.max_lateral_rate_mps = 0.0;
     config.max_yaw_rate_change_rad_s = 0.0;
     config.forward_confidence_scale = 0.0;
+    config.marker_x_kp = 1.0;
+    config.marker_y_kp = 1.0;
+    config.max_marker_mps = 1.0;
+    config.marker_deadband_norm = 0.0;
+    config.marker_output_ema_alpha = 1.0;
+    config.max_marker_rate_mps = 0.0;
     return config;
 }
 
@@ -148,6 +154,34 @@ void runLostLineDecays()
     assert(reacquired.yaw_rate_rad_s > 0.0f);
 }
 
+void runMarkerDeadband()
+{
+    auto config = baseConfig();
+    config.marker_deadband_norm = 0.05;
+    onboard::control::GuidedVelocityController controller(config);
+    const onboard::control::AltitudeControlInput altitude {true, 2.0, 2.0};
+
+    const auto centered = controller.updateMarker({true, 0.03, -0.03}, altitude);
+    assert(centered.vx_forward_mps == 0.0f);
+    assert(centered.vy_right_mps == 0.0f);
+    assert(centered.yaw_rate_rad_s == 0.0f);
+}
+
+void runMarkerRateLimit()
+{
+    auto config = baseConfig();
+    config.marker_output_ema_alpha = 1.0;
+    config.max_marker_rate_mps = 0.02;
+    onboard::control::GuidedVelocityController controller(config);
+    const onboard::control::AltitudeControlInput altitude {true, 2.0, 2.0};
+
+    const auto step = controller.updateMarker({true, 0.5, 0.5}, altitude);
+    assert(std::abs(step.vx_forward_mps) <=
+           static_cast<float>(config.max_marker_rate_mps) + 1e-6f);
+    assert(std::abs(step.vy_right_mps) <=
+           static_cast<float>(config.max_marker_rate_mps) + 1e-6f);
+}
+
 } // namespace
 
 int main()
@@ -157,5 +191,7 @@ int main()
     runRateLimit();
     runForwardConfidenceScale();
     runLostLineDecays();
+    runMarkerDeadband();
+    runMarkerRateLimit();
     return 0;
 }

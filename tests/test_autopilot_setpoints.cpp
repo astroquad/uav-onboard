@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <cstdint>
 #include <vector>
 
 namespace {
@@ -30,6 +31,13 @@ private:
 void requireNear(float actual, float expected)
 {
     assert(std::fabs(actual - expected) < 0.0001f);
+}
+
+std::uint16_t commandId(const mavlink_message_t& message)
+{
+    mavlink_command_long_t command {};
+    mavlink_msg_command_long_decode(&message, &command);
+    return command.command;
 }
 
 } // namespace
@@ -100,6 +108,14 @@ int main()
     requireNear(xyz_hold.x, 2.00f);
     requireNear(xyz_hold.y, 3.00f);
     requireNear(xyz_hold.z, -1.50f);
+
+    adapter.requestDisarm();
+    assert(capture->sent_messages.size() == 3);
+    assert(capture->sent_messages.back().msgid == MAVLINK_MSG_ID_COMMAND_LONG);
+    assert(commandId(capture->sent_messages.back()) == MAV_CMD_COMPONENT_ARM_DISARM);
+    mavlink_command_long_t disarm {};
+    mavlink_msg_command_long_decode(&capture->sent_messages.back(), &disarm);
+    requireNear(disarm.param1, 0.0f);
 
     return 0;
 }

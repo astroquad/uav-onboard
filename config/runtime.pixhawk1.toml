@@ -52,8 +52,12 @@ lost_timeout_s = 5.0
 [marker_hover]
 hold_s = 3.0
 center_tolerance_px = 30.0
-center_kp = 0.25
-max_marker_mps = 0.20
+recenter_timeout_s = 1.25
+center_kp = 0.18
+max_marker_mps = 0.12
+deadband_norm = 0.04
+output_ema_alpha = 0.35
+max_marker_rate_mps = 0.010
 approach_timeout_s = 25.0
 lost_timeout_s = 5.0
 invert_x = false

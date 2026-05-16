@@ -25,6 +25,7 @@ struct LineFollowMissionConfig {
     double marker_approach_timeout_s = 5.0;
     double marker_hover_s = 3.0;
     double marker_lost_timeout_s = 5.0;
+    double marker_hover_recenter_timeout_s = 1.25;
 };
 
 struct LineFollowMissionInput {
@@ -58,6 +59,7 @@ private:
     std::chrono::steady_clock::time_point state_entered_ {};
     std::chrono::steady_clock::time_point last_line_seen_at_ {};
     std::chrono::steady_clock::time_point last_marker_seen_at_ {};
+    std::chrono::steady_clock::time_point last_marker_centered_at_ {};
     std::string landing_reason_;
 };
 

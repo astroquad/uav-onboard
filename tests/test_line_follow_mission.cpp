@@ -13,6 +13,7 @@ int main()
     config.marker_approach_timeout_s = 5.0;
     config.marker_hover_s = 3.0;
     config.marker_lost_timeout_s = 2.0;
+    config.marker_hover_recenter_timeout_s = 1.5;
 
     onboard::mission::LineFollowMission mission(config);
     const auto started = std::chrono::steady_clock::now();
@@ -51,6 +52,33 @@ int main()
     assert(mission.update(input(1.0, true, true, true, 7)) ==
            onboard::mission::LineFollowMissionState::Land);
     assert(mission.landingReason() == "marker hover complete");
+
+    onboard::mission::LineFollowMission hover_jitter_mission(config);
+    hover_jitter_mission.startTakeoff(started);
+    assert(hover_jitter_mission.update(input(0.9, true, false, false, 1)) ==
+           onboard::mission::LineFollowMissionState::LineFollow);
+    assert(hover_jitter_mission.update(input(1.0, true, true, false, 2)) ==
+           onboard::mission::LineFollowMissionState::MarkerApproach);
+    assert(hover_jitter_mission.update(input(1.0, true, true, true, 3)) ==
+           onboard::mission::LineFollowMissionState::MarkerHover);
+    assert(hover_jitter_mission.update(input(1.0, true, true, false, 4)) ==
+           onboard::mission::LineFollowMissionState::MarkerHover);
+    assert(hover_jitter_mission.update(input(1.0, true, true, true, 5)) ==
+           onboard::mission::LineFollowMissionState::MarkerHover);
+    assert(hover_jitter_mission.update(input(1.0, true, true, true, 7)) ==
+           onboard::mission::LineFollowMissionState::Land);
+    assert(hover_jitter_mission.landingReason() == "marker hover complete");
+
+    onboard::mission::LineFollowMission recenter_mission(config);
+    recenter_mission.startTakeoff(started);
+    assert(recenter_mission.update(input(0.9, true, false, false, 1)) ==
+           onboard::mission::LineFollowMissionState::LineFollow);
+    assert(recenter_mission.update(input(1.0, true, true, false, 2)) ==
+           onboard::mission::LineFollowMissionState::MarkerApproach);
+    assert(recenter_mission.update(input(1.0, true, true, true, 3)) ==
+           onboard::mission::LineFollowMissionState::MarkerHover);
+    assert(recenter_mission.update(input(1.0, true, true, false, 5)) ==
+           onboard::mission::LineFollowMissionState::MarkerApproach);
 
     onboard::mission::LineFollowMission timeout_mission(config);
     timeout_mission.startTakeoff(started);
