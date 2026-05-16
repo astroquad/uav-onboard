@@ -767,28 +767,37 @@ std::optional<LocalHoldAnchor> captureLocalHoldAnchor(
     };
 }
 
+// Hover at the captured X,Y anchor and the supplied target altitude (m above
+// origin). Emits a position-only SET_POSITION_TARGET_LOCAL_NED so ArduCopter's
+// guided position controller holds 3D position; mixing X,Y position with VZ
+// velocity hits ArduCopter's "unsupported combination" branch and calls
+// hold_position() instead of honoring the command.
 void sendAnchoredVelocitySetpoint(
     onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
     const LocalHoldAnchor& anchor,
-    const onboard::control::ControlSetpoint& setpoint)
+    const onboard::control::ControlSetpoint& setpoint,
+    double target_altitude_m)
 {
     autopilot.sendLocalNedPositionTarget(onboard::autopilot::LocalNedPositionTargetCommand {
         static_cast<float>(anchor.x_m),
         static_cast<float>(anchor.y_m),
+        std::optional<float> {static_cast<float>(-target_altitude_m)},
         std::nullopt,
-        std::optional<float> {setpoint.vz_down_mps},
         setpoint.yaw_rate_rad_s,
     });
 }
 
+// Descent emits a velocity-only SET_POSITION_TARGET_LOCAL_NED (VX=VY=0,
+// VZ=descent rate). ArduCopter's velocity controller holds horizontal velocity
+// at zero so XY drift stays small even without a position anchor.
 void sendAnchoredDescentSetpoint(
     onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
-    const LocalHoldAnchor& anchor,
+    const LocalHoldAnchor& /*anchor*/,
     float vz_down_mps)
 {
     autopilot.sendLocalNedPositionTarget(onboard::autopilot::LocalNedPositionTargetCommand {
-        static_cast<float>(anchor.x_m),
-        static_cast<float>(anchor.y_m),
+        0.0f,
+        0.0f,
         std::nullopt,
         std::optional<float> {vz_down_mps},
         0.0f,
@@ -923,36 +932,11 @@ bool waitLocalHoldEstimateReady(
     return false;
 }
 
-bool waitTakeoffAltitudeWithHold(
-    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
-    const onboard::control::GuidedVelocityController& controller,
-    const LocalHoldAnchor& anchor,
-    double target_altitude_m,
-    double ratio,
-    std::chrono::seconds timeout,
-    std::chrono::duration<double> period)
-{
-    const auto deadline = Clock::now() + timeout;
-    while (Clock::now() < deadline) {
-        const auto loop_start = Clock::now();
-        autopilot.poll(20);
-        const auto altitude = autopilot.bestAltitudeM();
-        const onboard::control::AltitudeControlInput altitude_input {
-            altitude.has_value(),
-            altitude.value_or(target_altitude_m),
-            target_altitude_m,
-        };
-        sendAnchoredVelocitySetpoint(
-            autopilot,
-            anchor,
-            controller.holdAltitude(altitude_input));
-        if (altitude && *altitude >= target_altitude_m * ratio) {
-            return true;
-        }
-        std::this_thread::sleep_until(loop_start + period);
-    }
-    return false;
-}
+// We must NOT send any SET_POSITION_TARGET_LOCAL_NED while NAV_TAKEOFF is in
+// progress. In GUIDED mode ArduCopter's TakeOff sub-mode is interrupted by the
+// first position/velocity setpoint, so even a pos-only "hold at takeoff target"
+// races the takeoff controller and usually leaves the vehicle stuck just above
+// the ground. Use autopilot.waitAltitudeReached() to poll without sending.
 
 void holdAnchoredAltitude(
     onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
@@ -975,7 +959,8 @@ void holdAnchoredAltitude(
         sendAnchoredVelocitySetpoint(
             autopilot,
             anchor,
-            controller.stop(altitude_input));
+            controller.stop(altitude_input),
+            target_altitude_m);
         std::this_thread::sleep_until(loop_start + period);
     }
 }
@@ -1500,19 +1485,10 @@ int main(int argc, char** argv)
             std::cout << " hold_xy=(" << takeoff_anchor->x_m << ',' << takeoff_anchor->y_m << ')';
         }
         std::cout << "\n";
-        const bool takeoff_altitude_reached = takeoff_anchor
-            ? waitTakeoffAltitudeWithHold(
-                  autopilot,
-                  controller,
-                  *takeoff_anchor,
-                  config.mission.target_altitude_m,
-                  config.mission.altitude_reached_ratio,
-                  std::chrono::seconds(30),
-                  period)
-            : autopilot.waitAltitudeReached(
-                  config.mission.target_altitude_m,
-                  config.mission.altitude_reached_ratio,
-                  std::chrono::seconds(30));
+        const bool takeoff_altitude_reached = autopilot.waitAltitudeReached(
+            config.mission.target_altitude_m,
+            config.mission.altitude_reached_ratio,
+            std::chrono::seconds(30));
         if (!takeoff_altitude_reached) {
             throw std::runtime_error("timed out waiting for takeoff altitude");
         }
@@ -1709,7 +1685,11 @@ int main(int argc, char** argv)
                     }
                 }
                 if (active_hold_anchor) {
-                    sendAnchoredVelocitySetpoint(autopilot, *active_hold_anchor, setpoint);
+                    sendAnchoredVelocitySetpoint(
+                        autopilot,
+                        *active_hold_anchor,
+                        setpoint,
+                        config.mission.target_altitude_m);
                     command_frame = "local_hold";
                 } else {
                     autopilot.sendBodyVelocity(toAutopilotCommand(setpoint));
@@ -1794,7 +1774,11 @@ int main(int argc, char** argv)
         };
         const auto stop_setpoint = controller.stop(landing_altitude_input);
         if (landing_anchor) {
-            sendAnchoredVelocitySetpoint(autopilot, *landing_anchor, stop_setpoint);
+            sendAnchoredVelocitySetpoint(
+                autopilot,
+                *landing_anchor,
+                stop_setpoint,
+                config.mission.target_altitude_m);
         } else {
             autopilot.sendBodyVelocity(toAutopilotCommand(stop_setpoint));
         }

@@ -186,24 +186,42 @@ void AutopilotMavlinkAdapter::sendBodyVelocity(const BodyVelocityCommand& comman
 void AutopilotMavlinkAdapter::sendLocalNedPositionTarget(
     const LocalNedPositionTargetCommand& command)
 {
+    // ArduCopter Copter::Mode::Guided treats `pos_ignore` / `vel_ignore` as
+    // true when ANY bit in that group is set. Mixing (e.g. X,Y position +
+    // VZ velocity with VX/VY ignored) trips its "unsupported combination"
+    // branch and silently invokes hold_position(), which exits the active
+    // takeoff/posvel sub-mode. We must therefore emit one of the supported
+    // groupings: position-only, velocity-only, or position+velocity.
+    const bool use_pos = command.z_m.has_value();
+    const bool use_vel = command.vz_down_mps.has_value();
+
     std::uint16_t type_mask =
-        POSITION_TARGET_TYPEMASK_VX_IGNORE |
-        POSITION_TARGET_TYPEMASK_VY_IGNORE |
         POSITION_TARGET_TYPEMASK_AX_IGNORE |
         POSITION_TARGET_TYPEMASK_AY_IGNORE |
         POSITION_TARGET_TYPEMASK_AZ_IGNORE |
         POSITION_TARGET_TYPEMASK_YAW_IGNORE;
-    if (!command.z_m) {
-        type_mask |= POSITION_TARGET_TYPEMASK_Z_IGNORE;
+    if (!use_pos) {
+        type_mask |=
+            POSITION_TARGET_TYPEMASK_X_IGNORE |
+            POSITION_TARGET_TYPEMASK_Y_IGNORE |
+            POSITION_TARGET_TYPEMASK_Z_IGNORE;
     }
-    if (!command.vz_down_mps) {
-        type_mask |= POSITION_TARGET_TYPEMASK_VZ_IGNORE;
+    if (!use_vel) {
+        type_mask |=
+            POSITION_TARGET_TYPEMASK_VX_IGNORE |
+            POSITION_TARGET_TYPEMASK_VY_IGNORE |
+            POSITION_TARGET_TYPEMASK_VZ_IGNORE;
     }
 
     const auto time_boot_ms = static_cast<std::uint32_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             Clock::now().time_since_epoch())
             .count());
+
+    const float pos_x = use_pos ? command.x_m : 0.0f;
+    const float pos_y = use_pos ? command.y_m : 0.0f;
+    const float pos_z = use_pos ? command.z_m.value() : 0.0f;
+    const float vel_z = use_vel ? command.vz_down_mps.value() : 0.0f;
 
     mavlink_message_t message {};
     mavlink_msg_set_position_target_local_ned_pack(
@@ -215,12 +233,12 @@ void AutopilotMavlinkAdapter::sendLocalNedPositionTarget(
         state_.target_component,
         MAV_FRAME_LOCAL_NED,
         type_mask,
-        command.x_m,
-        command.y_m,
-        command.z_m.value_or(0.0f),
+        pos_x,
+        pos_y,
+        pos_z,
         0.0f,
         0.0f,
-        command.vz_down_mps.value_or(0.0f),
+        vel_z,
         0.0f,
         0.0f,
         0.0f,

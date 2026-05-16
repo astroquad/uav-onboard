@@ -46,6 +46,9 @@ int main()
     auto* capture = transport.get();
     onboard::autopilot::AutopilotMavlinkAdapter adapter(std::move(transport), ids);
 
+    // Velocity-only mode: z absent + vz present. ArduCopter requires ALL
+    // velocity bits valid for set_vel_accel_NED_m, so the adapter must ignore
+    // every position bit and emit VX, VY, VZ.
     adapter.sendLocalNedPositionTarget(onboard::autopilot::LocalNedPositionTargetCommand {
         1.25f,
         -0.50f,
@@ -55,24 +58,26 @@ int main()
     });
 
     assert(capture->sent_messages.size() == 1);
-    mavlink_set_position_target_local_ned_t xy_hold {};
+    mavlink_set_position_target_local_ned_t vel_only {};
     mavlink_msg_set_position_target_local_ned_decode(
         &capture->sent_messages.back(),
-        &xy_hold);
-    assert(xy_hold.target_system == ids.target_system);
-    assert(xy_hold.target_component == ids.target_component);
-    assert(xy_hold.coordinate_frame == MAV_FRAME_LOCAL_NED);
-    assert((xy_hold.type_mask & POSITION_TARGET_TYPEMASK_X_IGNORE) == 0);
-    assert((xy_hold.type_mask & POSITION_TARGET_TYPEMASK_Y_IGNORE) == 0);
-    assert((xy_hold.type_mask & POSITION_TARGET_TYPEMASK_Z_IGNORE) != 0);
-    assert((xy_hold.type_mask & POSITION_TARGET_TYPEMASK_VX_IGNORE) != 0);
-    assert((xy_hold.type_mask & POSITION_TARGET_TYPEMASK_VY_IGNORE) != 0);
-    assert((xy_hold.type_mask & POSITION_TARGET_TYPEMASK_VZ_IGNORE) == 0);
-    requireNear(xy_hold.x, 1.25f);
-    requireNear(xy_hold.y, -0.50f);
-    requireNear(xy_hold.vz, -0.20f);
-    requireNear(xy_hold.yaw_rate, 0.10f);
+        &vel_only);
+    assert(vel_only.target_system == ids.target_system);
+    assert(vel_only.target_component == ids.target_component);
+    assert(vel_only.coordinate_frame == MAV_FRAME_LOCAL_NED);
+    assert((vel_only.type_mask & POSITION_TARGET_TYPEMASK_X_IGNORE) != 0);
+    assert((vel_only.type_mask & POSITION_TARGET_TYPEMASK_Y_IGNORE) != 0);
+    assert((vel_only.type_mask & POSITION_TARGET_TYPEMASK_Z_IGNORE) != 0);
+    assert((vel_only.type_mask & POSITION_TARGET_TYPEMASK_VX_IGNORE) == 0);
+    assert((vel_only.type_mask & POSITION_TARGET_TYPEMASK_VY_IGNORE) == 0);
+    assert((vel_only.type_mask & POSITION_TARGET_TYPEMASK_VZ_IGNORE) == 0);
+    requireNear(vel_only.vx, 0.0f);
+    requireNear(vel_only.vy, 0.0f);
+    requireNear(vel_only.vz, -0.20f);
+    requireNear(vel_only.yaw_rate, 0.10f);
 
+    // Position-only mode: x, y, z set; vz absent. All velocity bits must be
+    // ignored so ArduCopter dispatches to set_pos_NED_m.
     adapter.sendLocalNedPositionTarget(onboard::autopilot::LocalNedPositionTargetCommand {
         2.00f,
         3.00f,
@@ -89,6 +94,8 @@ int main()
     assert((xyz_hold.type_mask & POSITION_TARGET_TYPEMASK_X_IGNORE) == 0);
     assert((xyz_hold.type_mask & POSITION_TARGET_TYPEMASK_Y_IGNORE) == 0);
     assert((xyz_hold.type_mask & POSITION_TARGET_TYPEMASK_Z_IGNORE) == 0);
+    assert((xyz_hold.type_mask & POSITION_TARGET_TYPEMASK_VX_IGNORE) != 0);
+    assert((xyz_hold.type_mask & POSITION_TARGET_TYPEMASK_VY_IGNORE) != 0);
     assert((xyz_hold.type_mask & POSITION_TARGET_TYPEMASK_VZ_IGNORE) != 0);
     requireNear(xyz_hold.x, 2.00f);
     requireNear(xyz_hold.y, 3.00f);
