@@ -23,16 +23,33 @@ duration_s = 60.0
 lost_timeout_s = 3.0
 
 [line_controller]
+# Lateral-velocity P-gain on normalized horizontal center error.
 offset_kp = 0.35
-angle_yaw_kp = 1.0
-offset_yaw_kp = 0.25
+# Yaw-rate P-gain on detected-vs-desired line angle error.
+# Keep modest; high values are the main cause of head-shake oscillation.
+angle_yaw_kp = 0.5
+# Cross-coupling from offset to yaw. 0 disables the loop that turns the
+# vehicle toward the line based on lateral displacement; lateral error is
+# corrected by vy instead. Recommended default.
+offset_yaw_kp = 0.0
 max_lateral_mps = 0.35
-max_yaw_rate_rad_s = 0.6
+max_yaw_rate_rad_s = 0.35
 min_confidence = 0.35
 offset_deadband_norm = 0.03
 angle_deadband_deg = 3.0
 invert_lateral = false
 invert_yaw = false
+# EMA smoothing on the final vy/yaw commands. 1.0 disables smoothing.
+# Lower values are smoother but add lag; 0.3-0.5 is a typical sweet spot.
+output_ema_alpha = 0.4
+# Per-step rate limits (m/s and rad/s of change per control tick).
+# At 20 Hz, 0.025 limits acceleration to ~0.5 m/s/s and ~0.5 rad/s/s.
+# 0 disables.
+max_lateral_rate_mps = 0.0
+max_yaw_rate_change_rad_s = 0.0
+# Reduce forward speed when detection confidence is low.
+# 0 disables; values > 0 use std::pow(confidence, forward_confidence_scale).
+forward_confidence_scale = 0.0
 
 [marker_hover]
 hold_s = 3.0

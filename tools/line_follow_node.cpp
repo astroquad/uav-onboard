@@ -88,6 +88,7 @@ struct Options {
     bool dry_run = false;
     bool allow_arm_takeoff = false;
     bool unsafe_assume_rc_present = false;
+    bool profile_vision = false;
 };
 
 std::string joinConfigPath(const std::string& config_dir, const std::string& filename)
@@ -128,6 +129,7 @@ void printUsage()
         << "  --dry-run                   Real Pixhawk safety mode; no command-producing mission\n"
         << "  --allow-arm-takeoff         Explicitly allow real serial arm/takeoff path\n"
         << "  --unsafe-assume-rc-present  Bypass MAVLink RC gate for real-flight debugging\n"
+        << "  --profile-vision            Log per-stage vision latency in control log\n"
         << "  --smoke-duration-ms <n>     MAVLink smoke duration, default 10000\n"
         << "  --mission-timeout-ms <n>    Override safety mission timeout\n"
         << "  -h, --help                  Show this help\n";
@@ -195,6 +197,8 @@ Options parseOptions(int argc, char** argv)
             options.allow_arm_takeoff = true;
         } else if (arg == "--unsafe-assume-rc-present") {
             options.unsafe_assume_rc_present = true;
+        } else if (arg == "--profile-vision") {
+            options.profile_vision = true;
         } else if (arg == "--smoke-duration-ms" && i + 1 < argc) {
             options.smoke_duration_ms = parseInt(argv[++i], options.smoke_duration_ms);
         } else if (arg == "--mission-timeout-ms" && i + 1 < argc) {
@@ -395,6 +399,14 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
             line_controller["invert_lateral"].value_or(config.controller.invert_lateral);
         config.controller.invert_yaw =
             line_controller["invert_yaw"].value_or(config.controller.invert_yaw);
+        config.controller.output_ema_alpha =
+            line_controller["output_ema_alpha"].value_or(config.controller.output_ema_alpha);
+        config.controller.max_lateral_rate_mps =
+            line_controller["max_lateral_rate_mps"].value_or(config.controller.max_lateral_rate_mps);
+        config.controller.max_yaw_rate_change_rad_s =
+            line_controller["max_yaw_rate_change_rad_s"].value_or(config.controller.max_yaw_rate_change_rad_s);
+        config.controller.forward_confidence_scale =
+            line_controller["forward_confidence_scale"].value_or(config.controller.forward_confidence_scale);
     }
     if (const auto marker_hover = table["marker_hover"]) {
         config.mission.marker_hover_s =
@@ -514,6 +526,14 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
                 line_controller["invert_lateral"].value_or(config.controller.invert_lateral);
             config.controller.invert_yaw =
                 line_controller["invert_yaw"].value_or(config.controller.invert_yaw);
+            config.controller.output_ema_alpha =
+                line_controller["output_ema_alpha"].value_or(config.controller.output_ema_alpha);
+            config.controller.max_lateral_rate_mps =
+                line_controller["max_lateral_rate_mps"].value_or(config.controller.max_lateral_rate_mps);
+            config.controller.max_yaw_rate_change_rad_s =
+                line_controller["max_yaw_rate_change_rad_s"].value_or(config.controller.max_yaw_rate_change_rad_s);
+            config.controller.forward_confidence_scale =
+                line_controller["forward_confidence_scale"].value_or(config.controller.forward_confidence_scale);
         }
         if (const auto marker_hover = table["marker_hover"]) {
             config.mission.marker_hover_s =
@@ -820,6 +840,19 @@ bool opticalFlowReady(
     return *state.optical_flow_quality >= 50;
 }
 
+// Local-XY position source by runtime target:
+//   * Gazebo SITL (target=sitl, vision=gazebo|fake): ArduCopter SITL EKF
+//     publishes LOCAL_POSITION_NED fused from the simulated GPS+IMU. There is
+//     no MTF-01; opticalFlowReady() returns false. We therefore only enforce
+//     waitLocalHoldEstimateReady() / opticalFlowReady() when the transport is
+//     real serial (target=pixhawk1). Setpoints go out as either body-frame
+//     velocities (line follow) or position-anchored velocities (hover/land).
+//   * Real Pixhawk1 (target=pixhawk1, vision=rpicam): EKF3 fuses MTF-01
+//     OPTICAL_FLOW + range finder + IMU into LOCAL_POSITION_NED. Drift is
+//     higher than the SITL GPS path, so this file's pixhawk1 config uses
+//     smaller gains, stronger EMA smoothing, and a lower max forward speed.
+//     localHoldEstimateReady() additionally requires optical_flow_quality and
+//     the EKF relative-aiding bits before we permit GUIDED arm/takeoff.
 bool localHoldEstimateReady(
     const onboard::autopilot::AutopilotState& state,
     Clock::time_point now)
@@ -1295,6 +1328,15 @@ int main(int argc, char** argv)
                   << " rc_required=" << (config.safety.rc_required ? "true" : "false")
                   << " assume_rc=" << (config.safety.assume_rc_present ? "true" : "false")
                   << " rate_hz=" << config.setpoint_rate_hz << "\n";
+        std::cout << "[control] gains offset_kp=" << config.controller.offset_kp
+                  << " angle_yaw_kp=" << config.controller.angle_yaw_kp
+                  << " offset_yaw_kp=" << config.controller.offset_yaw_kp
+                  << " max_lat=" << config.controller.max_lateral_mps
+                  << " max_yaw=" << config.controller.max_yaw_rate_rad_s
+                  << " ema_alpha=" << config.controller.output_ema_alpha
+                  << " lat_rate=" << config.controller.max_lateral_rate_mps
+                  << " yaw_rate_change=" << config.controller.max_yaw_rate_change_rad_s
+                  << " fwd_conf_scale=" << config.controller.forward_confidence_scale << "\n";
         if (options.unsafe_assume_rc_present) {
             std::cerr
                 << "[safety] WARNING: --unsafe-assume-rc-present bypasses the MAVLink RC gate\n";
@@ -1525,6 +1567,9 @@ int main(int argc, char** argv)
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         int mission_vision_frames = 0;
         onboard::app::VisionDebugPublishStats mission_publish_stats;
+        onboard::vision::VisionProcessingMetrics last_vision_metrics;
+        double last_read_frame_ms = 0.0;
+        double last_processing_latency_ms = 0.0;
 #endif
 
         while (mission.state() == onboard::mission::LineFollowMissionState::LineFollow ||
@@ -1551,6 +1596,9 @@ int main(int argc, char** argv)
                     if (frame_result.published) {
                         mission_publish_stats = frame_result.publish_stats;
                     }
+                    last_vision_metrics = frame_result.output.metrics;
+                    last_read_frame_ms = frame_result.read_frame_ms;
+                    last_processing_latency_ms = frame_result.processing_latency_ms;
                     line_input = toLineControlInput(result, config.desired_line_angle_deg);
                     marker_input = toMarkerControlInput(result);
                     marker_detected = marker_input.marker_detected;
@@ -1704,6 +1752,13 @@ int main(int argc, char** argv)
                               << " video_drop=" << mission_publish_stats.video_dropped_frames
                               << " video_skip=" << mission_publish_stats.video_skipped_frames
                               << " video_fail=" << mission_publish_stats.video_send_failures;
+                }
+                if (options.profile_vision && frame_source && vision_processor) {
+                    std::cout << " vision_read_ms=" << last_read_frame_ms
+                              << " vision_process_ms=" << last_processing_latency_ms
+                              << " aruco_ms=" << last_vision_metrics.aruco_latency_ms
+                              << " line_ms=" << last_vision_metrics.line_latency_ms
+                              << " intersect_ms=" << last_vision_metrics.intersection_latency_ms;
                 }
 #endif
                 std::cout << "\n";

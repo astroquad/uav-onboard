@@ -96,9 +96,10 @@ cv::Mat localContrastMask(
 cv::Mat absoluteWhiteMask(
     const cv::Mat& work_image,
     const cv::Mat& gray,
+    const cv::Mat& hsv,
     const common::LineConfig& config)
 {
-    if (work_image.channels() < 3) {
+    if (work_image.channels() < 3 || hsv.empty()) {
         cv::Mat mask;
         cv::threshold(
             gray,
@@ -109,8 +110,6 @@ cv::Mat absoluteWhiteMask(
         return mask;
     }
 
-    cv::Mat hsv;
-    cv::cvtColor(work_image, hsv, cv::COLOR_BGR2HSV);
     cv::Mat mask;
     cv::inRange(
         hsv,
@@ -120,9 +119,13 @@ cv::Mat absoluteWhiteMask(
     return mask;
 }
 
-cv::Mat absoluteDarkMask(const cv::Mat& work_image, const cv::Mat& gray, const common::LineConfig& config)
+cv::Mat absoluteDarkMask(
+    const cv::Mat& work_image,
+    const cv::Mat& gray,
+    const cv::Mat& hsv,
+    const common::LineConfig& config)
 {
-    if (work_image.channels() < 3) {
+    if (work_image.channels() < 3 || hsv.empty()) {
         cv::Mat mask;
         cv::threshold(
             gray,
@@ -133,8 +136,6 @@ cv::Mat absoluteDarkMask(const cv::Mat& work_image, const cv::Mat& gray, const c
         return mask;
     }
 
-    cv::Mat hsv;
-    cv::cvtColor(work_image, hsv, cv::COLOR_BGR2HSV);
     cv::Mat mask;
     cv::inRange(
         hsv,
@@ -268,16 +269,15 @@ void addMarkerPolygonOccluders(
 void addMarkerLikeSquareOccluders(
     cv::Mat& occlusion_mask,
     const cv::Mat& work_image,
-    const cv::Mat& gray)
+    const cv::Mat& gray,
+    const cv::Mat& hsv)
 {
     if (occlusion_mask.empty() || work_image.empty() || gray.empty()) {
         return;
     }
 
     cv::Mat dark;
-    if (work_image.channels() >= 3) {
-        cv::Mat hsv;
-        cv::cvtColor(work_image, hsv, cv::COLOR_BGR2HSV);
+    if (work_image.channels() >= 3 && !hsv.empty()) {
         cv::inRange(hsv, cv::Scalar(0, 0, 0), cv::Scalar(180, 255, 95), dark);
     } else {
         cv::threshold(gray, dark, 95, 255, cv::THRESH_BINARY_INV);
@@ -339,6 +339,7 @@ void addMarkerLikeSquareOccluders(
 cv::Mat buildMarkerOcclusionMask(
     const cv::Mat& work_image,
     const cv::Mat& gray,
+    const cv::Mat& hsv,
     const LineMaskGeometry& geometry,
     const std::vector<MarkerObservation>& markers,
     bool detect_marker_like_occluders)
@@ -351,7 +352,7 @@ cv::Mat buildMarkerOcclusionMask(
 
     addMarkerPolygonOccluders(occlusion_mask, markers, geometry);
     if (detect_marker_like_occluders) {
-        addMarkerLikeSquareOccluders(occlusion_mask, work_image, gray);
+        addMarkerLikeSquareOccluders(occlusion_mask, work_image, gray, hsv);
     }
 
     if (cv::countNonZero(occlusion_mask) == 0) {
@@ -455,10 +456,25 @@ LineMaskFrame LineMaskBuilder::build(
         config_.marker_mask_enabled &&
         config_.mode != "dark_on_light" &&
         (!markers.empty() || (detect_marker_like_occluders && config_.marker_mask_detect_candidates));
+
+    // Lazily compute HSV once and share between absolute-color masks and the
+    // marker-like dark detector. In auto mode plus marker masking this saved
+    // up to two redundant BGR->HSV conversions per frame.
+    cv::Mat hsv;
+    bool hsv_built = false;
+    const auto ensure_hsv = [&]() -> const cv::Mat& {
+        if (!hsv_built && work_image.channels() >= 3) {
+            cv::cvtColor(work_image, hsv, cv::COLOR_BGR2HSV);
+            hsv_built = true;
+        }
+        return hsv;
+    };
+
     if (marker_mask_active) {
         output.marker_occlusion_mask = buildMarkerOcclusionMask(
             work_image,
             gray,
+            ensure_hsv(),
             geometry,
             markers,
             detect_marker_like_occluders && config_.marker_mask_detect_candidates);
@@ -472,7 +488,7 @@ LineMaskFrame LineMaskBuilder::build(
     }
     const auto make_mask = [&](bool light_line) {
         if (use_white_fill && light_line) {
-            cv::Mat mask = absoluteWhiteMask(work_image, gray, config_);
+            cv::Mat mask = absoluteWhiteMask(work_image, gray, ensure_hsv(), config_);
             if (use_local_contrast && light_line) {
                 cv::Mat contrast = localContrastMask(gray, true, config_);
                 cv::bitwise_or(mask, contrast, mask);
@@ -483,7 +499,7 @@ LineMaskFrame LineMaskBuilder::build(
             return mask;
         }
         if (use_dark_fill && !light_line) {
-            cv::Mat mask = absoluteDarkMask(work_image, gray, config_);
+            cv::Mat mask = absoluteDarkMask(work_image, gray, ensure_hsv(), config_);
             if (use_local_contrast) {
                 cv::Mat contrast = localContrastMask(gray, false, config_);
                 cv::bitwise_or(mask, contrast, mask);

@@ -26,6 +26,21 @@ struct GuidedVelocityControllerConfig {
     double max_marker_mps = 0.25;
     bool invert_marker_x = false;
     bool invert_marker_y = false;
+
+    // Output smoothing: EMA alpha for lateral and yaw commands.
+    // Lower values = smoother output but more lag.
+    // 1.0 = no smoothing (legacy behavior, default).
+    double output_ema_alpha = 1.0;
+
+    // Rate limiting: maximum absolute change in lateral / yaw per update step.
+    // Caps acceleration in body-frame; ignored when <= 0.
+    double max_lateral_rate_mps = 0.0;
+    double max_yaw_rate_change_rad_s = 0.0;
+
+    // Scale forward velocity by detection confidence: reduces speed when
+    // the line confidence is weak. 0.0 disables (constant forward_mps);
+    // values > 0 use std::pow(confidence, forward_confidence_scale).
+    double forward_confidence_scale = 0.0;
 };
 
 class GuidedVelocityController {
@@ -34,18 +49,29 @@ public:
 
     ControlSetpoint updateLine(
         const LineControlInput& line,
-        const AltitudeControlInput& altitude) const;
+        const AltitudeControlInput& altitude);
     ControlSetpoint updateMarker(
         const MarkerControlInput& marker,
         const AltitudeControlInput& altitude) const;
     ControlSetpoint holdAltitude(const AltitudeControlInput& altitude) const;
-    ControlSetpoint update(const LineControlInput& input) const;
-    ControlSetpoint stop(const AltitudeControlInput& altitude = {}) const;
+    ControlSetpoint update(const LineControlInput& input);
+    ControlSetpoint stop(const AltitudeControlInput& altitude = {});
+
+    // Reset smoothing state (e.g. on mode transition)
+    void resetSmoothing();
 
 private:
     double altitudeVelocityDownMps(const AltitudeControlInput& altitude) const;
 
+    // Apply EMA smoothing and rate limiting to lateral and yaw outputs
+    void smoothOutput(double& lateral, double& yaw_rate);
+
     GuidedVelocityControllerConfig config_;
+
+    // Smoothing state
+    bool has_prev_output_ = false;
+    double prev_lateral_ = 0.0;
+    double prev_yaw_rate_ = 0.0;
 };
 
 } // namespace onboard::control

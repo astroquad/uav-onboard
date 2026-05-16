@@ -18,3 +18,43 @@ mission_timeout_ms = 300000
 assume_rc_present = false
 rc_required = true
 rc_lost_ms = 1500
+
+# Conservative gains for real flight with MTF-01 optical flow.
+# MTF-01 position estimate has more drift than Gazebo SITL,
+# so all gains are lower and smoothing is stronger.
+[line_controller]
+offset_kp = 0.25
+angle_yaw_kp = 0.3
+offset_yaw_kp = 0.0
+max_lateral_mps = 0.25
+max_yaw_rate_rad_s = 0.25
+min_confidence = 0.40
+offset_deadband_norm = 0.05
+angle_deadband_deg = 5.0
+invert_lateral = false
+invert_yaw = false
+# Stronger output smoothing for real flight: only 30% of new command passes through.
+output_ema_alpha = 0.3
+# Limit how fast lateral and yaw commands can change per control step.
+# At 20 Hz control rate, this limits lateral acceleration to ~0.5 m/s/s
+# and yaw acceleration to ~0.5 rad/s/s.
+max_lateral_rate_mps = 0.025
+max_yaw_rate_change_rad_s = 0.025
+# Slow down when confidence is weak (confidence^0.5 scaling).
+forward_confidence_scale = 0.5
+
+[line_follow]
+forward_mps = 0.20
+desired_angle_deg = 90.0
+duration_s = 60.0
+lost_timeout_s = 5.0
+
+[marker_hover]
+hold_s = 3.0
+center_tolerance_px = 30.0
+center_kp = 0.25
+max_marker_mps = 0.20
+approach_timeout_s = 25.0
+lost_timeout_s = 5.0
+invert_x = false
+invert_y = true

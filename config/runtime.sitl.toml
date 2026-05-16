@@ -34,15 +34,23 @@ duration_s = 60.0
 
 [line_controller]
 offset_kp = 0.35
-angle_yaw_kp = 1.0
-offset_yaw_kp = 0.25
+# Reduced angle_yaw_kp from 1.0 to 0.5 to halve yaw response to angle errors.
+# This is the single most impactful change for reducing yaw oscillation.
+angle_yaw_kp = 0.5
+# Reduced offset_yaw_kp from 0.25 to 0.0 to stop lateral offset from
+# driving yaw. Lateral displacement is corrected via vy (lateral velocity)
+# alone. Yaw only responds to detected line angle error.
+offset_yaw_kp = 0.0
 max_lateral_mps = 0.35
-max_yaw_rate_rad_s = 0.6
+# Reduced max yaw rate from 0.6 to 0.35 rad/s (~20 deg/s) for smoother heading.
+max_yaw_rate_rad_s = 0.35
 min_confidence = 0.35
 offset_deadband_norm = 0.03
 angle_deadband_deg = 3.0
 invert_lateral = false
 invert_yaw = false
+# Output EMA smoothing: blend 40% new command with 60% previous command.
+output_ema_alpha = 0.4
 
 [marker_hover]
 hold_s = 3.0

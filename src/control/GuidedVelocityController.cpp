@@ -11,6 +11,20 @@ double applyDeadband(double value, double deadband)
     return std::abs(value) < std::max(0.0, deadband) ? 0.0 : value;
 }
 
+double rateLimitStep(double current, double target, double max_change)
+{
+    if (max_change <= 0.0) {
+        return target;
+    }
+    const double delta = target - current;
+    return current + std::clamp(delta, -max_change, max_change);
+}
+
+double emaFilter(double prev, double input, double alpha)
+{
+    return prev * (1.0 - alpha) + input * alpha;
+}
+
 } // namespace
 
 GuidedVelocityController::GuidedVelocityController(GuidedVelocityControllerConfig config)
@@ -18,12 +32,49 @@ GuidedVelocityController::GuidedVelocityController(GuidedVelocityControllerConfi
 {
 }
 
+void GuidedVelocityController::resetSmoothing()
+{
+    has_prev_output_ = false;
+    prev_lateral_ = 0.0;
+    prev_yaw_rate_ = 0.0;
+}
+
+void GuidedVelocityController::smoothOutput(double& lateral, double& yaw_rate)
+{
+    const double alpha = std::clamp(config_.output_ema_alpha, 0.05, 1.0);
+
+    if (!has_prev_output_) {
+        has_prev_output_ = true;
+        prev_lateral_ = lateral;
+        prev_yaw_rate_ = yaw_rate;
+        return;
+    }
+
+    // EMA smoothing
+    if (alpha < 1.0) {
+        lateral = emaFilter(prev_lateral_, lateral, alpha);
+        yaw_rate = emaFilter(prev_yaw_rate_, yaw_rate, alpha);
+    }
+
+    // Rate limiting
+    lateral = rateLimitStep(prev_lateral_, lateral, config_.max_lateral_rate_mps);
+    yaw_rate = rateLimitStep(prev_yaw_rate_, yaw_rate, config_.max_yaw_rate_change_rad_s);
+
+    prev_lateral_ = lateral;
+    prev_yaw_rate_ = yaw_rate;
+}
+
 ControlSetpoint GuidedVelocityController::updateLine(
     const LineControlInput& line,
-    const AltitudeControlInput& altitude) const
+    const AltitudeControlInput& altitude)
 {
     ControlSetpoint output = holdAltitude(altitude);
     if (!line.line_detected || line.confidence < config_.min_confidence) {
+        // When line is lost, decay smoothing state toward zero so the
+        // drone doesn't lurch when re-acquiring.
+        double zero_lat = 0.0;
+        double zero_yaw = 0.0;
+        smoothOutput(zero_lat, zero_yaw);
         return output;
     }
 
@@ -47,7 +98,18 @@ ControlSetpoint GuidedVelocityController::updateLine(
         yaw_rate = -yaw_rate;
     }
 
-    output.vx_forward_mps = static_cast<float>(config_.forward_mps);
+    // Apply output smoothing and rate limiting
+    smoothOutput(lateral, yaw_rate);
+
+    double forward = config_.forward_mps;
+    // Scale forward speed by detection confidence to slow down when uncertain
+    if (config_.forward_confidence_scale > 0.0) {
+        const double conf_factor = std::clamp(
+            std::pow(line.confidence, config_.forward_confidence_scale), 0.0, 1.0);
+        forward *= conf_factor;
+    }
+
+    output.vx_forward_mps = static_cast<float>(forward);
     output.vy_right_mps = static_cast<float>(lateral);
     output.yaw_rate_rad_s = static_cast<float>(yaw_rate);
     return output;
@@ -93,13 +155,17 @@ ControlSetpoint GuidedVelocityController::holdAltitude(const AltitudeControlInpu
     };
 }
 
-ControlSetpoint GuidedVelocityController::update(const LineControlInput& input) const
+ControlSetpoint GuidedVelocityController::update(const LineControlInput& input)
 {
     return updateLine(input, AltitudeControlInput {});
 }
 
-ControlSetpoint GuidedVelocityController::stop(const AltitudeControlInput& altitude) const
+ControlSetpoint GuidedVelocityController::stop(const AltitudeControlInput& altitude)
 {
+    // Decay smoothing state toward zero when stopping
+    double zero_lat = 0.0;
+    double zero_yaw = 0.0;
+    smoothOutput(zero_lat, zero_yaw);
     return holdAltitude(altitude);
 }
 
