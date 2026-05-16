@@ -16,6 +16,7 @@ struct RpicamOptions {
     int fps = 15;
     int jpeg_quality = 50;
     std::string codec = "mjpeg";
+    std::string mode;
     std::string autofocus_mode;
     std::string autofocus_range;
     std::string autofocus_speed;

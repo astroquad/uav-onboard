@@ -39,6 +39,7 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
         config.camera.jpeg_quality = camera["jpeg_quality"].value_or(config.camera.jpeg_quality);
         config.camera.sensor_model = camera["sensor_model"].value_or(config.camera.sensor_model);
         config.camera.codec = camera["codec"].value_or(config.camera.codec);
+        config.camera.mode = camera["mode"].value_or(config.camera.mode);
         config.camera.autofocus_mode =
             camera["autofocus_mode"].value_or(config.camera.autofocus_mode);
         config.camera.autofocus_range =

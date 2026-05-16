@@ -382,6 +382,7 @@ int main(int argc, char** argv)
         rpicam_options.fps = vision_config.camera.fps;
         rpicam_options.jpeg_quality = vision_config.camera.jpeg_quality;
         rpicam_options.codec = vision_config.camera.codec;
+        rpicam_options.mode = vision_config.camera.mode;
         rpicam_options.autofocus_mode = vision_config.camera.autofocus_mode;
         rpicam_options.autofocus_range = vision_config.camera.autofocus_range;
         rpicam_options.autofocus_speed = vision_config.camera.autofocus_speed;

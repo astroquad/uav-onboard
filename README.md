@@ -218,8 +218,9 @@ system telemetry. If GCS video streaming is explicitly enabled and falls behind,
 old video frames are dropped and the vision loop keeps working on the latest
 camera frame/result. Future mission decision and control output must stay on
 the critical path; GCS video is only an observation aid. The Pi 4 + IMX519
-default captures at 960x720 12 FPS with MJPEG quality 45 to keep onboard
-decode, detector, and optional UDP video overhead conservative.
+default captures 960x720 at 12 FPS with MJPEG quality 45, while forcing the
+2328x1748 IMX519 sensor mode so the camera keeps the wider full-sensor view
+without making the onboard decode/detector/video path process 1640x1232 frames.
 GCS video receiver discovery is skipped unless debug video is enabled.
 
 Mission-style metadata-only examples:
@@ -521,9 +522,12 @@ Latency and stability defaults are configured in `config/vision.toml`:
 
 - `camera.sensor_model = "imx519"`: Pi 4 + IMX519-78 is the current default
   camera target.
-- `camera.width = 960`, `camera.height = 720`, `camera.fps = 12`: capture keeps
-  more marker pixels than the original Zero 2 W 640x480 baseline while keeping
-  the detector loop conservative on Pi 4.
+- `camera.width = 960`, `camera.height = 720`, `camera.fps = 12`: output stays
+  small enough for Pi 4 decode, detector, and optional UDP video throughput.
+- `camera.mode = "2328:1748:10:P"`: forces the wider IMX519 sensor mode before
+  scaling to the configured output size. Without this, 960x720 can select a
+  tighter cropped sensor path; using 1640x1232 directly is measurably too slow
+  for the current onboard vision loop.
 - `camera.jpeg_quality = 45`: MJPEG compression is intentionally moderate
   because the competition marker is large enough for detection at the planned
   2m altitude, and lower JPEG size reduces decode and optional UDP video cost.

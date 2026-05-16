@@ -1404,10 +1404,7 @@ int main(int argc, char** argv)
                           << config.network.telemetry_port << '/'
                           << config.network.video_port << "\n";
                 if (send_video) {
-                    const int startup_fps = std::clamp(
-                        config.vision.debug_video.send_fps,
-                        1,
-                        std::max(1, config.vision.camera.fps));
+                    const int startup_fps = std::max(1, config.vision.camera.fps);
                     startup_vision_streamer = std::make_unique<StartupVisionStreamer>(
                         *frame_source,
                         *vision_processor,

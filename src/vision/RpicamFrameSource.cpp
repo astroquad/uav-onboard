@@ -16,6 +16,7 @@ camera::RpicamOptions toRpicamOptions(const common::VisionConfig& config)
     options.fps = config.camera.fps;
     options.jpeg_quality = config.camera.jpeg_quality;
     options.codec = config.camera.codec;
+    options.mode = config.camera.mode;
     options.autofocus_mode = config.camera.autofocus_mode;
     options.autofocus_range = config.camera.autofocus_range;
     options.autofocus_speed = config.camera.autofocus_speed;

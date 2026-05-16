@@ -66,6 +66,7 @@ std::string buildCommand(const RpicamOptions& options)
             << " --framerate " << options.fps
             << " -o -";
 
+    appendStringOption(command, "--mode", options.mode);
     appendStringOption(command, "--autofocus-mode", options.autofocus_mode);
     appendStringOption(command, "--autofocus-range", options.autofocus_range);
     appendStringOption(command, "--autofocus-speed", options.autofocus_speed);

@@ -12,6 +12,7 @@ struct CameraConfig {
     int jpeg_quality = 45;
     std::string sensor_model = "imx519";
     std::string codec = "mjpeg";
+    std::string mode;
     std::string autofocus_mode = "manual";
     std::string autofocus_range = "normal";
     std::string autofocus_speed = "normal";

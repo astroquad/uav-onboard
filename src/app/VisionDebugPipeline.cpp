@@ -801,6 +801,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     camera_options.fps = options.vision.camera.fps;
     camera_options.jpeg_quality = options.vision.camera.jpeg_quality;
     camera_options.codec = options.vision.camera.codec;
+    camera_options.mode = options.vision.camera.mode;
     camera_options.autofocus_mode = options.vision.camera.autofocus_mode;
     camera_options.autofocus_range = options.vision.camera.autofocus_range;
     camera_options.autofocus_speed = options.vision.camera.autofocus_speed;
