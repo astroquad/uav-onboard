@@ -12,6 +12,11 @@ line_lost_ms = 2000
 pixhawk_heartbeat_lost_ms = 3000
 mission_timeout_ms = 300000
 
+[safety.rc]
+assume_rc_present = true
+rc_required = false
+rc_lost_ms = 1500
+
 [vision.source]
 gazebo_topic = "/world/astroquad_iris_vision/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image"
 read_timeout_ms = 2000

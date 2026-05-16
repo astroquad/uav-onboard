@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -22,7 +23,11 @@ struct AutopilotState {
     std::optional<double> local_vy_mps;
     std::optional<double> local_vz_mps;
     std::optional<double> relative_altitude_m;
+    std::optional<int> rc_channel_count;
+    std::optional<int> rc_rssi;
+    std::array<std::uint16_t, 18> rc_channels_pwm {};
     std::chrono::steady_clock::time_point last_heartbeat_time {};
+    std::chrono::steady_clock::time_point last_rc_channels_time {};
 };
 
 struct MavlinkIds {

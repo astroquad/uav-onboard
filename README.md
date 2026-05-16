@@ -307,6 +307,7 @@ cd ~/astroquad/uav-onboard
   --config config \
   --target sitl \
   --vision gazebo \
+  --line-mode light_on_dark \
   --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
@@ -342,6 +343,20 @@ rangefinder/distance sensor, optical flow quality, and EKF flags. It only sends
 GCS heartbeat and stream requests; it does not arm, change mode, take off, or
 send velocity commands.
 
+No-arm RC input gate:
+
+```bash
+cd /home/astroquad/astroquad/uav-onboard
+
+./build/mavlink_probe --config config --target pixhawk1 \
+  --duration-ms 30000 --strict-rc
+```
+
+This must pass before any real `--allow-arm-takeoff` mission. The Pixhawk1
+runtime profile requires fresh MAVLink `RC_CHANNELS` with `chancount > 0`; if
+RC is not visible, `line_follow_node` exits before `GUIDED`, arm, takeoff, or
+velocity commands.
+
 No-arm `line_follow_node` serial smoke:
 
 ```bash
@@ -353,7 +368,8 @@ cd /home/astroquad/astroquad/uav-onboard
 
 This validates that the mission executable can select the Pixhawk serial
 transport from config. In smoke mode it does not arm, change mode, take off, or
-send velocity commands.
+send velocity commands. It also prints the latest observed RC channel count and
+RSSI when those messages are available.
 
 Pixhawk parameter compare:
 
@@ -390,14 +406,27 @@ to check each motor output. If the command is accepted but a motor does not
 spin, check the safety switch, ESC power, MAIN OUT signal wiring, ESC
 calibration, motor order, and motor PWM parameters before increasing throttle.
 
-Do not run the real serial mission path with `--allow-arm-takeoff` until RC
-takeover, battery/failsafe behavior, motor order, prop direction, and a short
-manual hover are verified.
+Do not run the real serial mission path with `--allow-arm-takeoff` until
+`--strict-rc`, RC takeover, battery/failsafe behavior, motor order, prop
+direction, and a short manual hover are verified. The software RC gate is a
+fallback, not a substitute for flight-controller and operator safety checks.
 
 Existing real-hardware vision debug path:
 
 ```bash
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
+./build/vision_debug_node --config config --line-only --line-mode dark_on_light --video
+```
+
+First real line-follow mission command, only after every no-arm and props-off
+gate above passes:
+
+```bash
+./build/line_follow_node --config config --target pixhawk1 \
+  --vision rpicam --line-mode light_on_dark --video --allow-arm-takeoff
+
+./build/line_follow_node --config config --target pixhawk1 \
+  --vision rpicam --line-mode dark_on_light --video --allow-arm-takeoff
 ```
 
 Deterministic Gazebo vision fixtures can also be run without ArduPilot SITL:

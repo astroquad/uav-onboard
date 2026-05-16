@@ -67,12 +67,34 @@ mavlink_message_t packHeartbeat(std::uint32_t custom_mode, bool armed)
     return message;
 }
 
+mavlink_message_t packRcChannels()
+{
+    mavlink_rc_channels_t channels {};
+    channels.time_boot_ms = 100;
+    channels.chancount = 8;
+    channels.chan1_raw = 1500;
+    channels.chan2_raw = 1501;
+    channels.chan3_raw = 1000;
+    channels.chan4_raw = 1502;
+    channels.chan5_raw = 1800;
+    channels.rssi = 200;
+
+    mavlink_message_t message {};
+    mavlink_msg_rc_channels_encode(
+        1,
+        MAV_COMP_ID_AUTOPILOT1,
+        &message,
+        &channels);
+    return message;
+}
+
 } // namespace
 
 int main()
 {
     std::vector<mavlink_message_t> messages;
     messages.push_back(packLocalPosition(-1.25f));
+    messages.push_back(packRcChannels());
     messages.push_back(packHeartbeat(COPTER_MODE_GUIDED, true));
 
     auto transport = std::make_unique<FakeTransport>(std::move(messages));
@@ -87,6 +109,12 @@ int main()
     assert(adapter.state().local_altitude_m.has_value());
     assert(*adapter.state().local_altitude_m > 1.24);
     assert(adapter.state().last_heartbeat_time.time_since_epoch().count() > 0);
+    assert(adapter.state().rc_channel_count.has_value());
+    assert(*adapter.state().rc_channel_count == 8);
+    assert(adapter.state().rc_rssi.has_value());
+    assert(*adapter.state().rc_rssi == 200);
+    assert(adapter.state().rc_channels_pwm[0] == 1500);
+    assert(adapter.state().last_rc_channels_time.time_since_epoch().count() > 0);
 
     return 0;
 }

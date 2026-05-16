@@ -4,5 +4,10 @@ gcs_link_lost_ms = 5000
 pixhawk_heartbeat_lost_ms = 2000
 mission_timeout_ms = 300000
 
+[rc]
+assume_rc_present = true
+rc_required = false
+rc_lost_ms = 1500
+
 [battery]
 low_voltage_v = 10.5

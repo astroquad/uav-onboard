@@ -50,6 +50,13 @@ target_include_directories(test_line_follow_mission PRIVATE ../src)
 target_link_libraries(test_line_follow_mission PRIVATE onboard_core)
 add_test(NAME line_follow_mission COMMAND test_line_follow_mission)
 
+add_executable(test_safety_monitor
+    test_safety_monitor.cpp
+)
+target_include_directories(test_safety_monitor PRIVATE ../src)
+target_link_libraries(test_safety_monitor PRIVATE onboard_core)
+add_test(NAME safety_monitor COMMAND test_safety_monitor)
+
 if(TARGET onboard_vision)
     add_executable(test_intersection_detector
         test_intersection_detector.cpp

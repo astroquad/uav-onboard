@@ -15,6 +15,9 @@ struct SafetyConfig {
     int line_lost_ms = 2000;
     int pixhawk_heartbeat_lost_ms = 2000;
     int mission_timeout_ms = 300000;
+    bool rc_required = false;
+    bool assume_rc_present = true;
+    int rc_lost_ms = 1500;
 };
 
 struct SafetyInput {
@@ -22,6 +25,11 @@ struct SafetyInput {
     bool line_detected = true;
     std::chrono::steady_clock::time_point now;
     std::chrono::steady_clock::time_point last_heartbeat_time {};
+    bool rc_channels_seen = false;
+    int rc_channel_count = 0;
+    std::chrono::steady_clock::time_point last_rc_channels_time {};
+    bool mode_known = true;
+    bool mode_guided = true;
 };
 
 struct SafetyDecision {

@@ -13,3 +13,8 @@ baudrate = 115200
 line_lost_ms = 1500
 pixhawk_heartbeat_lost_ms = 2000
 mission_timeout_ms = 300000
+
+[safety.rc]
+assume_rc_present = false
+rc_required = true
+rc_lost_ms = 1500

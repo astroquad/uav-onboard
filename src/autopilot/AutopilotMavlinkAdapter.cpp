@@ -359,6 +359,34 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
         mavlink_global_position_int_t position {};
         mavlink_msg_global_position_int_decode(&message, &position);
         state_.relative_altitude_m = position.relative_alt / 1000.0;
+#ifdef MAVLINK_MSG_ID_RC_CHANNELS
+    } else if (message.msgid == MAVLINK_MSG_ID_RC_CHANNELS) {
+        mavlink_rc_channels_t channels {};
+        mavlink_msg_rc_channels_decode(&message, &channels);
+        state_.rc_channel_count = channels.chancount;
+        state_.rc_rssi = channels.rssi;
+        state_.rc_channels_pwm = {
+            channels.chan1_raw,
+            channels.chan2_raw,
+            channels.chan3_raw,
+            channels.chan4_raw,
+            channels.chan5_raw,
+            channels.chan6_raw,
+            channels.chan7_raw,
+            channels.chan8_raw,
+            channels.chan9_raw,
+            channels.chan10_raw,
+            channels.chan11_raw,
+            channels.chan12_raw,
+            channels.chan13_raw,
+            channels.chan14_raw,
+            channels.chan15_raw,
+            channels.chan16_raw,
+            channels.chan17_raw,
+            channels.chan18_raw,
+        };
+        state_.last_rc_channels_time = Clock::now();
+#endif
     }
 }
 

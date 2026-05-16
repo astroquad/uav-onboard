@@ -70,6 +70,7 @@ struct Options {
     std::string target;
     std::string autopilot_uri;
     std::string vision;
+    std::string line_mode_override;
     std::string gcs_ip_override;
     std::string gazebo_topic_override;
     std::optional<int> mission_timeout_ms;
@@ -109,6 +110,7 @@ void printUsage()
         << "                              or serial:///dev/serial0:115200\n"
         << "  --vision <fake|gazebo|rpicam>\n"
         << "                              Vision source for this MVP node\n"
+        << "  --line-mode <mode>          auto, light_on_dark, or dark_on_light\n"
         << "  --gcs-ip <ip>               Override GCS telemetry/video destination IP\n"
         << "  --telemetry-port <n>        Override GCS telemetry UDP port\n"
         << "  --video-port <n>            Override GCS video UDP port\n"
@@ -135,6 +137,13 @@ int parseInt(const std::string& value, int fallback)
     }
 }
 
+bool isValidLineMode(const std::string& mode)
+{
+    return mode == "auto" ||
+           mode == "light_on_dark" ||
+           mode == "dark_on_light";
+}
+
 Options parseOptions(int argc, char** argv)
 {
     Options options;
@@ -148,6 +157,8 @@ Options parseOptions(int argc, char** argv)
             options.autopilot_uri = argv[++i];
         } else if (arg == "--vision" && i + 1 < argc) {
             options.vision = argv[++i];
+        } else if (arg == "--line-mode" && i + 1 < argc) {
+            options.line_mode_override = argv[++i];
         } else if (arg == "--gcs-ip" && i + 1 < argc) {
             options.gcs_ip_override = argv[++i];
         } else if (arg == "--telemetry-port" && i + 1 < argc) {
@@ -288,6 +299,14 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
                 timeouts["pixhawk_heartbeat_lost_ms"].value_or(config.safety.pixhawk_heartbeat_lost_ms);
             config.safety.mission_timeout_ms =
                 timeouts["mission_timeout_ms"].value_or(config.safety.mission_timeout_ms);
+        }
+        if (const auto rc = safety["rc"]) {
+            config.safety.rc_required =
+                rc["rc_required"].value_or(config.safety.rc_required);
+            config.safety.assume_rc_present =
+                rc["assume_rc_present"].value_or(config.safety.assume_rc_present);
+            config.safety.rc_lost_ms =
+                rc["rc_lost_ms"].value_or(config.safety.rc_lost_ms);
         }
     }
     if (const auto vision = table["vision"]) {
@@ -508,6 +527,14 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
             config.safety.mission_timeout_ms =
                 timeouts["mission_timeout_ms"].value_or(config.safety.mission_timeout_ms);
         }
+        if (const auto rc = table["rc"]) {
+            config.safety.rc_required =
+                rc["rc_required"].value_or(config.safety.rc_required);
+            config.safety.assume_rc_present =
+                rc["assume_rc_present"].value_or(config.safety.assume_rc_present);
+            config.safety.rc_lost_ms =
+                rc["rc_lost_ms"].value_or(config.safety.rc_lost_ms);
+        }
     } catch (const toml::parse_error&) {
     }
 
@@ -559,6 +586,12 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
     if (!options.gazebo_topic_override.empty()) {
         config.vision.source.gazebo_topic = options.gazebo_topic_override;
     }
+    if (!options.line_mode_override.empty()) {
+        if (!isValidLineMode(options.line_mode_override)) {
+            throw std::runtime_error("unknown --line-mode: " + options.line_mode_override);
+        }
+        config.vision.line.mode = options.line_mode_override;
+    }
 
     return config;
 }
@@ -596,6 +629,57 @@ double axialAngleDeltaDeg(double measured_deg, double desired_deg)
         delta += 180.0;
     }
     return delta;
+}
+
+bool rcInputFresh(
+    const onboard::autopilot::AutopilotState& state,
+    const onboard::safety::SafetyConfig& safety,
+    Clock::time_point now)
+{
+    if (safety.assume_rc_present || !safety.rc_required) {
+        return true;
+    }
+    if (!state.rc_channel_count || *state.rc_channel_count <= 0) {
+        return false;
+    }
+    if (state.last_rc_channels_time.time_since_epoch().count() == 0) {
+        return false;
+    }
+    const auto rc_age_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - state.last_rc_channels_time)
+            .count();
+    return rc_age_ms <= safety.rc_lost_ms;
+}
+
+bool waitRcReady(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    const onboard::safety::SafetyConfig& safety,
+    std::chrono::seconds timeout)
+{
+    if (safety.assume_rc_present || !safety.rc_required) {
+        std::cout << "[safety] RC gate assumed-present or optional\n";
+        return true;
+    }
+
+    std::cout << "[safety] waiting for RC input via MAVLink RC_CHANNELS...\n";
+    const auto deadline = Clock::now() + timeout;
+    while (Clock::now() < deadline) {
+        autopilot.poll(200);
+        if (rcInputFresh(autopilot.state(), safety, Clock::now())) {
+            const auto& state = autopilot.state();
+            std::cout << "[safety] RC input ready channels="
+                      << state.rc_channel_count.value_or(0)
+                      << " rssi=" << state.rc_rssi.value_or(-1) << "\n";
+            return true;
+        }
+    }
+    const auto& state = autopilot.state();
+    std::cerr << "[safety] RC gate failed: channels="
+              << state.rc_channel_count.value_or(0)
+              << " rssi=" << state.rc_rssi.value_or(-1)
+              << " required=true\n";
+    return false;
 }
 
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
@@ -936,6 +1020,9 @@ int main(int argc, char** argv)
                   << " takeoff_alt=" << config.mission.target_altitude_m
                   << " duration=" << config.mission.line_follow_duration_s
                   << " desired_angle=" << config.desired_line_angle_deg
+                  << " line_mode=" << config.vision.line.mode
+                  << " rc_required=" << (config.safety.rc_required ? "true" : "false")
+                  << " assume_rc=" << (config.safety.assume_rc_present ? "true" : "false")
                   << " rate_hz=" << config.setpoint_rate_hz << "\n";
 
         std::unique_ptr<onboard::autopilot::MavlinkTransport> transport;
@@ -985,6 +1072,8 @@ int main(int argc, char** argv)
                               << ',' << ap_state.local_vy_mps.value_or(-999.0)
                               << ',' << ap_state.local_vz_mps.value_or(-999.0) << ')'
                               << " range=" << ap_state.distance_sensor_m.value_or(-1.0)
+                              << " rc_channels=" << ap_state.rc_channel_count.value_or(0)
+                              << " rc_rssi=" << ap_state.rc_rssi.value_or(-1)
                               << "\n";
                     last_smoke_log = now;
                 }
@@ -1062,6 +1151,10 @@ int main(int argc, char** argv)
                   << " mode=" << autopilot.state().mode_name << "\n";
 
         autopilot.requestDefaultStreams();
+        if (!waitRcReady(autopilot, config.safety, std::chrono::seconds(10))) {
+            std::cerr << "[safety] refusing GUIDED/arm/takeoff until RC input is visible\n";
+            return 2;
+        }
         autopilot.setGuidedMode(std::chrono::seconds(10));
         std::cout << "[mavlink] GUIDED confirmed\n";
         autopilot.arm(std::chrono::seconds(30));
@@ -1115,6 +1208,7 @@ int main(int argc, char** argv)
         const onboard::control::MarkerControlInput fake_marker {};
         auto last_control_log = Clock::now();
         auto last_state = mission.state();
+        bool operator_takeover = false;
 
         while (mission.state() == onboard::mission::LineFollowMissionState::LineFollow ||
                mission.state() == onboard::mission::LineFollowMissionState::MarkerApproach ||
@@ -1154,14 +1248,22 @@ int main(int argc, char** argv)
             }
 #endif
 
+            const auto& ap_state_for_safety = autopilot.state();
             const auto safety_decision = safety.update(onboard::safety::SafetyInput {
-                autopilot.state().heartbeat_seen,
+                ap_state_for_safety.heartbeat_seen,
                 line_input.line_detected || marker_detected,
                 loop_start,
-                autopilot.state().last_heartbeat_time,
+                ap_state_for_safety.last_heartbeat_time,
+                ap_state_for_safety.rc_channel_count.has_value(),
+                ap_state_for_safety.rc_channel_count.value_or(0),
+                ap_state_for_safety.last_rc_channels_time,
+                ap_state_for_safety.heartbeat_seen,
+                ap_state_for_safety.custom_mode == COPTER_MODE_GUIDED,
             });
 
             if (safety_decision.action == onboard::safety::SafetyAction::Abort) {
+                operator_takeover =
+                    safety_decision.reason.find("operator takeover") != std::string::npos;
                 mission.abort(safety_decision.reason);
                 break;
             }
@@ -1234,6 +1336,12 @@ int main(int argc, char** argv)
                 last_control_log = loop_start;
             }
             std::this_thread::sleep_until(loop_start + period);
+        }
+
+        if (operator_takeover) {
+            std::cerr << "[mission] ABORT reason=" << mission.landingReason() << "\n";
+            std::cerr << "[safety] operator takeover detected; not sending LAND or velocity commands\n";
+            return 2;
         }
 
         autopilot.sendBodyVelocity(toAutopilotCommand(

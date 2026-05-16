@@ -33,6 +33,24 @@ SafetyDecision SafetyMonitor::update(const SafetyInput& input)
         return {SafetyAction::Abort, "pixhawk heartbeat lost"};
     }
 
+    if (input.mode_known && !input.mode_guided) {
+        return {SafetyAction::Abort, "operator takeover: mode changed from GUIDED"};
+    }
+
+    if (config_.rc_required && !config_.assume_rc_present) {
+        if (!input.rc_channels_seen || input.rc_channel_count <= 0) {
+            return {SafetyAction::Land, "rc input unavailable"};
+        }
+
+        const auto rc_age_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                input.now - input.last_rc_channels_time)
+                .count();
+        if (rc_age_ms > config_.rc_lost_ms) {
+            return {SafetyAction::Land, "rc input lost"};
+        }
+    }
+
     if (input.line_detected) {
         last_line_seen_at_ = input.now;
         line_seen_ = true;
