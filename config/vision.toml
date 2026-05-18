@@ -33,7 +33,7 @@ vflip = false
 rotation = 0
 
 [source]
-gazebo_topic = "/world/astroquad_iris_vision/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image"
+gazebo_topic = "/world/line_tracing_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image"
 read_timeout_ms = 1000
 fake_line_offset_px = 0.0
 fake_line_angle_deg = 0.0

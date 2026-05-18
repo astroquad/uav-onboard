@@ -95,7 +95,7 @@
             <specular>0 0 0 1</specular>
             <pbr>
               <metal>
-                <albedo_map>model://astroquad_vision_course/materials/textures/aruco_id1.png</albedo_map>
+                <albedo_map>model://line_tracing_course/materials/textures/aruco_id1.png</albedo_map>
                 <roughness>1.0</roughness>
                 <metalness>0.0</metalness>
               </metal>

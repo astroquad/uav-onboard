@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Gazebo + ArduCopter SITL launcher for Astroquad Gazebo vision tests.
-# Run from WSL: bash ~/astroquad/uav-onboard/scripts/fly_test.sh
+# Gazebo + ArduCopter SITL launcher for the Astroquad line-tracing test world.
+# Run from WSL: bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh
 
 set -euo pipefail
 
 ONBOARD_DIR="${ONBOARD_DIR:-$HOME/astroquad/uav-onboard}"
 ARDUCOPTER_DIR="${ARDUCOPTER_DIR:-$HOME/ardupilot/ArduCopter}"
 ARDUPILOT_GAZEBO_DIR="${ARDUPILOT_GAZEBO_DIR:-$HOME/ardupilot_gazebo}"
-ASTROQUAD_WORLD="${ASTROQUAD_WORLD:-$ONBOARD_DIR/sim/gazebo/worlds/astroquad_iris_vision.sdf}"
-GZ_LOG="${GZ_LOG:-/tmp/gz_astroquad_iris_vision.log}"
+ASTROQUAD_WORLD="${ASTROQUAD_WORLD:-$ONBOARD_DIR/sim/gazebo/worlds/line_tracing_test_world.sdf}"
+GZ_LOG="${GZ_LOG:-/tmp/gz_line_tracing_test_world.log}"
 INDOOR_PARAM_FILE="${INDOOR_PARAM_FILE:-$HOME/mavlink_control_lab/params/indoor_flow_tfmini_sitl.parm}"
 WSL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 WINDOWS_GCS_IP="$(ip route 2>/dev/null | awk '/default/ {print $3; exit}')"
@@ -44,7 +44,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "======================================"
-echo " Gazebo + ArduCopter SITL (Astroquad vision world)"
+echo " Gazebo + ArduCopter SITL (line_tracing_test_world)"
 echo "======================================"
 
 if [[ ! -d "$ARDUCOPTER_DIR" ]]; then
@@ -71,7 +71,7 @@ export GZ_SIM_SYSTEM_PLUGIN_PATH="$ARDUPILOT_GAZEBO_DIR/build:${GZ_SIM_SYSTEM_PL
 export GZ_SIM_RESOURCE_PATH="$ARDUPILOT_GAZEBO_DIR/models:$ARDUPILOT_GAZEBO_DIR/worlds:$ONBOARD_DIR/sim/gazebo/models:$ONBOARD_DIR/sim/gazebo/worlds:${GZ_SIM_RESOURCE_PATH:-}"
 
 echo "[1] 기존 Gazebo / ArduPilot SITL 프로세스 정리..."
-pkill -f "gz sim.*astroquad_iris_vision" 2>/dev/null || true
+pkill -f "gz sim.*line_tracing_test_world" 2>/dev/null || true
 pkill -f "^gz sim server" 2>/dev/null || true
 pkill -f "^gz sim gui" 2>/dev/null || true
 pkill -f "sim_vehicle.py.*ArduCopter" 2>/dev/null || true

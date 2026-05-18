@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <sdf version="1.9">
-  <model name="astroquad_vision_course">
+  <model name="line_tracing_course">
     <static>true</static>
 
     <link name="course_link">
@@ -38,19 +38,6 @@
           <ambient>1 1 1 1</ambient>
           <diffuse>1 1 1 1</diffuse>
           <emissive>0.25 0.25 0.25 1</emissive>
-        </material>
-      </visual>
-
-      <visual name="marker_id1_white_backing">
-        <pose>0 3.0 0.012 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>0.58 0.58 0.006</size>
-          </box>
-        </geometry>
-        <material>
-          <ambient>1 1 1 1</ambient>
-          <diffuse>1 1 1 1</diffuse>
         </material>
       </visual>
 

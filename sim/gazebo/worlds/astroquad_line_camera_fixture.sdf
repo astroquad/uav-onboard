@@ -28,7 +28,7 @@
     </light>
 
     <include>
-      <uri>model://astroquad_vision_course</uri>
+      <uri>model://line_tracing_course</uri>
     </include>
 
     <include>

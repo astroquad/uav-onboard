@@ -93,7 +93,7 @@ MVP에서 제외하는 것:
 | Intersection decision/local grid node | 구현됨 | `src/mission/IntersectionDecision.*`, `src/mission/GridCoordinateTracker.*` |
 | Pi 4 + IMX519 camera/focus/exposure config | 구현됨 | `config/vision.toml`, `src/common/VisionConfig.*` |
 | System/camera/debug telemetry | 구현됨 | `src/app/VisionDebugPipeline.cpp` |
-| Gazebo/SITL vision world | 구현됨 | `sim/gazebo/`, `scripts/fly_test.sh`, `config/runtime.sitl.toml` |
+| Gazebo/SITL vision world | 구현됨 | `sim/gazebo/`, `scripts/line_tracing_test.sh`, `scripts/grid_arena_test.sh`, `config/runtime.sitl.toml` |
 | Runtime frame sources | 구현됨 | `src/vision/FrameSource.hpp`, `FakeFrameSource`, `GazeboCameraSource`, `RpicamFrameSource` |
 | Vision processor library path | 구현됨 | `src/vision/VisionProcessor.*` |
 | GCS publisher reuse | 구현됨 | `src/app/VisionDebugPublisher.*` |

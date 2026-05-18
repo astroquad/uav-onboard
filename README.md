@@ -265,10 +265,12 @@ cd astroquad\uav-gcs
 .\build\uav_gcs_vision_debug.exe --config config
 ```
 
-WSL Gazebo/SITL:
+#### Line-Tracing Test World
+
+WSL Gazebo/SITL launcher:
 
 ```bash
-bash ~/fly_test.sh
+bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh
 ```
 
 WSL vision-only GCS smoke:
@@ -321,8 +323,76 @@ smoke tests without `line_follow_node`.
 Gazebo downward-camera zoom is set in
 `sim/gazebo/models/iris_with_downward_camera/model.sdf` at
 `<horizontal_fov>`. Larger values zoom out and smaller values zoom in. Restart
-Gazebo with `bash ~/fly_test.sh` after changing this SDF; a C++ rebuild is not
+Gazebo with `bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh` after changing this SDF; a C++ rebuild is not
 needed for FOV-only edits.
+
+#### Grid Arena Test World
+
+The grid arena is the final mission test environment: a 5×8 grid (3m cell size,
+15m × 24m total) with a 3m × 3m vertiport at the origin, a 4m approach line
+connecting them, white grid lines, and 4 ArUco markers (IDs 1–4) at fixed
+pseudo-random intersections.
+
+WSL Gazebo/SITL launcher:
+
+```bash
+bash ~/astroquad/uav-onboard/scripts/grid_arena_test.sh
+```
+
+The grid_arena_test_world loads independently of the line_tracing_test_world.
+Both worlds are on the same SITL infrastructure but with different Gazebo topic
+namespaces. The onboard config's default `gazebo_topic` points to the line
+tracing world; when running against the grid arena, you **must override
+`--gazebo-topic`** on the onboard command line.
+
+Vision-only smoke test (grid arena camera feed, no flight):
+
+```bash
+WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
+
+cd ~/astroquad/uav-onboard
+./build/vision_debug_node \
+  --config config \
+  --target sitl \
+  --vision gazebo \
+  --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --count 30 \
+  --no-telemetry \
+  --no-video
+```
+
+Vision + telemetry with GCS video:
+
+```bash
+WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
+
+cd ~/astroquad/uav-onboard
+./build/vision_debug_node \
+  --config config \
+  --target sitl \
+  --vision gazebo \
+  --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --video \
+  --gcs-ip "$WINDOWS_GCS_IP"
+```
+
+Line-follow mission staging (grid arena, not final mission):
+
+```bash
+cd ~/astroquad/uav-onboard
+./build/line_follow_node \
+  --config config \
+  --target sitl \
+  --vision gazebo \
+  --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --line-mode light_on_dark \
+  --video \
+  --gcs-ip "$WINDOWS_GCS_IP"
+```
+
+**Note**: The line_follow_node above is a line-tracing MVP, not the full grid
+snake mission. The grid arena world is ready for testing the complete mission
+state machine once it is implemented.
 
 ### Pixhawk1 Real-Hardware Bench Commands
 
