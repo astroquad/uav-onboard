@@ -41,6 +41,23 @@
         </material>
       </visual>
 
+      <!-- Cycle 19: 70cm pure-white pad under the ArUco marker so the
+           marker's outer black quiet zone is clearly separated from the
+           10cm black line that runs along the course. -->
+      <visual name="marker_id1_white_pad">
+        <pose>0 3.0 0.017 0 0 0</pose>
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>0.60 0.60</size>
+          </plane>
+        </geometry>
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id1_texture">
         <pose>0 3.0 0.018 0 0 0</pose>
         <geometry>

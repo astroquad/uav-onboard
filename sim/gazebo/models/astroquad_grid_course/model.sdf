@@ -191,8 +191,18 @@
         </material>
       </visual>
 
-      <!-- ArUco markers (50cm x 50cm, no white backing) at fixed pseudo-random
-           intersections. One marker per ID 1..4. -->
+      <!-- ArUco markers (50cm x 50cm) at fixed pseudo-random intersections.
+           Cycle 19: each marker now sits on a 60cm x 60cm pure-white pad so
+           the marker's black quiet zone is clearly separated from the black
+           grid lines. The pad sits 1mm below the marker so it's z-ordered
+           under it. -->
+      <visual name="marker_id1_white_pad">
+        <pose>11.5 3.0 0.011 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id1_texture">
         <pose>11.5 3.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -205,6 +215,13 @@
         </material>
       </visual>
 
+      <visual name="marker_id2_white_pad">
+        <pose>17.5 9.0 0.011 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id2_texture">
         <pose>17.5 9.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -217,6 +234,13 @@
         </material>
       </visual>
 
+      <visual name="marker_id3_white_pad">
+        <pose>23.5 6.0 0.011 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id3_texture">
         <pose>23.5 6.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -229,6 +253,13 @@
         </material>
       </visual>
 
+      <visual name="marker_id4_white_pad">
+        <pose>26.5 12.0 0.011 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id4_texture">
         <pose>26.5 12.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>

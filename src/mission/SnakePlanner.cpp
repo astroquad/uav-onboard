@@ -1,5 +1,7 @@
 #include "mission/SnakePlanner.hpp"
 
+#include <cstdio>
+
 namespace onboard::mission {
 namespace {
 
@@ -112,6 +114,14 @@ SnakePlannerOutput SnakePlanner::planAtBoundary(const SnakePlannerInput& input)
     // Verify the chosen direction has a branch in grid-frame; if not, flip once.
     const std::uint8_t chosen_bit = headingBit(applyTurn(input.heading, chosen));
     if ((input.grid_branch_mask & chosen_bit) == 0) {
+        // Cycle 19: a per-boundary fallback flip happens here when vision did
+        // not pick up the snake's primary direction. Do NOT mutate snake_dir_
+        // — that is the alternation reference for the next column transition.
+        // Only notifySecondTurnCompleted() is allowed to mutate snake_dir_.
+        std::fprintf(stderr,
+            "[snake] chosen flipped at boundary (mask=0x%02X heading_bit=0x%02X); "
+            "snake_dir_ preserved\n",
+            input.grid_branch_mask, chosen_bit);
         chosen = flip(chosen);
         const std::uint8_t flipped_bit = headingBit(applyTurn(input.heading, chosen));
         if ((input.grid_branch_mask & flipped_bit) == 0) {
@@ -120,10 +130,21 @@ SnakePlannerOutput SnakePlanner::planAtBoundary(const SnakePlannerInput& input)
             return out;
         }
     }
-    snake_dir_ = chosen;
+    // Cycle 19: REMOVED `snake_dir_ = chosen;`. snake_dir_ is the snake's
+    // alternation reference (left ↔ right across boundaries) and must stay
+    // independent of any per-boundary fallback flip above. Without this
+    // change, a single vision glitch at one boundary could flip the
+    // alternation pattern permanently (the symptom the user reported as
+    // "직진 → 좌좌 → 직진 → 좌좌 ...").
     out.action = SnakeAction::StopAndTurn;
     out.plan_turn_dir = chosen;
     out.next_heading = applyTurn(input.heading, chosen);
+    // Cycle 19 logging: dump every boundary decision so we can audit which
+    // direction the planner actually picks vs. the alternation reference.
+    std::fprintf(stderr,
+        "[snake] planAtBoundary heading=%d grid_mask=0x%02X snake_dir_=%s chosen=%s\n",
+        static_cast<int>(input.heading), input.grid_branch_mask,
+        snakeTurnDirName(snake_dir_), snakeTurnDirName(chosen));
     return out;
 }
 
@@ -135,8 +156,12 @@ void SnakePlanner::notifyFirstTurnCompleted()
 
 void SnakePlanner::notifySecondTurnCompleted()
 {
+    const SnakeTurnDir before = snake_dir_;
     ++boundaries_completed_;
     snake_dir_ = flip(snake_dir_);
+    std::fprintf(stderr,
+        "[snake] notifySecondTurnCompleted boundaries=%d snake_dir_ %s -> %s\n",
+        boundaries_completed_, snakeTurnDirName(before), snakeTurnDirName(snake_dir_));
 }
 
 void SnakePlanner::reset()
@@ -144,6 +169,9 @@ void SnakePlanner::reset()
     snake_dir_ = config_.initial_turn;
     boundaries_completed_ = 0;
     first_boundary_seen_ = false;
+    std::fprintf(stderr,
+        "[snake] reset() — snake_dir_ initial=%s\n",
+        snakeTurnDirName(snake_dir_));
 }
 
 const char* snakeTurnDirName(SnakeTurnDir dir)
