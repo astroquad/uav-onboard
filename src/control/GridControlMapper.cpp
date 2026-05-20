@@ -90,6 +90,18 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
         }
         return sp;
     }
+    case GridControlIntent::LaunchAlign: {
+        LineControlInput line {};
+        line.line_detected = input.line_detected;
+        line.center_error_norm = input.line_center_error_norm;
+        line.angle_error_rad = input.line_angle_error_rad;
+        line.confidence = input.line_confidence;
+        ControlSetpoint sp = line_controller_
+            ? line_controller_->updateLine(line, alt)
+            : ControlSetpoint {};
+        sp.vx_forward_mps = 0.0f;
+        return sp;
+    }
     case GridControlIntent::StopAndCenter: {
         out.vz_down_mps = static_cast<float>(
             computeAltitudeVz(input.altitude_available, input.current_altitude_m,
@@ -180,6 +192,7 @@ const char* gridControlIntentName(GridControlIntent intent)
     case GridControlIntent::LineFollow:     return "line_follow";
     case GridControlIntent::StopAndCenter:  return "stop_center";
     case GridControlIntent::IntersectionCenter: return "intersection_center";
+    case GridControlIntent::LaunchAlign:    return "launch_align";
     case GridControlIntent::YawAlign:       return "yaw_align";
     case GridControlIntent::YawTurn:        return "yaw_turn";
     case GridControlIntent::MarkerHover:    return "marker_hover";

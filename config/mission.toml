@@ -31,17 +31,17 @@ entry_blind_clear_distance_m = 1.80
 entry_blind_min_s = 0.0
 entry_blind_min_frames = 0
 entry_intersection_min_distance_m = 1.80
-entry_center_timeout_s = 5.0
+entry_center_timeout_s = 12.0
 entry_center_target_y_norm = 0.55
 entry_center_late_y_norm = 0.78
 entry_center_x_tolerance_norm = 0.08
 entry_center_y_tolerance_norm = 0.06
 entry_center_velocity_threshold_mps = 0.08
 entry_center_stable_frames = 3
-entry_center_forward_kp = 0.35
+entry_center_forward_kp = 0.55
 entry_center_lateral_kp = 0.20
-entry_center_max_forward_mps = 0.12
-entry_center_max_reverse_mps = 0.06
+entry_center_max_forward_mps = 0.20
+entry_center_max_reverse_mps = 0.08
 entry_center_max_lateral_mps = 0.12
 cell_size_m = 3.0
 snake_record_lockout_s = 3.0
@@ -82,6 +82,14 @@ hop_max_distance_m = 3.5
 # Minimum LOCAL_NED distance from the last commit before a new NodeRecord is
 # honoured; defends against the just-departed node's residual lookahead.
 hop_intersection_min_distance_m = 1.0
+# Launchpad alignment: after an intersection is centered and the forward branch
+# exists, align yaw/lateral on the outgoing line before freezing yaw and
+# launching to the next node.
+snake_launch_align_timeout_s = 3.0
+snake_launch_align_stable_frames = 2
+snake_launch_line_min_confidence = 0.35
+snake_launch_line_center_tolerance_norm = 0.06
+snake_launch_line_angle_tolerance_deg = 3.0
 # Cycle 12: cy-feedback deceleration in SnakeStopAtCenter.
 stop_center_target_cy = 0.55
 stop_center_max_vx_mps = 0.10

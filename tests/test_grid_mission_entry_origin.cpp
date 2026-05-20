@@ -49,6 +49,17 @@ onboard::mission::IntersectionDecision makeIntersectionDecision(
     return decision;
 }
 
+void setLine(onboard::vision::VisionResult& vis,
+             float center_error_norm,
+             float angle_deg,
+             float confidence = 1.0f)
+{
+    vis.line.detected = true;
+    vis.line.center_offset_px = center_error_norm * static_cast<float>(vis.width) * 0.5f;
+    vis.line.angle_deg = angle_deg;
+    vis.line.confidence = confidence;
+}
+
 onboard::mission::GridMissionInput makeInput(
     double now_s,
     onboard::vision::VisionResult& vis,
@@ -89,7 +100,9 @@ int main()
     config.entry_center_y_tolerance_norm = 0.06;
     config.entry_center_velocity_threshold_mps = 0.20;
     config.entry_center_stable_frames = 2;
-    config.entry_center_timeout_s = 5.0;
+    config.entry_center_timeout_s = 12.0;
+    config.snake_launch_align_stable_frames = 2;
+    config.snake_launch_align_timeout_s = 3.0;
 
     onboard::common::IntersectionDecisionConfig idec_config;
     onboard::mission::GridCoordinateTracker tracker(idec_config);
@@ -139,25 +152,68 @@ int main()
     assert(out.state == onboard::mission::GridState::EntryCenterOrigin);
     assert(!out.origin_publish_event.has_value());
 
+    auto not_yet_centered_vis = makeVision();
+    auto not_yet_centered_decision =
+        makeIntersectionDecision(not_yet_centered_vis, 0.02f, 0.44f);
+    auto not_yet_centered_in =
+        makeInput(0.6, not_yet_centered_vis, not_yet_centered_decision);
+    not_yet_centered_in.local_x_m = 2.0;
+    out = mission.update(not_yet_centered_in);
+    assert(out.state == onboard::mission::GridState::EntryCenterOrigin);
+    assert(out.intent == onboard::control::GridControlIntent::IntersectionCenter);
+    assert(!out.origin_publish_event.has_value());
+
+    not_yet_centered_in.now_s = 0.7;
+    not_yet_centered_in.timestamp_ms = 700;
+    not_yet_centered_in.frame_seq = 71;
+    out = mission.update(not_yet_centered_in);
+    assert(out.state == onboard::mission::GridState::EntryCenterOrigin);
+    assert(!out.origin_publish_event.has_value());
+
     auto centered_vis = makeVision();
     auto centered_decision = makeIntersectionDecision(centered_vis, 0.02f, 0.55f);
-    auto centered_in = makeInput(0.6, centered_vis, centered_decision);
-    centered_in.local_x_m = 2.0;
+    setLine(centered_vis, 0.20f, 100.0f);
+    auto centered_in = makeInput(0.8, centered_vis, centered_decision);
+    centered_in.local_x_m = 2.1;
     out = mission.update(centered_in);
     assert(out.state == onboard::mission::GridState::EntryCenterOrigin);
     assert(out.intent == onboard::control::GridControlIntent::IntersectionCenter);
     assert(!out.origin_publish_event.has_value());
 
-    centered_in.now_s = 0.7;
-    centered_in.timestamp_ms = 700;
-    centered_in.frame_seq = 71;
+    centered_in.now_s = 0.9;
+    centered_in.timestamp_ms = 900;
+    centered_in.frame_seq = 91;
     out = mission.update(centered_in);
-    assert(out.state == onboard::mission::GridState::SnakeForward);
+    assert(out.state == onboard::mission::GridState::SnakeLaunchAlign);
     assert(out.origin_publish_event.has_value());
     assert(out.intersections_recorded == 1);
     assert(out.current_coord.x == 0);
     assert(out.current_coord.y == 0);
     assert(out.current_heading == onboard::mission::GridHeading::North);
+
+    auto launch_bad_vis = makeVision();
+    auto launch_bad_decision = makeIntersectionDecision(launch_bad_vis, 0.02f, 0.55f);
+    setLine(launch_bad_vis, 0.20f, 100.0f);
+    auto launch_bad_in = makeInput(1.0, launch_bad_vis, launch_bad_decision);
+    launch_bad_in.local_x_m = 2.1;
+    out = mission.update(launch_bad_in);
+    assert(out.state == onboard::mission::GridState::SnakeLaunchAlign);
+    assert(out.intent == onboard::control::GridControlIntent::LaunchAlign);
+
+    auto launch_good_vis = makeVision();
+    auto launch_good_decision = makeIntersectionDecision(launch_good_vis, 0.01f, 0.55f);
+    setLine(launch_good_vis, 0.01f, 90.0f);
+    auto launch_good_in = makeInput(1.1, launch_good_vis, launch_good_decision);
+    launch_good_in.local_x_m = 2.1;
+    out = mission.update(launch_good_in);
+    assert(out.state == onboard::mission::GridState::SnakeLaunchAlign);
+    assert(out.intent == onboard::control::GridControlIntent::LaunchAlign);
+
+    launch_good_in.now_s = 1.2;
+    launch_good_in.timestamp_ms = 1200;
+    launch_good_in.frame_seq = 121;
+    out = mission.update(launch_good_in);
+    assert(out.state == onboard::mission::GridState::SnakeForward);
 
     onboard::mission::MarkerWindow window;
     window.configure(4, 2);
@@ -169,7 +225,8 @@ int main()
     assert(window.bestStableId() == -1);
 
     onboard::control::GridControlMapperConfig mapper_config;
-    onboard::control::GridControlMapper mapper(mapper_config, nullptr);
+    onboard::control::GuidedVelocityController line_controller({});
+    onboard::control::GridControlMapper mapper(mapper_config, &line_controller);
     onboard::control::GridControlMapperInput cmin;
     cmin.intent = onboard::control::GridControlIntent::IntersectionCenter;
     cmin.intersection_valid = true;
@@ -178,6 +235,16 @@ int main()
     const auto sp = mapper.compute(cmin);
     assert(sp.vx_forward_mps > 0.0f);
     assert(sp.vy_right_mps > 0.0f);
+
+    onboard::control::GridControlMapperInput launch_cmin;
+    launch_cmin.intent = onboard::control::GridControlIntent::LaunchAlign;
+    launch_cmin.line_detected = true;
+    launch_cmin.line_center_error_norm = 0.4;
+    launch_cmin.line_angle_error_rad = 0.2;
+    launch_cmin.line_confidence = 1.0;
+    const auto launch_sp = mapper.compute(launch_cmin);
+    assert(launch_sp.vx_forward_mps == 0.0f);
+    assert(launch_sp.vy_right_mps != 0.0f || launch_sp.yaw_rate_rad_s != 0.0f);
 
     return 0;
 }

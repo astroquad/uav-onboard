@@ -16,6 +16,7 @@ enum class GridControlIntent {
     LineFollow,       // line-follow controller @ current cruise alt
     StopAndCenter,    // ramp velocity to 0 while holding altitude
     IntersectionCenter, // center an intersection under the camera before origin/node lock
+    LaunchAlign,      // align yaw/lateral on the outgoing line before freeze launch
     YawAlign,         // yaw-rate-only command toward target_yaw_rad
     YawTurn,          // active 90° turn (yaw-only, no lateral / forward)
     MarkerHover,      // keep marker centered (line ignored)
@@ -37,10 +38,10 @@ struct GridControlMapperConfig {
     // Entry-origin centering. X is normalized around camera center, Y is
     // normalized image row [0, 1].
     double intersection_center_target_y_norm = 0.55;
-    double intersection_center_forward_kp = 0.35;
+    double intersection_center_forward_kp = 0.55;
     double intersection_center_lateral_kp = 0.20;
-    double intersection_center_max_forward_mps = 0.12;
-    double intersection_center_max_reverse_mps = 0.06;
+    double intersection_center_max_forward_mps = 0.20;
+    double intersection_center_max_reverse_mps = 0.08;
     double intersection_center_max_lateral_mps = 0.12;
 };
 

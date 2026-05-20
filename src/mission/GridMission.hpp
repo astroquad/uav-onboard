@@ -29,6 +29,7 @@ enum class GridState {
     EntryCenterOrigin,
     SnakeForward,
     SnakeRecordNode,
+    SnakeLaunchAlign,
     SnakeStopAtCenter,
     SnakeTurn90,
     SnakeAdvanceOneCell,
@@ -88,7 +89,7 @@ struct GridMissionConfig {
     double entry_blind_min_s = 0.0;
     int    entry_blind_min_frames = 0;
     double entry_intersection_min_distance_m = 0.5;
-    double entry_center_timeout_s = 5.0;
+    double entry_center_timeout_s = 12.0;
     double entry_center_target_y_norm = 0.55;
     double entry_center_late_y_norm = 0.78;
     double entry_center_x_tolerance_norm = 0.08;
@@ -120,6 +121,11 @@ struct GridMissionConfig {
     // Approach-distance gate before the next intersection commit is honoured.
     // Prevents the last node's residual lookahead from immediately retriggering.
     double hop_intersection_min_distance_m = 1.0;
+    double snake_launch_align_timeout_s = 3.0;
+    int    snake_launch_align_stable_frames = 2;
+    double snake_launch_line_min_confidence = 0.35;
+    double snake_launch_line_center_tolerance_norm = 0.06;
+    double snake_launch_line_angle_tolerance_rad = 0.0523599; // ~3°
 
     // Failsafe
     int    max_intersections = 50;
@@ -276,6 +282,7 @@ private:
     void handleEntryCenterOrigin(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeForward(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeRecordNode(const GridMissionInput& in, GridMissionOutput& out);
+    void handleSnakeLaunchAlign(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeStopAtCenter(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeTurn90(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMissionOutput& out);
@@ -290,6 +297,10 @@ private:
     double hopDistance(const GridMissionInput& in) const;
     bool   inHopAlignWindow(double distance) const;
     void   armHopStart(const GridMissionInput& in);
+    void   latchHopYawAfterAlign(const GridMissionInput& in,
+                                 bool in_align_window,
+                                 double distance,
+                                 double& yaw_target_rad);
 
     // Helpers
     bool isHardFailsafe(const GridMissionInput& in, std::string& reason) const;
@@ -328,6 +339,7 @@ private:
     std::uint32_t entry_forward_start_frame_seq_ = 0;
     int    snake_stop_stable_count_ = 0;
     int    snake_yaw_stable_count_ = 0;
+    int    snake_launch_align_stable_count_ = 0;
     bool   origin_latched_ = false;
     double yaw_target_rad_ = 0.0;
     double yaw_align_target_rad_ = 0.0;
@@ -357,6 +369,7 @@ private:
     // LOCAL_NED displacement from this anchor each tick.
     std::optional<double> hop_start_local_x_;
     std::optional<double> hop_start_local_y_;
+    bool hop_align_window_seen_ = false;
 
     // Cycle 16: sliding-window marker stability detector. Replaces the
     // per-id counter (`marker_candidate_count_`) so transient mis-identifications

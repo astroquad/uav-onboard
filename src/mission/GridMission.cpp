@@ -60,6 +60,7 @@ const char* gridStateName(GridState state)
     case GridState::EntryCenterOrigin:    return "ENTRY_CENTER_ORIGIN";
     case GridState::SnakeForward:         return "SNAKE_FORWARD";
     case GridState::SnakeRecordNode:      return "SNAKE_RECORD_NODE";
+    case GridState::SnakeLaunchAlign:     return "SNAKE_LAUNCH_ALIGN";
     case GridState::SnakeStopAtCenter:    return "SNAKE_STOP_AT_CENTER";
     case GridState::SnakeTurn90:          return "SNAKE_TURN_90";
     case GridState::SnakeAdvanceOneCell:  return "SNAKE_ADVANCE_ONE_CELL";
@@ -113,6 +114,7 @@ void GridMission::reset()
     entry_forward_start_frame_seq_ = 0;
     snake_stop_stable_count_ = 0;
     snake_yaw_stable_count_ = 0;
+    snake_launch_align_stable_count_ = 0;
     origin_latched_ = false;
     line_lost_start_s_ = -1.0;
     pending_turn_dir_ = SnakeTurnDir::Unknown;
@@ -128,6 +130,7 @@ void GridMission::reset()
     last_node_local_y_.reset();
     hop_start_local_x_.reset();
     hop_start_local_y_.reset();
+    hop_align_window_seen_ = false;
     last_safety_event_.clear();
     last_node_grid_branch_mask_ = 0;
     last_node_front_open_ = false;
@@ -256,9 +259,19 @@ void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutp
     // for SnakeForward, SnakeAdvanceOneCell, and any future hop-driven state.
     const double distance = hopDistance(in);
     const bool hop_window_active = inHopAlignWindow(distance);
+    const bool launch_state = state_ == GridState::SnakeLaunchAlign;
     const bool snake_state =
         (state_ == GridState::SnakeForward ||
          state_ == GridState::SnakeAdvanceOneCell);
+
+    if (launch_state) {
+        if (!forwardBranchPresent(in.intersection_decision) && !last_node_front_open_) {
+            out.line_angle_error_rad = 0.0;
+            out.line_center_error_norm = 0.0;
+            out.line_detected = false;
+        }
+        return;
+    }
 
     if (!snake_state || !hop_window_active) {
         out.line_angle_error_rad = 0.0;
@@ -485,6 +498,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     case GridState::EntryCenterOrigin:    handleEntryCenterOrigin(input, out); break;
     case GridState::SnakeForward:         handleSnakeForward(input, out); break;
     case GridState::SnakeRecordNode:      handleSnakeRecordNode(input, out); break;
+    case GridState::SnakeLaunchAlign:     handleSnakeLaunchAlign(input, out); break;
     case GridState::SnakeStopAtCenter:    handleSnakeStopAtCenter(input, out); break;
     case GridState::SnakeTurn90:          handleSnakeTurn90(input, out); break;
     case GridState::SnakeAdvanceOneCell:  handleSnakeAdvanceOneCell(input, out); break;
@@ -562,6 +576,7 @@ void GridMission::armHopStart(const GridMissionInput& in)
         hop_start_local_x_.reset();
         hop_start_local_y_.reset();
     }
+    hop_align_window_seen_ = false;
 }
 
 double GridMission::hopDistance(const GridMissionInput& in) const
@@ -577,6 +592,24 @@ bool GridMission::inHopAlignWindow(double distance) const
 {
     return distance >= config_.hop_align_start_m &&
            distance <= config_.hop_align_end_m;
+}
+
+void GridMission::latchHopYawAfterAlign(
+    const GridMissionInput& in,
+    bool in_align_window,
+    double distance,
+    double& yaw_target_rad)
+{
+    if (in_align_window) {
+        hop_align_window_seen_ = true;
+        return;
+    }
+    if (hop_align_window_seen_ && distance > config_.hop_align_end_m) {
+        if (in.attitude_yaw_rad.has_value()) {
+            yaw_target_rad = wrap(*in.attitude_yaw_rad);
+        }
+        hop_align_window_seen_ = false;
+    }
 }
 
 // --------------------------- Per-state handlers ---------------------------
@@ -737,7 +770,8 @@ void GridMission::handleEntryCenterOrigin(const GridMissionInput& in, GridMissio
         if (decision_engine_) {
             decision_engine_->reset();
         }
-        transition(GridState::SnakeForward, in.now_s, "origin_centered");
+        snake_launch_align_stable_count_ = 0;
+        transition(GridState::SnakeLaunchAlign, in.now_s, "origin_centered");
         return;
     }
 
@@ -764,7 +798,6 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
     if (!hop_start_local_x_.has_value()) {
         armHopStart(in);
     }
-    out.target_yaw_rad = yaw_align_target_rad_;
     out.target_altitude_m = config_.cruise_altitude_m;
 
     const double distance = hopDistance(in);
@@ -774,6 +807,8 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
     // can fight the rotation.
     const bool post_turn_blind = in.now_s < snake_post_turn_blind_until_s_;
     const bool in_align_window = !post_turn_blind && inHopAlignWindow(distance);
+    latchHopYawAfterAlign(in, in_align_window, distance, yaw_align_target_rad_);
+    out.target_yaw_rad = yaw_align_target_rad_;
 
     if (in_align_window) {
         out.intent = control::GridControlIntent::LineFollow;
@@ -942,10 +977,71 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
             snake_stop_stable_count_ = 0;
             return;
         }
-        // Cycle 16: restart hop measurement from the just-recorded node.
-        armHopStart(in);
-        transition(GridState::SnakeForward, in.now_s, "node_done");
+        snake_launch_align_stable_count_ = 0;
+        transition(GridState::SnakeLaunchAlign, in.now_s, "node_done");
     }
+}
+
+void GridMission::handleSnakeLaunchAlign(const GridMissionInput& in, GridMissionOutput& out)
+{
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yaw_align_target_rad_;
+
+    const bool centered = isIntersectionCenteredForEntry(in);
+    const bool velocity_ok =
+        !in.local_velocity_xy_mps.has_value() ||
+        *in.local_velocity_xy_mps <= config_.entry_center_velocity_threshold_mps;
+    const bool timeout =
+        in.now_s - state_entry_s_ > config_.snake_launch_align_timeout_s;
+
+    if (!centered || !velocity_ok) {
+        out.intent = control::GridControlIntent::IntersectionCenter;
+        snake_launch_align_stable_count_ = 0;
+        if (!timeout) {
+            return;
+        }
+    }
+
+    const bool front_open = forwardBranchPresent(in.intersection_decision) || last_node_front_open_;
+    const bool line_ready =
+        front_open &&
+        out.line_detected &&
+        out.line_confidence >= config_.snake_launch_line_min_confidence;
+
+    if (line_ready) {
+        out.intent = control::GridControlIntent::LaunchAlign;
+        const bool line_centered =
+            std::abs(out.line_center_error_norm) <=
+                config_.snake_launch_line_center_tolerance_norm;
+        const bool yaw_aligned =
+            std::abs(out.line_angle_error_rad) <=
+                config_.snake_launch_line_angle_tolerance_rad;
+        if (line_centered && yaw_aligned && velocity_ok) {
+            ++snake_launch_align_stable_count_;
+        } else {
+            snake_launch_align_stable_count_ = 0;
+        }
+        if (snake_launch_align_stable_count_ <
+            config_.snake_launch_align_stable_frames) {
+            if (!timeout) {
+                return;
+            }
+        }
+    } else {
+        out.intent = control::GridControlIntent::HoldPosition;
+        snake_launch_align_stable_count_ = 0;
+        if (!timeout) {
+            return;
+        }
+    }
+
+    if (in.attitude_yaw_rad.has_value()) {
+        yaw_align_target_rad_ = wrap(*in.attitude_yaw_rad);
+    }
+    armHopStart(in);
+    snake_launch_align_stable_count_ = 0;
+    transition(GridState::SnakeForward, in.now_s,
+               timeout ? "launch_align_timeout" : "launch_aligned");
 }
 
 void GridMission::handleSnakeStopAtCenter(const GridMissionInput& in, GridMissionOutput& out)
@@ -1026,13 +1122,14 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
     if (!hop_start_local_x_.has_value()) {
         armHopStart(in);
     }
-    out.target_yaw_rad = yaw_target_rad_;
     out.target_altitude_m = config_.cruise_altitude_m;
 
     const double distance = hopDistance(in);
 
     const bool post_turn_blind = in.now_s < snake_post_turn_blind_until_s_;
     const bool in_align_window = !post_turn_blind && inHopAlignWindow(distance);
+    latchHopYawAfterAlign(in, in_align_window, distance, yaw_target_rad_);
+    out.target_yaw_rad = yaw_target_rad_;
     if (in_align_window) {
         out.intent = control::GridControlIntent::LineFollow;
     } else {
@@ -1109,10 +1206,9 @@ void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMission
             // re-engages line tracking.
             snake_post_turn_blind_until_s_ =
                 in.now_s + config_.snake_post_turn_blind_s;
-            // Cycle 16: hop measurement restarts at the boundary node where
-            // the second turn completes — that is the new column's first row.
-            armHopStart(in);
-            transition(GridState::SnakeForward, in.now_s, "turn2_done");
+            yaw_align_target_rad_ = yaw_target_rad_;
+            snake_launch_align_stable_count_ = 0;
+            transition(GridState::SnakeLaunchAlign, in.now_s, "turn2_done");
         }
     }
 }

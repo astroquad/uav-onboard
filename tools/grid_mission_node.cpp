@@ -246,6 +246,20 @@ void loadConfigs(const Options& opt, Configs& cfg)
             g.hop_max_distance_m = gm["hop_max_distance_m"].value_or(g.hop_max_distance_m);
             g.hop_intersection_min_distance_m =
                 gm["hop_intersection_min_distance_m"].value_or(g.hop_intersection_min_distance_m);
+            g.snake_launch_align_timeout_s =
+                gm["snake_launch_align_timeout_s"].value_or(g.snake_launch_align_timeout_s);
+            g.snake_launch_align_stable_frames =
+                gm["snake_launch_align_stable_frames"].value_or(g.snake_launch_align_stable_frames);
+            g.snake_launch_line_min_confidence =
+                gm["snake_launch_line_min_confidence"].value_or(g.snake_launch_line_min_confidence);
+            g.snake_launch_line_center_tolerance_norm =
+                gm["snake_launch_line_center_tolerance_norm"].value_or(
+                    g.snake_launch_line_center_tolerance_norm);
+            const double launch_angle_tol_deg =
+                gm["snake_launch_line_angle_tolerance_deg"].value_or(
+                    g.snake_launch_line_angle_tolerance_rad * 180.0 / M_PI);
+            g.snake_launch_line_angle_tolerance_rad =
+                launch_angle_tol_deg * M_PI / 180.0;
             g.marker_window_frames = gm["marker_window_frames"].value_or(g.marker_window_frames);
             g.marker_window_min_count = gm["marker_window_min_count"].value_or(g.marker_window_min_count);
             cfg.mapper.stop_center_target_cy =
