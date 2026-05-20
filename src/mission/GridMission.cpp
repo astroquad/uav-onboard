@@ -1035,9 +1035,13 @@ void GridMission::handleSnakeLaunchAlign(const GridMissionInput& in, GridMission
         }
     }
 
-    if (in.attitude_yaw_rad.has_value()) {
-        yaw_align_target_rad_ = wrap(*in.attitude_yaw_rad);
-    }
+    // Cycle 17: removed `yaw_align_target_rad_ = wrap(*attitude_yaw_rad)`
+    // here. Re-latching attitude into yaw_align_target_rad_ at LaunchAlign
+    // exit froze any per-cell LaunchAlign yaw jitter (driven by the
+    // line_controller's angle_yaw_kp) into the next hop's reference,
+    // causing the cumulative drift observed over 7-8 cells. The latched
+    // reference must only change at MarkerLockYaw / ArmTakeoff (initial)
+    // and at SnakeTurn90Again completion (column transition).
     armHopStart(in);
     snake_launch_align_stable_count_ = 0;
     transition(GridState::SnakeForward, in.now_s,
@@ -1072,9 +1076,13 @@ void GridMission::handleSnakeStopAtCenter(const GridMissionInput& in, GridMissio
         }
         pending_turn_dir_ = sp_out.plan_turn_dir;
         pending_post_turn_heading_ = sp_out.next_heading;
-        if (in.attitude_yaw_rad.has_value()) {
+        // Cycle 17: compute the first-turn target from the latched
+        // yaw_align_target_rad_ (column reference) rather than the live
+        // attitude_yaw_rad. Otherwise any per-cell drift propagates into
+        // the post-turn heading and accumulates across columns.
+        {
             const double dir = (pending_turn_dir_ == SnakeTurnDir::Right) ? +1.0 : -1.0;
-            yaw_target_rad_ = wrap(*in.attitude_yaw_rad + dir * (M_PI / 2.0));
+            yaw_target_rad_ = wrap(yaw_align_target_rad_ + dir * (M_PI / 2.0));
         }
         if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
             turn_origin_x_ = *in.local_x_m;
@@ -1163,9 +1171,12 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
             last_node_local_y_ = *in.local_y_m;
         }
 
-        if (in.attitude_yaw_rad.has_value()) {
+        // Cycle 17: second-turn target also derives from yaw_target_rad_
+        // (which itself is yaw_align_target_rad_ + first dir·π/2), so the
+        // new column's reference is exactly the original ± π — drift-free.
+        {
             const double dir = (pending_turn_dir_ == SnakeTurnDir::Right) ? +1.0 : -1.0;
-            yaw_target_rad_ = wrap(*in.attitude_yaw_rad + dir * (M_PI / 2.0));
+            yaw_target_rad_ = wrap(yaw_target_rad_ + dir * (M_PI / 2.0));
         }
         snake_yaw_stable_count_ = 0;
         transition(GridState::SnakeTurn90Again, in.now_s, "cell_reached");

@@ -78,6 +78,16 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
         ControlSetpoint sp = line_controller_
             ? line_controller_->updateLine(line, alt)
             : ControlSetpoint {};
+        // Cycle 18: line_controller's yaw_rate follows the LineDetector's
+        // angle_error directly. That signal drifts cumulatively across cells
+        // (LineDetector has a small angle bias) and walks the body-yaw away
+        // from the latched column heading. Override the yaw_rate with a lock
+        // to the mission's latched target_yaw_rad so vy keeps line-centering
+        // but yaw stays exactly on the column.
+        if (input.yaw_available) {
+            sp.yaw_rate_rad_s = static_cast<float>(
+                computeYawRate(input.current_yaw_rad, input.target_yaw_rad));
+        }
         if (input.advance_phase) {
             const double scale = config_.forward_speed_advance_mps /
                 std::max(0.05, static_cast<double>(std::abs(sp.vx_forward_mps)) + 1e-6);
@@ -100,6 +110,14 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
             ? line_controller_->updateLine(line, alt)
             : ControlSetpoint {};
         sp.vx_forward_mps = 0.0f;
+        // Cycle 18: same yaw lock as LineFollow — LaunchAlign was the main
+        // contributor to per-cell yaw drift (the LineDetector angle bias gets
+        // applied repeatedly during the multi-second hold) so this override
+        // is the critical change.
+        if (input.yaw_available) {
+            sp.yaw_rate_rad_s = static_cast<float>(
+                computeYawRate(input.current_yaw_rad, input.target_yaw_rad));
+        }
         return sp;
     }
     case GridControlIntent::StopAndCenter: {
