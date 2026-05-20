@@ -283,7 +283,7 @@ cd ~/astroquad/uav-onboard
   --config config \
   --target sitl \
   --vision gazebo \
-  --line-mode light_on_dark \
+  --line-mode dark_on_light \
   --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
@@ -310,7 +310,7 @@ cd ~/astroquad/uav-onboard
   --config config \
   --target sitl \
   --vision gazebo \
-  --line-mode light_on_dark \
+  --line-mode dark_on_light \
   --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
@@ -329,9 +329,8 @@ needed for FOV-only edits.
 #### Grid Arena Test World
 
 The grid arena is the final mission test environment: a 5×8 grid (3m cell size,
-15m × 24m total) with a 3m × 3m vertiport at the origin, a 4m approach line
-connecting them, white grid lines, and 4 ArUco markers (IDs 1–4) at fixed
-pseudo-random intersections.
+15m × 24m total) with a 3m × 3m vertiport at the origin, black grid lines, and
+4 ArUco markers (IDs 1–4) at fixed pseudo-random intersections.
 
 WSL Gazebo/SITL launcher:
 
@@ -356,6 +355,7 @@ cd ~/astroquad/uav-onboard
   --target sitl \
   --vision gazebo \
   --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --line-mode dark_on_light \
   --count 30 \
   --no-telemetry \
   --no-video
@@ -372,6 +372,7 @@ cd ~/astroquad/uav-onboard
   --target sitl \
   --vision gazebo \
   --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --line-mode dark_on_light \
   --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
@@ -385,7 +386,7 @@ cd ~/astroquad/uav-onboard
   --target sitl \
   --vision gazebo \
   --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
-  --line-mode light_on_dark \
+  --line-mode dark_on_light \
   --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```

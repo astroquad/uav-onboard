@@ -10,7 +10,7 @@ GZ_SIM_RESOURCE_PATH="$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/world
   gz sim -v4 -r sim/gazebo/worlds/line_tracing_test_world.sdf
 ```
 
-The line-tracing test world uses the local `iris_with_downward_camera` wrapper around the existing ArduPilot Iris model and includes `line_tracing_course`, which provides a dark ground plane, a high-contrast 10 cm white line, and a 50 cm x 50 cm ArUco ID 1 marker texture at 3 m forward on the line. The default Gazebo camera topic is configured in `config/vision.toml`.
+The line-tracing test world uses the local `iris_with_downward_camera` wrapper around the existing ArduPilot Iris model and includes `line_tracing_course`, which provides a white ground plane, a high-contrast 10 cm black line, and a 50 cm x 50 cm ArUco ID 1 marker texture at 3 m forward on the line. The default Gazebo camera topic is configured in `config/vision.toml`.
 
 `worlds/astroquad_line_camera_fixture.sdf` and `worlds/astroquad_marker_center_fixture.sdf` are detector smoke fixtures. They use `astroquad_static_downward_camera` at 1.2 m AGL so line and marker vision can be checked without starting ArduPilot SITL. The marker fixture uses the same 50 cm x 50 cm ID 1 marker texture as the flight course.
 

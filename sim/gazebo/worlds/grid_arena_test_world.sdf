@@ -17,7 +17,7 @@
 
     <scene>
       <ambient>1.0 1.0 1.0</ambient>
-      <background>0.8 0.8 0.8</background>
+      <background>1.0 1.0 1.0</background>
       <grid>false</grid>
       <sky/>
     </scene>
@@ -50,8 +50,8 @@
 
     <include>
       <uri>model://iris_with_downward_camera</uri>
-      <!-- vertiport top (z=0.7) + Iris origin offset (0.195), yaw=0 facing +X -->
-      <pose degrees="true">0 0 0.895 0 0 0</pose>
+      <!-- vertiport top (z=0.7) + Iris origin offset (0.195), yaw=90 facing +Y -->
+      <pose degrees="true">0 0 0.895 0 0 90</pose>
     </include>
   </world>
 </sdf>

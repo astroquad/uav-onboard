@@ -62,7 +62,7 @@ struct Options {
     std::string target = "sitl";
     std::string vision = "gazebo";
     std::string world = "grid";
-    std::string line_mode_override = "light_on_dark";
+    std::string line_mode_override = "dark_on_light";
     std::string gcs_ip_override;
     std::string gazebo_topic_override;
     int marker_count = -1;
@@ -506,8 +506,8 @@ int main(int argc, char** argv)
             frame.frame_id, frame.timestamp_ms,
             false);
         // Only let the grid tracker accumulate nodes once we are inside the grid
-        // (LineEnter onwards). Before that, vertiport texture / approach line can
-        // produce spurious intersection events.
+        // (LineEnter onwards). Before that, the vertiport texture can produce
+        // spurious intersection events.
         const auto cur_state = mission.state();
         const bool tracker_enabled =
             cur_state == omission::GridState::LineEnter ||

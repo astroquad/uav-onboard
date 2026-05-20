@@ -21,13 +21,13 @@
           </plane>
         </geometry>
         <material>
-          <ambient>0.12 0.12 0.12 1</ambient>
-          <diffuse>0.12 0.12 0.12 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
           <specular>0.03 0.03 0.03 1</specular>
         </material>
       </visual>
 
-      <visual name="white_line_10cm">
+      <visual name="black_line_10cm">
         <pose>0 0 0.006 0 0 0</pose>
         <geometry>
           <box>
@@ -35,9 +35,9 @@
           </box>
         </geometry>
         <material>
-          <ambient>1 1 1 1</ambient>
-          <diffuse>1 1 1 1</diffuse>
-          <emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient>
+          <diffuse>0 0 0 1</diffuse>
+          <emissive>0 0 0 1</emissive>
         </material>
       </visual>
 

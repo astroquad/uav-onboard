@@ -4,7 +4,7 @@
     <static>true</static>
 
     <link name="course_link">
-      <!-- Dark ground box covering vertiport, approach line, and 5x8 grid
+      <!-- White ground box covering the vertiport and 5x8 grid
            with a 4m margin on every outer side of the grid.
            Footprint: X in [-1.5, 29.5], Y in [0, 15]; with 4m margin
            the ground covers X in [-5.5, 33.5] and Y in [-4, 19],
@@ -26,8 +26,8 @@
           </box>
         </geometry>
         <material>
-          <ambient>0.12 0.12 0.12 1</ambient>
-          <diffuse>0.12 0.12 0.12 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
           <specular>0.03 0.03 0.03 1</specular>
         </material>
       </visual>
@@ -57,11 +57,10 @@
       </visual>
 
       <!-- Vertiport top texture (3.0 x 3.0) slightly above the box top.
-           Yaw -90deg rotates the texture so its image-up axis aligns with
-           world +X (the flight forward direction), making the 'V' graphic
-           face forward toward the grid entry. -->
+           Yaw 0deg leaves the texture image-up axis aligned with world +Y,
+           90deg left of the previous +X-facing direction. -->
       <visual name="vertiport_top_texture">
-        <pose degrees="true">0 0 0.701 0 0 -90</pose>
+        <pose degrees="true">0 0 0.701 0 0 0</pose>
         <geometry>
           <plane>
             <normal>0 0 1</normal>
@@ -82,63 +81,48 @@
         </material>
       </visual>
 
-      <!-- Ground approach line from vertiport +X edge (x=1.5) to grid entry (x=5.5), length 4m -->
-      <visual name="ground_approach_line">
-        <pose>3.5 0 0.006 0 0 0</pose>
-        <geometry>
-          <box>
-            <size>4.0 0.10 0.008</size>
-          </box>
-        </geometry>
-        <material>
-          <ambient>1 1 1 1</ambient>
-          <diffuse>1 1 1 1</diffuse>
-          <emissive>0.25 0.25 0.25 1</emissive>
-        </material>
-      </visual>
-
       <!-- 5x8 grid: cells of 3m, X intersections at 5.5..29.5, Y intersections at 0..15. -->
       <!-- Horizontal grid lines (constant Y, span X in [5.5, 29.5], length 24m) -->
       <visual name="grid_line_y0">
         <pose>17.5 0.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_y3">
         <pose>17.5 3.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_y6">
         <pose>17.5 6.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_y9">
         <pose>17.5 9.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_y12">
         <pose>17.5 12.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_y15">
         <pose>17.5 15.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
 
@@ -147,63 +131,63 @@
         <pose>5.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_x8_5">
         <pose>8.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_x11_5">
         <pose>11.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_x14_5">
         <pose>14.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_x17_5">
         <pose>17.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_x20_5">
         <pose>20.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_x23_5">
         <pose>23.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_x26_5">
         <pose>26.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
       <visual name="grid_line_x29_5">
         <pose>29.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0.25 0.25 0.25 1</emissive>
+          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
         </material>
       </visual>
 

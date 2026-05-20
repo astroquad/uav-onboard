@@ -116,11 +116,11 @@ fi
 echo
 echo "Astroquad vision-only smoke:"
 echo "    cd $ONBOARD_DIR"
-echo "    ./build/vision_debug_node --config config --target sitl --vision gazebo --line-mode light_on_dark --video --gcs-ip <windows-gcs-ip>"
+echo "    ./build/vision_debug_node --config config --target sitl --vision gazebo --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Astroquad line-follow smoke:"
 echo "    cd $ONBOARD_DIR"
-echo "    ./build/line_follow_node --config config --target sitl --vision gazebo --video --gcs-ip <windows-gcs-ip>"
+echo "    ./build/line_follow_node --config config --target sitl --vision gazebo --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Mission Planner 미러 권장 설정:"
 if [[ -n "$WSL_IP" ]]; then

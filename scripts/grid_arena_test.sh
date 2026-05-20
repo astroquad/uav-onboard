@@ -125,13 +125,13 @@ echo "Vision-only smoke (격자 world 카메라 토픽 지정):"
 echo "    cd $ONBOARD_DIR"
 echo "    ./build/vision_debug_node --config config --target sitl --vision gazebo \\"
 echo "      --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \\"
-echo "      --video --gcs-ip <windows-gcs-ip>"
+echo "      --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Line-follow smoke (격자 world; 미션 자체는 line_tracing 용이지만 카메라/MAVLink path 검증 가능):"
 echo "    cd $ONBOARD_DIR"
 echo "    ./build/line_follow_node --config config --target sitl --vision gazebo \\"
 echo "      --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \\"
-echo "      --line-mode light_on_dark --video --gcs-ip <windows-gcs-ip>"
+echo "      --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Mission Planner 미러 권장 설정:"
 if [[ -n "$WSL_IP" ]]; then
