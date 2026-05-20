@@ -146,6 +146,15 @@ struct GridMissionConfig {
     // seconds so the last node's branches don't immediately re-trigger.
     double snake_post_record_grace_s = 0.8;
 
+    // Cycle 21: after the drone's lateral velocity reaches zero at a boundary,
+    // hold position for this long while we keep refreshing
+    // last_node_grid_branch_mask_ from the live IntersectionDecision. The
+    // watchdog-fire frame can be a 1-frame transient (e.g. straight->T flip
+    // where the cross momentarily shows the wrong side branch) and locking
+    // that transient into the SnakePlanner causes a wrong alternation read.
+    // Giving vision an extra observation window lets a stable T mask win.
+    double snake_boundary_settle_s = 1.2;
+
     // Cycle 12: blind forward duration immediately after each 90 turn
     // (SnakeTurn90 / SnakeTurn90Again). The camera moves into the new corridor
     // before re-engaging line tracking and we do not chase the old corridor's
@@ -338,6 +347,7 @@ private:
     int    entry_center_stable_count_ = 0;
     std::uint32_t entry_forward_start_frame_seq_ = 0;
     int    snake_stop_stable_count_ = 0;
+    double snake_stop_settle_entry_s_ = -1.0;
     int    snake_yaw_stable_count_ = 0;
     int    snake_launch_align_stable_count_ = 0;
     bool   origin_latched_ = false;

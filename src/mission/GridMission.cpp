@@ -113,6 +113,7 @@ void GridMission::reset()
     entry_center_stable_count_ = 0;
     entry_forward_start_frame_seq_ = 0;
     snake_stop_stable_count_ = 0;
+    snake_stop_settle_entry_s_ = -1.0;
     snake_yaw_stable_count_ = 0;
     snake_launch_align_stable_count_ = 0;
     origin_latched_ = false;
@@ -1057,7 +1058,44 @@ void GridMission::handleSnakeStopAtCenter(const GridMissionInput& in, GridMissio
     } else {
         snake_stop_stable_count_ = 0;
     }
-    if (snake_stop_stable_count_ >= config_.snake_stop_velocity_consecutive_frames) {
+
+    // Cycle 21: while we decelerate AND during the post-settle window, keep
+    // overwriting last_node_grid_branch_mask_ with the freshest "node-like"
+    // idec frame. The watchdog-fire frame can be a transient (e.g. a 1-frame
+    // 0x07 in camera that excludes the real boundary's side branch). A T
+    // intersection has 3 branches; a + has 4; both at least 3-bit popcount.
+    // Two-bit (straight) frames are ignored so a cruise transient does not
+    // dilute the boundary mask back to a non-boundary state.
+    {
+        const auto idec_state = in.intersection_decision.state;
+        if (idec_state == IntersectionDecisionState::TurnReady ||
+            idec_state == IntersectionDecisionState::TurnConfirm ||
+            idec_state == IntersectionDecisionState::NodeRecord) {
+            const std::uint8_t fresh = rotateCameraBranchMaskToGrid(
+                in.intersection_decision.accepted_branch_mask,
+                tracker_ ? tracker_->currentHeading() : GridHeading::North);
+            int bits = 0;
+            for (std::uint8_t m = fresh; m; m &= static_cast<std::uint8_t>(m - 1)) ++bits;
+            if (bits >= 3) {
+                last_node_grid_branch_mask_ = fresh;
+                last_node_front_open_ = forwardBranchPresent(in.intersection_decision);
+            }
+        }
+    }
+
+    if (snake_stop_stable_count_ < config_.snake_stop_velocity_consecutive_frames) {
+        return;
+    }
+    // Velocity settled — wait an extra settle window so vision can finalise
+    // the branch mask before we commit to a direction.
+    if (snake_stop_settle_entry_s_ < 0.0) {
+        snake_stop_settle_entry_s_ = in.now_s;
+    }
+    if (in.now_s - snake_stop_settle_entry_s_ < config_.snake_boundary_settle_s) {
+        return;
+    }
+    snake_stop_settle_entry_s_ = -1.0;
+    {
         // Ask SnakePlanner for direction at this boundary.
         // Cycle 11: in.node_event.grid_branch_mask is 0 in subsequent ticks
         // because peek returns valid=false once idec lockout is active. Use
