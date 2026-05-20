@@ -50,6 +50,13 @@ target_include_directories(test_line_follow_mission PRIVATE ../src)
 target_link_libraries(test_line_follow_mission PRIVATE onboard_core)
 add_test(NAME line_follow_mission COMMAND test_line_follow_mission)
 
+add_executable(test_grid_mission_entry_origin
+    test_grid_mission_entry_origin.cpp
+)
+target_include_directories(test_grid_mission_entry_origin PRIVATE ../src)
+target_link_libraries(test_grid_mission_entry_origin PRIVATE onboard_core)
+add_test(NAME grid_mission_entry_origin COMMAND test_grid_mission_entry_origin)
+
 add_executable(test_safety_monitor
     test_safety_monitor.cpp
 )

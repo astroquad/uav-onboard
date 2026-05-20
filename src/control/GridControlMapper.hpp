@@ -15,6 +15,7 @@ enum class GridControlIntent {
     ForwardBlind,     // pure body-forward velocity, ignore vision (off-pad scoot)
     LineFollow,       // line-follow controller @ current cruise alt
     StopAndCenter,    // ramp velocity to 0 while holding altitude
+    IntersectionCenter, // center an intersection under the camera before origin/node lock
     YawAlign,         // yaw-rate-only command toward target_yaw_rad
     YawTurn,          // active 90° turn (yaw-only, no lateral / forward)
     MarkerHover,      // keep marker centered (line ignored)
@@ -33,6 +34,14 @@ struct GridControlMapperConfig {
     double stop_center_target_cy = 0.55;
     double stop_center_max_vx_mps = 0.10;
     double stop_center_taper_gap = 0.30;
+    // Entry-origin centering. X is normalized around camera center, Y is
+    // normalized image row [0, 1].
+    double intersection_center_target_y_norm = 0.55;
+    double intersection_center_forward_kp = 0.35;
+    double intersection_center_lateral_kp = 0.20;
+    double intersection_center_max_forward_mps = 0.12;
+    double intersection_center_max_reverse_mps = 0.06;
+    double intersection_center_max_lateral_mps = 0.12;
 };
 
 struct GridControlMapperInput {
@@ -40,6 +49,7 @@ struct GridControlMapperInput {
     double target_altitude_m = 1.3;
     bool altitude_available = false;
     double current_altitude_m = 0.0;
+    std::optional<double> forward_speed_override_mps;
 
     // For YawAlign / YawTurn
     bool yaw_available = false;
@@ -60,6 +70,7 @@ struct GridControlMapperInput {
 
     // Cycle 12 B: cy-feedback deceleration in StopAndCenter intent.
     bool intersection_valid = false;
+    double intersection_center_x_norm = 0.0;
     double intersection_center_y_norm = 0.0;
 };
 

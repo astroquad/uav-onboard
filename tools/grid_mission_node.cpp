@@ -197,9 +197,33 @@ void loadConfigs(const Options& opt, Configs& cfg)
             g.vertiport_altitude_m = gm["vertiport_altitude_m"].value_or(g.vertiport_altitude_m);
             g.cruise_altitude_m = gm["cruise_altitude_m"].value_or(g.cruise_altitude_m);
             g.vertiport_verify_timeout_s = gm["vertiport_verify_timeout_s"].value_or(g.vertiport_verify_timeout_s);
-            g.off_pad_timeout_s = gm["off_pad_timeout_s"].value_or(g.off_pad_timeout_s);
-            g.off_pad_distance_trigger_m = gm["off_pad_distance_trigger_m"].value_or(g.off_pad_distance_trigger_m);
-            g.line_enter_timeout_s = gm["line_enter_timeout_s"].value_or(g.line_enter_timeout_s);
+            g.marker_lock_center_tol_norm =
+                gm["marker_lock_center_tol_norm"].value_or(g.marker_lock_center_tol_norm);
+            const double marker_lock_yaw_deg = gm["marker_lock_yaw_delta_deg"].value_or(
+                g.marker_lock_yaw_delta_rad * 180.0 / M_PI);
+            g.marker_lock_yaw_delta_rad = marker_lock_yaw_deg * M_PI / 180.0;
+            g.entry_forward_timeout_s = gm["entry_forward_timeout_s"].value_or(g.entry_forward_timeout_s);
+            g.entry_forward_speed_mps = gm["entry_forward_speed_mps"].value_or(g.entry_forward_speed_mps);
+            g.entry_blind_clear_distance_m =
+                gm["entry_blind_clear_distance_m"].value_or(g.entry_blind_clear_distance_m);
+            g.entry_blind_min_s = gm["entry_blind_min_s"].value_or(g.entry_blind_min_s);
+            g.entry_blind_min_frames =
+                gm["entry_blind_min_frames"].value_or(g.entry_blind_min_frames);
+            g.entry_intersection_min_distance_m =
+                gm["entry_intersection_min_distance_m"].value_or(g.entry_intersection_min_distance_m);
+            g.entry_center_timeout_s = gm["entry_center_timeout_s"].value_or(g.entry_center_timeout_s);
+            g.entry_center_target_y_norm =
+                gm["entry_center_target_y_norm"].value_or(g.entry_center_target_y_norm);
+            g.entry_center_late_y_norm =
+                gm["entry_center_late_y_norm"].value_or(g.entry_center_late_y_norm);
+            g.entry_center_x_tolerance_norm =
+                gm["entry_center_x_tolerance_norm"].value_or(g.entry_center_x_tolerance_norm);
+            g.entry_center_y_tolerance_norm =
+                gm["entry_center_y_tolerance_norm"].value_or(g.entry_center_y_tolerance_norm);
+            g.entry_center_velocity_threshold_mps =
+                gm["entry_center_velocity_threshold_mps"].value_or(g.entry_center_velocity_threshold_mps);
+            g.entry_center_stable_frames =
+                gm["entry_center_stable_frames"].value_or(g.entry_center_stable_frames);
             g.cell_size_m = gm["cell_size_m"].value_or(g.cell_size_m);
             g.snake_record_lockout_s = gm["snake_record_lockout_s"].value_or(g.snake_record_lockout_s);
             g.snake_turn_lockout_s = gm["snake_turn_lockout_s"].value_or(g.snake_turn_lockout_s);
@@ -211,20 +235,37 @@ void loadConfigs(const Options& opt, Configs& cfg)
             g.mission_timeout_s = gm["mission_timeout_s"].value_or(g.mission_timeout_s);
             g.altitude_ceiling_m = gm["altitude_ceiling_m"].value_or(g.altitude_ceiling_m);
             g.snake_complete_hover_s = gm["snake_complete_hover_s"].value_or(g.snake_complete_hover_s);
-            g.marker_observation_min_frames =
-                gm["marker_observation_min_frames"].value_or(g.marker_observation_min_frames);
             g.snake_record_dwell_s =
                 gm["snake_record_dwell_s"].value_or(g.snake_record_dwell_s);
             g.snake_post_record_grace_s =
                 gm["snake_post_record_grace_s"].value_or(g.snake_post_record_grace_s);
             g.snake_post_turn_blind_s =
                 gm["snake_post_turn_blind_s"].value_or(g.snake_post_turn_blind_s);
+            g.hop_align_start_m = gm["hop_align_start_m"].value_or(g.hop_align_start_m);
+            g.hop_align_end_m = gm["hop_align_end_m"].value_or(g.hop_align_end_m);
+            g.hop_max_distance_m = gm["hop_max_distance_m"].value_or(g.hop_max_distance_m);
+            g.hop_intersection_min_distance_m =
+                gm["hop_intersection_min_distance_m"].value_or(g.hop_intersection_min_distance_m);
+            g.marker_window_frames = gm["marker_window_frames"].value_or(g.marker_window_frames);
+            g.marker_window_min_count = gm["marker_window_min_count"].value_or(g.marker_window_min_count);
             cfg.mapper.stop_center_target_cy =
                 gm["stop_center_target_cy"].value_or(cfg.mapper.stop_center_target_cy);
             cfg.mapper.stop_center_max_vx_mps =
                 gm["stop_center_max_vx_mps"].value_or(cfg.mapper.stop_center_max_vx_mps);
             cfg.mapper.stop_center_taper_gap =
                 gm["stop_center_taper_gap"].value_or(cfg.mapper.stop_center_taper_gap);
+            cfg.mapper.intersection_center_target_y_norm =
+                gm["entry_center_target_y_norm"].value_or(cfg.mapper.intersection_center_target_y_norm);
+            cfg.mapper.intersection_center_forward_kp =
+                gm["entry_center_forward_kp"].value_or(cfg.mapper.intersection_center_forward_kp);
+            cfg.mapper.intersection_center_lateral_kp =
+                gm["entry_center_lateral_kp"].value_or(cfg.mapper.intersection_center_lateral_kp);
+            cfg.mapper.intersection_center_max_forward_mps =
+                gm["entry_center_max_forward_mps"].value_or(cfg.mapper.intersection_center_max_forward_mps);
+            cfg.mapper.intersection_center_max_reverse_mps =
+                gm["entry_center_max_reverse_mps"].value_or(cfg.mapper.intersection_center_max_reverse_mps);
+            cfg.mapper.intersection_center_max_lateral_mps =
+                gm["entry_center_max_lateral_mps"].value_or(cfg.mapper.intersection_center_max_lateral_mps);
             // Cycle 13: expose forward_speed_advance_mps so the slow speed
             // applied during SnakeAdvanceOneCell's line-follow phase can be
             // tuned without recompiling.
@@ -331,8 +372,12 @@ void logState(const omission::GridMissionOutput& out,
     };
     char bm_buf[8];
     snprintf(bm_buf, sizeof(bm_buf), "0x%02X", idec.accepted_branch_mask);
+    char cx_buf[16];
+    snprintf(cx_buf, sizeof(cx_buf), "%.2f", out.intersection_center_x_norm);
     char cy_buf[16];
     snprintf(cy_buf, sizeof(cy_buf), "%.2f", idec.center_y_norm);
+    char hop_buf[16];
+    snprintf(hop_buf, sizeof(hop_buf), "%.2f", out.hop_distance_m);
     // Cycle 10: registry ID list (committed markers).
     std::string regids;
     {
@@ -346,6 +391,7 @@ void logState(const omission::GridMissionOutput& out,
     }
     std::cout << "[grid-mission] t=" << now_s
               << " st=" << omission::gridStateName(out.state)
+              << " intent=" << ocontrol::gridControlIntentName(out.intent)
               << " mode=" << ap.mode_name
               << " armed=" << (ap.armed ? 1 : 0)
               << " agl=" << fmt(ap.distance_sensor_m)
@@ -358,7 +404,9 @@ void logState(const omission::GridMissionOutput& out,
               << " nodes=" << out.intersections_recorded
               << " idec=" << omission::decisionStateName(idec.state)
               << " type=" << intersectionTypeNameShort(idec.accepted_type)
+              << " cx=" << cx_buf
               << " cy=" << cy_buf
+              << " hop=" << hop_buf
               << " bm=" << bm_buf
               << " mkstable=" << mission.stableMarkerCandidateCount()
               << " regids=" << regids
@@ -505,13 +553,12 @@ int main(int argc, char** argv)
             frame.width, frame.height,
             frame.frame_id, frame.timestamp_ms,
             false);
-        // Only let the grid tracker accumulate nodes once we are inside the grid
-        // (LineEnter onwards). Before that, the vertiport texture can produce
-        // spurious intersection events.
+        // Only let the grid tracker peek regular snake nodes after the
+        // synthetic origin has been centered and latched. EntryForward and
+        // EntryCenterOrigin publish (0,0) directly so their early candidates
+        // must not advance tracker frame lockouts.
         const auto cur_state = mission.state();
         const bool tracker_enabled =
-            cur_state == omission::GridState::LineEnter ||
-            cur_state == omission::GridState::GridOriginLock ||
             cur_state == omission::GridState::SnakeForward ||
             cur_state == omission::GridState::SnakeRecordNode ||
             cur_state == omission::GridState::SnakeStopAtCenter ||
@@ -573,6 +620,7 @@ int main(int argc, char** argv)
         cmin.target_altitude_m = mout.target_altitude_m;
         cmin.altitude_available = apst.local_altitude_m.has_value() || apst.distance_sensor_m.has_value();
         cmin.current_altitude_m = apst.distance_sensor_m.value_or(apst.local_altitude_m.value_or(0.0));
+        cmin.forward_speed_override_mps = mout.forward_speed_override_mps;
         cmin.yaw_available = mout.yaw_available;
         cmin.current_yaw_rad = mout.current_yaw_rad;
         cmin.target_yaw_rad = mout.target_yaw_rad;
@@ -586,6 +634,7 @@ int main(int argc, char** argv)
         cmin.marker_center_error_y_norm = mout.marker_center_error_y_norm;
         // Cycle 12 B: forward intersection cy for StopAndCenter cy-feedback decel.
         cmin.intersection_valid = mout.intersection_valid;
+        cmin.intersection_center_x_norm = mout.intersection_center_x_norm;
         cmin.intersection_center_y_norm = mout.intersection_center_y_norm;
 
         const auto sp = mapper.compute(cmin);

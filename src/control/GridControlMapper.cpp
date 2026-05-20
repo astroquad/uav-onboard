@@ -58,10 +58,15 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
         return out;
     }
     case GridControlIntent::ForwardBlind: {
-        out.vx_forward_mps = static_cast<float>(config_.forward_speed_blind_mps);
+        out.vx_forward_mps = static_cast<float>(
+            input.forward_speed_override_mps.value_or(config_.forward_speed_blind_mps));
         out.vz_down_mps = static_cast<float>(
             computeAltitudeVz(input.altitude_available, input.current_altitude_m,
                               input.target_altitude_m));
+        if (input.yaw_available) {
+            out.yaw_rate_rad_s = static_cast<float>(
+                computeYawRate(input.current_yaw_rad, input.target_yaw_rad));
+        }
         return out;
     }
     case GridControlIntent::LineFollow: {
@@ -105,6 +110,32 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
         }
         return out;
     }
+    case GridControlIntent::IntersectionCenter: {
+        out.vz_down_mps = static_cast<float>(
+            computeAltitudeVz(input.altitude_available, input.current_altitude_m,
+                              input.target_altitude_m));
+        if (input.yaw_available) {
+            out.yaw_rate_rad_s = static_cast<float>(
+                computeYawRate(input.current_yaw_rad, input.target_yaw_rad));
+        }
+        if (!input.intersection_valid) {
+            return out;
+        }
+        const double y_error =
+            config_.intersection_center_target_y_norm - input.intersection_center_y_norm;
+        const double forward = config_.intersection_center_forward_kp * y_error;
+        out.vx_forward_mps = static_cast<float>(std::clamp(
+            forward,
+            -config_.intersection_center_max_reverse_mps,
+            config_.intersection_center_max_forward_mps));
+        const double lateral =
+            config_.intersection_center_lateral_kp * input.intersection_center_x_norm;
+        out.vy_right_mps = static_cast<float>(std::clamp(
+            lateral,
+            -config_.intersection_center_max_lateral_mps,
+            config_.intersection_center_max_lateral_mps));
+        return out;
+    }
     case GridControlIntent::YawAlign:
     case GridControlIntent::YawTurn: {
         if (input.yaw_available) {
@@ -124,6 +155,14 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
         ControlSetpoint sp = line_controller_
             ? line_controller_->updateMarker(marker, alt)
             : ControlSetpoint {};
+        // Cycle 16: marker hover must also drive the body-yaw toward the
+        // mission's target_yaw_rad so MarkerLockYaw can rotate while staying
+        // centered on the marker. GuidedVelocityController::updateMarker
+        // forces yaw_rate_rad_s = 0, so we override it here from the mapper.
+        if (input.yaw_available) {
+            sp.yaw_rate_rad_s = static_cast<float>(
+                computeYawRate(input.current_yaw_rad, input.target_yaw_rad));
+        }
         return sp;
     }
     case GridControlIntent::Land:
@@ -140,6 +179,7 @@ const char* gridControlIntentName(GridControlIntent intent)
     case GridControlIntent::ForwardBlind:   return "fwd_blind";
     case GridControlIntent::LineFollow:     return "line_follow";
     case GridControlIntent::StopAndCenter:  return "stop_center";
+    case GridControlIntent::IntersectionCenter: return "intersection_center";
     case GridControlIntent::YawAlign:       return "yaw_align";
     case GridControlIntent::YawTurn:        return "yaw_turn";
     case GridControlIntent::MarkerHover:    return "marker_hover";

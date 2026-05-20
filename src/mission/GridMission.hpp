@@ -9,20 +9,24 @@
 #include "vision/VisionTypes.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <unordered_map>
 
 namespace onboard::mission {
 
+// Cycle 16: state machine rewritten for the new arena layout (no
+// vertiport->grid line, free-flight entry forward). Removed states:
+// VertiportYawAlign (merged into MarkerLockYaw), OffPadForward, GridOriginLock
+// (entry forward hands the first intersection to EntryCenterOrigin before it
+// becomes (0,0)). Renamed: VertiportVerify -> MarkerLockYaw, LineEnter -> EntryForward.
 enum class GridState {
     Idle,
     ArmTakeoff,
-    VertiportVerify,
-    VertiportYawAlign,
-    OffPadForward,
-    LineEnter,
-    GridOriginLock,
+    MarkerLockYaw,
+    EntryForward,
+    EntryCenterOrigin,
     SnakeForward,
     SnakeRecordNode,
     SnakeStopAtCenter,
@@ -35,6 +39,24 @@ enum class GridState {
     Done,
 };
 
+// Cycle 16: sliding window marker detector. We push the ID seen in each
+// vision frame (or -1 when no usable marker is visible). When the same ID
+// appears `min_count` times within the last `max_frames` frames the marker is
+// considered stable and can be committed. If two distinct IDs ever appear in
+// the same window the window is flushed (cleared) — the camera is ambiguous
+// and we do not want to commit either ID prematurely.
+struct MarkerWindow {
+    int max_frames = 8;
+    int min_count = 4;
+    std::deque<int> ids;        // -1 marks "no marker", positive values are real IDs
+    void configure(int frames, int count);
+    void clear();
+    void push(int id);          // -1 when nothing seen this frame
+    bool hasMultipleIds() const;
+    int  bestStableId() const;  // returns -1 when none reaches min_count
+    int  countOf(int id) const;
+};
+
 const char* gridStateName(GridState state);
 
 struct GridMissionConfig {
@@ -42,22 +64,37 @@ struct GridMissionConfig {
     int vertiport_marker_id = 23;
     int markers_expected = 4;
 
-    double vertiport_altitude_m = 1.3;
+    double vertiport_altitude_m = 2.0;
     double cruise_altitude_m = 2.0;
 
-    // Verification timers
-    double vertiport_verify_timeout_s = 3.0;
+    // MarkerLockYaw (Cycle 16: merged VertiportVerify + VertiportYawAlign)
+    double vertiport_verify_timeout_s = 8.0;
     int    vertiport_marker_stable_frames = 3;
     double vertiport_yaw_tolerance_rad = 0.0872665;   // ~5°
     int    vertiport_yaw_stable_frames = 2;
+    // Acceptable marker center error (normalized to half-frame) before we
+    // declare the drone "centered over the marker" during MarkerLockYaw.
+    double marker_lock_center_tol_norm = 0.05;
+    // Body-yaw delta applied during MarkerLockYaw to face the grid entry.
+    // ArduPilot/NED convention: yaw_rate > 0 is clockwise (right), so a
+    // positive delta rotates the drone to the right. -π/2 would rotate it
+    // to the left (CCW) — the opposite of what the mission spec asks for.
+    double marker_lock_yaw_delta_rad = 1.5707963;    // +π/2 = right 90°
 
-    // Off-pad forward phase
-    double off_pad_timeout_s = 6.0;
-    double off_pad_line_locked_frames = 3;
-    double off_pad_distance_trigger_m = 2.5;
-
-    // Line enter
-    double line_enter_timeout_s = 5.0;
+    // EntryForward (Cycle 16: free-flight forward toward the first grid intersection)
+    double entry_forward_timeout_s = 25.0;
+    double entry_forward_speed_mps = 0.30;
+    double entry_blind_clear_distance_m = 1.8;
+    double entry_blind_min_s = 0.0;
+    int    entry_blind_min_frames = 0;
+    double entry_intersection_min_distance_m = 0.5;
+    double entry_center_timeout_s = 5.0;
+    double entry_center_target_y_norm = 0.55;
+    double entry_center_late_y_norm = 0.78;
+    double entry_center_x_tolerance_norm = 0.08;
+    double entry_center_y_tolerance_norm = 0.06;
+    double entry_center_velocity_threshold_mps = 0.08;
+    int    entry_center_stable_frames = 3;
 
     // Snake forward / record / stop / turn
     double cell_size_m = 3.0;
@@ -70,31 +107,48 @@ struct GridMissionConfig {
     int    snake_stop_velocity_consecutive_frames = 2;
     double snake_yaw_target_tolerance_rad = 0.0872665;
     int    snake_yaw_stable_frames = 2;
-    double snake_advance_timeout_s = 8.0;
+    double snake_advance_timeout_s = 15.0;
+    // Cycle 16: hop-to-hop progress thresholds (LOCAL_NED distance from the
+    // last commit node). Inside [align_start, align_end] the controller runs
+    // a brief LineFollow window to recentre yaw + vy on the line; everywhere
+    // else inside the cell ForwardBlind keeps yaw locked.
+    double hop_align_start_m = 1.4;
+    double hop_align_end_m = 1.7;
+    // Distance failsafe — if we never see the next intersection within this
+    // many metres, give up the hop and let the timeout failsafe kick in.
+    double hop_max_distance_m = 3.5;
+    // Approach-distance gate before the next intersection commit is honoured.
+    // Prevents the last node's residual lookahead from immediately retriggering.
+    double hop_intersection_min_distance_m = 1.0;
 
     // Failsafe
     int    max_intersections = 50;
     double mission_timeout_s = 600.0;
     double pixhawk_heartbeat_timeout_s = 2.0;
-    double altitude_ceiling_m = 3.0;
+    double altitude_ceiling_m = 3.5;
     double snake_complete_hover_s = 2.0;
 
     // CLI/SnakePlanner override
     SnakeTurnDir initial_snake_turn = SnakeTurnDir::Unknown;
 
-    // Cycle 9
-    int    marker_observation_min_frames = 3;
-    double snake_record_dwell_s = 0.3;
+    // Dwell at every non-marker intersection while branches stabilise.
+    // Cycle 16: bumped 0.3 -> 0.5 so the IntersectionDecision has more frames
+    // to settle on a definitive L/T/+ classification.
+    double snake_record_dwell_s = 0.5;
 
     // Cycle 10: after a NodeRecord, ignore boundary watchdog for this many
     // seconds so the last node's branches don't immediately re-trigger.
     double snake_post_record_grace_s = 0.8;
 
     // Cycle 12: blind forward duration immediately after each 90 turn
-    // (SnakeTurn90 / SnakeTurn90Again). Mirrors the off-pad-forward pattern so
-    // the camera moves into the new corridor before re-engaging line tracking
-    // and we do not chase the old corridor's leftover line.
-    double snake_post_turn_blind_s = 2.5;
+    // (SnakeTurn90 / SnakeTurn90Again). The camera moves into the new corridor
+    // before re-engaging line tracking and we do not chase the old corridor's
+    // leftover line.
+    double snake_post_turn_blind_s = 1.5;
+
+    // Cycle 16: sliding-window ArUco stability gate.
+    int marker_window_frames = 8;
+    int marker_window_min_count = 4;
 };
 
 struct GridMissionInput {
@@ -133,6 +187,7 @@ struct GridMissionOutput {
     bool   yaw_available = false;
     double current_yaw_rad = 0.0;
     double target_yaw_rad = 0.0;
+    std::optional<double> forward_speed_override_mps;
 
     bool   line_detected = false;
     double line_center_error_norm = 0.0;
@@ -165,8 +220,10 @@ struct GridMissionOutput {
     // Cycle 12 B: cy-feedback deceleration support. The control mapper uses
     // these to taper forward velocity during StopAndCenter so the drone
     // settles right over the intersection center.
+    double intersection_center_x_norm = 0.0;
     double intersection_center_y_norm = 0.0;
     bool   intersection_valid = false;
+    double hop_distance_m = 0.0;
 
     // Cycle 13: drone fractional position relative to the last committed node,
     // in grid units. Used by the GCS to draw the drone heading arrow at a
@@ -214,11 +271,9 @@ private:
 
     // State handlers
     void handleArmTakeoff(const GridMissionInput& in, GridMissionOutput& out);
-    void handleVertiportVerify(const GridMissionInput& in, GridMissionOutput& out);
-    void handleVertiportYawAlign(const GridMissionInput& in, GridMissionOutput& out);
-    void handleOffPadForward(const GridMissionInput& in, GridMissionOutput& out);
-    void handleLineEnter(const GridMissionInput& in, GridMissionOutput& out);
-    void handleGridOriginLock(const GridMissionInput& in, GridMissionOutput& out);
+    void handleMarkerLockYaw(const GridMissionInput& in, GridMissionOutput& out);
+    void handleEntryForward(const GridMissionInput& in, GridMissionOutput& out);
+    void handleEntryCenterOrigin(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeForward(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeRecordNode(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeStopAtCenter(const GridMissionInput& in, GridMissionOutput& out);
@@ -229,12 +284,23 @@ private:
     void handleLand(const GridMissionInput& in, GridMissionOutput& out);
     void handleEmergencyLand(const GridMissionInput& in, GridMissionOutput& out);
 
+    // Cycle 16: hop-to-hop helper — distance from the latched hop_start_*
+    // anchor, plus per-tick LineFollow gating that runs only inside the
+    // configured align window.
+    double hopDistance(const GridMissionInput& in) const;
+    bool   inHopAlignWindow(double distance) const;
+    void   armHopStart(const GridMissionInput& in);
+
     // Helpers
     bool isHardFailsafe(const GridMissionInput& in, std::string& reason) const;
     void populateLineInputs(const GridMissionInput& in, GridMissionOutput& out) const;
     void populateMarkerInputs(const GridMissionInput& in,
                               int marker_id_focus,
                               GridMissionOutput& out) const;
+    bool isEntryIntersectionCandidate(const GridMissionInput& in) const;
+    bool isIntersectionCenteredForEntry(const GridMissionInput& in) const;
+    double intersectionCenterXNorm(const GridMissionInput& in) const;
+    void latchGridOrigin(const GridMissionInput& in, GridMissionOutput& out);
     std::optional<onboard::vision::MarkerObservation> findMarker(
         const onboard::vision::VisionResult* vis, int id) const;
     double wrap(double a) const;
@@ -258,17 +324,15 @@ private:
     int    consecutive_boundary_failures_ = 0;
     int    vertiport_marker_stable_count_ = 0;
     int    vertiport_yaw_stable_count_ = 0;
+    int    entry_center_stable_count_ = 0;
+    std::uint32_t entry_forward_start_frame_seq_ = 0;
     int    snake_stop_stable_count_ = 0;
     int    snake_yaw_stable_count_ = 0;
-    int    off_pad_line_stable_count_ = 0;
     bool   origin_latched_ = false;
-    double off_pad_origin_x_ = 0.0;
-    double off_pad_origin_y_ = 0.0;
     double yaw_target_rad_ = 0.0;
     double yaw_align_target_rad_ = 0.0;
     double turn_origin_x_ = 0.0;
     double turn_origin_y_ = 0.0;
-    int    line_lost_since_node_count_ = 0;
     double line_lost_start_s_ = -1.0;
     SnakeTurnDir pending_turn_dir_ = SnakeTurnDir::Unknown;
     GridHeading pending_post_turn_heading_ = GridHeading::Unknown;
@@ -278,20 +342,26 @@ private:
     bool   started_ = false;
     std::string last_safety_event_;
 
-    // Cycle 8 additions
     std::optional<double> last_node_local_x_;
     std::optional<double> last_node_local_y_;
-    double line_enter_last_seen_s_ = -1.0;
-    bool   in_line_enter_relax_ = false; // true while NodeRecord band is relaxed for LineEnter
 
-    // Cycle 9 additions
     std::uint8_t last_node_grid_branch_mask_ = 0;
     bool   last_node_front_open_ = false;
-    std::unordered_map<int, int> marker_candidate_count_;
 
     // Cycle 12 additions
     bool   origin_published_ = false;
     double snake_post_turn_blind_until_s_ = -1.0;
+
+    // Cycle 16: hop-to-hop anchor for SnakeForward / SnakeAdvanceOneCell.
+    // hop_start_local_x_/y_ is set on state entry; hopDistance() measures the
+    // LOCAL_NED displacement from this anchor each tick.
+    std::optional<double> hop_start_local_x_;
+    std::optional<double> hop_start_local_y_;
+
+    // Cycle 16: sliding-window marker stability detector. Replaces the
+    // per-id counter (`marker_candidate_count_`) so transient mis-identifications
+    // within a window flush the window instead of accumulating.
+    MarkerWindow marker_window_;
 };
 
 } // namespace onboard::mission

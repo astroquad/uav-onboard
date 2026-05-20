@@ -9,13 +9,40 @@ vertiport_marker_id = 23
 markers_expected = 4
 vertiport_altitude_m = 2.0
 cruise_altitude_m = 2.0
+# Cycle 16: MarkerLockYaw (merged VertiportVerify + VertiportYawAlign).
 vertiport_verify_timeout_s = 8.0
 vertiport_marker_stable_frames = 3
 vertiport_yaw_tolerance_deg = 5.0
-off_pad_timeout_s = 15.0
-off_pad_distance_trigger_m = 3.0
-off_pad_line_locked_frames = 3
-line_enter_timeout_s = 10.0
+marker_lock_center_tol_norm = 0.05
+# Cycle 16: yaw rotation applied during MarkerLockYaw. ArduPilot/NED
+# convention: positive yaw_rate is clockwise (right), so +90 rotates the
+# drone to the right; -90 would rotate to the left (CCW).
+marker_lock_yaw_delta_deg = 90.0
+# Cycle 16: EntryForward — yaw-frozen freeflight from the vertiport to the
+# first grid intersection. No vertiport->grid line in the new arena, and
+# vertiport texture can produce false L/T/+ candidates, so entry uses only
+# LOCAL_NED displacement while yaw is frozen.
+entry_forward_timeout_s = 25.0
+entry_forward_speed_mps = 0.30
+# Cycle 17: ignore vision only until the vehicle has clearly left the 3m x 3m
+# vertiport pad. After this guard clears, wait for the actual first L/T/+
+# grid intersection instead of guessing the (0,0) position from distance.
+entry_blind_clear_distance_m = 1.80
+entry_blind_min_s = 0.0
+entry_blind_min_frames = 0
+entry_intersection_min_distance_m = 1.80
+entry_center_timeout_s = 5.0
+entry_center_target_y_norm = 0.55
+entry_center_late_y_norm = 0.78
+entry_center_x_tolerance_norm = 0.08
+entry_center_y_tolerance_norm = 0.06
+entry_center_velocity_threshold_mps = 0.08
+entry_center_stable_frames = 3
+entry_center_forward_kp = 0.35
+entry_center_lateral_kp = 0.20
+entry_center_max_forward_mps = 0.12
+entry_center_max_reverse_mps = 0.06
+entry_center_max_lateral_mps = 0.12
 cell_size_m = 3.0
 snake_record_lockout_s = 3.0
 snake_turn_lockout_s = 3.0
@@ -23,43 +50,49 @@ snake_marker_hover_s = 3.0
 snake_line_lost_warn_s = 4.0
 snake_line_lost_emergency_s = 8.0
 snake_stop_velocity_threshold_mps = 0.05
-# Cycle 13: bumped 8.0 -> 15.0. With forward_speed_advance_mps=0.30 and
-# snake_post_turn_blind_s=1.5, the post-blind line-follow window is
-# (15 - 1.5) * 0.30 = 4.05m which comfortably exceeds cell_size_m=3.0.
+# Cycle 13: bumped 8.0 -> 15.0 to accommodate post-turn blind + hop traversal.
 snake_advance_timeout_s = 15.0
-# Cycle 13: was hard-coded 0.18 in GridControlMapperConfig; raised to 0.30 so
-# SnakeAdvanceOneCell can traverse one cell within snake_advance_timeout_s
-# while still allowing the line controller time to recentre after a turn.
+# Cycle 13: was hard-coded 0.18 in GridControlMapperConfig; raised to 0.30.
 forward_speed_advance_mps = 0.30
 max_intersections = 50
 mission_timeout_s = 600.0
 altitude_ceiling_m = 3.5
 snake_complete_hover_s = 2.0
-# Cycle 9: marker must be seen for N consecutive frames before being treated
-# as a real candidate. Guards against 1-2 frame ArUco false positives.
-# Cycle 11: raised 3 -> 6 because OpenCV ArUco occasionally locks onto
-# intersection cross/T patterns for 3+ frames and would otherwise commit fake
-# IDs (e.g. id=1, id=7 at a non-marker intersection).
-marker_observation_min_frames = 6
-# Cycle 9: dwell at every non-marker intersection while decelerating
-# (forward_speed_advance_mps). Marker intersections override with
-# snake_marker_hover_s.
-snake_record_dwell_s = 0.3
+# Cycle 16: hop-to-hop dwell at each non-marker intersection. The drone holds
+# position for this many seconds while the IntersectionDecision settles on a
+# definitive L/T/+ classification. Marker intersections override with
+# snake_marker_hover_s (3.0s).
+snake_record_dwell_s = 0.5
 # Cycle 10: after a NodeRecord, the boundary watchdog in SnakeForward is
 # disabled for this many seconds so the just-recorded node's residual
 # T/L branches don't immediately re-trigger as a boundary.
 snake_post_record_grace_s = 0.8
 # Cycle 12: blind forward duration after each 90° turn (SnakeTurn90 and
-# SnakeTurn90Again). Mirrors the off-pad-forward pattern so the camera moves
-# into the new corridor before re-engaging line tracking.
-snake_post_turn_blind_s = 2.5
-# Cycle 12: cy-feedback deceleration in SnakeStopAtCenter. The drone keeps
-# moving forward at a tapered slow speed until the intersection center
-# reaches stop_center_target_cy, producing a position-based precision stop.
+# SnakeTurn90Again). The camera moves into the new corridor before re-engaging
+# line tracking.
+snake_post_turn_blind_s = 1.5
+# Cycle 16: hop-to-hop align window. LineFollow only runs while
+# hop_align_start_m <= distance_from_last_node <= hop_align_end_m. Outside this
+# window the controller stays in ForwardBlind with yaw frozen.
+hop_align_start_m = 1.4
+hop_align_end_m = 1.7
+# Distance failsafe — if the next intersection has not been observed within
+# this many metres of the last commit, abort the hop.
+hop_max_distance_m = 3.5
+# Minimum LOCAL_NED distance from the last commit before a new NodeRecord is
+# honoured; defends against the just-departed node's residual lookahead.
+hop_intersection_min_distance_m = 1.0
+# Cycle 12: cy-feedback deceleration in SnakeStopAtCenter.
 stop_center_target_cy = 0.55
 stop_center_max_vx_mps = 0.10
 stop_center_taper_gap = 0.30
 initial_snake_turn = "auto"  # auto | left | right
+# Cycle 16: sliding-window ArUco stability. Marker ID must appear at least
+# marker_window_min_count times within the last marker_window_frames camera
+# frames to be committed. The window flushes whenever two different IDs are
+# seen inside it (camera is ambiguous).
+marker_window_frames = 8
+marker_window_min_count = 4
 
 [takeoff]
 target_altitude_m = 2.0

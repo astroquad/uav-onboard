@@ -19,6 +19,13 @@ bool forwardBranchPresent(const IntersectionDecision& decision)
     return decision.front_available;
 }
 
+bool isGridNodeType(onboard::vision::IntersectionType type)
+{
+    return type == onboard::vision::IntersectionType::L ||
+           type == onboard::vision::IntersectionType::T ||
+           type == onboard::vision::IntersectionType::Cross;
+}
+
 GridHeading turnRight(GridHeading h)
 {
     switch (h) {
@@ -48,11 +55,9 @@ const char* gridStateName(GridState state)
     switch (state) {
     case GridState::Idle:                 return "IDLE";
     case GridState::ArmTakeoff:           return "ARM_TAKEOFF";
-    case GridState::VertiportVerify:      return "VERTIPORT_VERIFY";
-    case GridState::VertiportYawAlign:    return "VERTIPORT_YAW_ALIGN";
-    case GridState::OffPadForward:        return "OFF_PAD_FORWARD";
-    case GridState::LineEnter:            return "LINE_ENTER";
-    case GridState::GridOriginLock:       return "GRID_ORIGIN_LOCK";
+    case GridState::MarkerLockYaw:        return "MARKER_LOCK_YAW";
+    case GridState::EntryForward:         return "ENTRY_FORWARD";
+    case GridState::EntryCenterOrigin:    return "ENTRY_CENTER_ORIGIN";
     case GridState::SnakeForward:         return "SNAKE_FORWARD";
     case GridState::SnakeRecordNode:      return "SNAKE_RECORD_NODE";
     case GridState::SnakeStopAtCenter:    return "SNAKE_STOP_AT_CENTER";
@@ -104,11 +109,11 @@ void GridMission::reset()
     consecutive_boundary_failures_ = 0;
     vertiport_marker_stable_count_ = 0;
     vertiport_yaw_stable_count_ = 0;
+    entry_center_stable_count_ = 0;
+    entry_forward_start_frame_seq_ = 0;
     snake_stop_stable_count_ = 0;
     snake_yaw_stable_count_ = 0;
-    off_pad_line_stable_count_ = 0;
     origin_latched_ = false;
-    line_lost_since_node_count_ = 0;
     line_lost_start_s_ = -1.0;
     pending_turn_dir_ = SnakeTurnDir::Unknown;
     pending_post_turn_heading_ = GridHeading::Unknown;
@@ -121,12 +126,14 @@ void GridMission::reset()
     if (snake_) snake_->reset();
     last_node_local_x_.reset();
     last_node_local_y_.reset();
-    line_enter_last_seen_s_ = -1.0;
-    in_line_enter_relax_ = false;
+    hop_start_local_x_.reset();
+    hop_start_local_y_.reset();
     last_safety_event_.clear();
     last_node_grid_branch_mask_ = 0;
     last_node_front_open_ = false;
-    marker_candidate_count_.clear();
+    marker_window_.configure(config_.marker_window_frames,
+                             config_.marker_window_min_count);
+    marker_window_.clear();
     origin_published_ = false;
     snake_post_turn_blind_until_s_ = -1.0;
     if (decision_engine_) {
@@ -137,11 +144,62 @@ void GridMission::reset()
 
 std::size_t GridMission::stableMarkerCandidateCount() const
 {
-    std::size_t count = 0;
-    for (const auto& [id, frames] : marker_candidate_count_) {
-        if (frames >= config_.marker_observation_min_frames) ++count;
+    // Cycle 16: 1 when the sliding window has a stable id, else 0.
+    return marker_window_.bestStableId() >= 0 ? 1u : 0u;
+}
+
+// Cycle 16: sliding-window marker detector implementation.
+void MarkerWindow::configure(int frames, int count)
+{
+    if (frames > 0) max_frames = frames;
+    if (count > 0) min_count = count;
+    while (static_cast<int>(ids.size()) > max_frames) ids.pop_front();
+}
+
+void MarkerWindow::clear()
+{
+    ids.clear();
+}
+
+void MarkerWindow::push(int id)
+{
+    ids.push_back(id);
+    while (static_cast<int>(ids.size()) > max_frames) ids.pop_front();
+    // Flush the window if two different real IDs share it — the camera is
+    // ambiguous and we refuse to commit either marker until it stabilises.
+    if (hasMultipleIds()) {
+        ids.clear();
     }
-    return count;
+}
+
+bool MarkerWindow::hasMultipleIds() const
+{
+    int seen = -1;
+    for (int v : ids) {
+        if (v < 0) continue;
+        if (seen < 0) seen = v;
+        else if (v != seen) return true;
+    }
+    return false;
+}
+
+int MarkerWindow::countOf(int id) const
+{
+    int n = 0;
+    for (int v : ids) if (v == id) ++n;
+    return n;
+}
+
+int MarkerWindow::bestStableId() const
+{
+    int best_id = -1;
+    int best_count = 0;
+    for (int v : ids) {
+        if (v < 0) continue;
+        int c = countOf(v);
+        if (c > best_count) { best_count = c; best_id = v; }
+    }
+    return (best_count >= min_count) ? best_id : -1;
 }
 
 void GridMission::transition(GridState next, double now_s, const std::string& reason)
@@ -186,12 +244,28 @@ void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutp
     out.line_angle_error_rad = diff_deg * M_PI / 180.0;
     out.line_confidence = line.confidence;
 
-    // Cycle 16: explicit type gate. Anything other than Straight — including
-    // Unknown — produces an immediate yaw + center freeze and short-circuits
-    // the rest of the line-follow inputs. Approach to a real intersection
-    // produces a brief Straight -> Unknown -> T/L/+ transition where the
-    // LineDetector's fused-contour fit yields a misleading arrow; honouring
-    // it would yaw the drone toward the cross branch.
+    // Cycle 16: hop-aware freeze. The line controller only runs during the
+    // brief mid-cell align window (managed by the SnakeForward /
+    // SnakeAdvanceOneCell handlers). Outside that window we want yaw locked
+    // to the latched target, so we zero both inputs and let the mapper send
+    // ForwardBlind. Even inside the align window we still gate on
+    // `accepted_type == Straight` plus the Front/Back arrow head-tail check
+    // — a T entering the camera mid-window must not pull yaw aside.
+    //
+    // The align window is checked via hopDistance() so this works the same
+    // for SnakeForward, SnakeAdvanceOneCell, and any future hop-driven state.
+    const double distance = hopDistance(in);
+    const bool hop_window_active = inHopAlignWindow(distance);
+    const bool snake_state =
+        (state_ == GridState::SnakeForward ||
+         state_ == GridState::SnakeAdvanceOneCell);
+
+    if (!snake_state || !hop_window_active) {
+        out.line_angle_error_rad = 0.0;
+        out.line_center_error_norm = 0.0;
+        return;
+    }
+
     const auto t_acc = in.intersection_decision.accepted_type;
     if (t_acc != onboard::vision::IntersectionType::Straight) {
         out.line_angle_error_rad = 0.0;
@@ -199,15 +273,8 @@ void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutp
         return;
     }
 
-    // Cycle 15: even when accepted_type == Straight, require the Front + Back
-    // branch arrows (the colored arrows the GCS overlay shows at the line
-    // endpoints) to be ~180° apart within ±10°. This rejects the borderline
-    // case where the classification is still Straight but a T is entering
-    // the camera frame and tilting the per-branch fit.
-    //
-    // Note: `branches[]` lives on the raw VisionResult.intersection, not on
-    // IntersectionDecision. accepted_type drives the topology gate (above);
-    // the raw branch angles drive this head/tail straightness gate.
+    // Head/tail arrow gate: require the Front + Back arrows to be ~180°
+    // apart within ±10°.
     const auto& brs = in.vision->intersection.branches;
     const int F = static_cast<int>(onboard::vision::BranchDirection::Front);
     const int B = static_cast<int>(onboard::vision::BranchDirection::Back);
@@ -239,6 +306,77 @@ void GridMission::populateMarkerInputs(const GridMissionInput& in,
         out.marker_center_error_x_norm = (m->center_px.x - width * 0.5) / (width * 0.5);
         out.marker_center_error_y_norm = (m->center_px.y - height * 0.5) / (height * 0.5);
     }
+}
+
+double GridMission::intersectionCenterXNorm(const GridMissionInput& in) const
+{
+    if (!in.vision || in.vision->width <= 0) return 0.0;
+    if (!in.vision->intersection.valid) return 0.0;
+    if (in.intersection_decision.accepted_type == onboard::vision::IntersectionType::None) {
+        return 0.0;
+    }
+    const double half_width = in.vision->width * 0.5;
+    return (in.intersection_decision.center_px.x - half_width) / half_width;
+}
+
+bool GridMission::isEntryIntersectionCandidate(const GridMissionInput& in) const
+{
+    if (!in.vision || !in.vision->intersection.valid) return false;
+    if (!isGridNodeType(in.intersection_decision.accepted_type)) return false;
+    return in.intersection_decision.center_y_norm <= config_.entry_center_late_y_norm;
+}
+
+bool GridMission::isIntersectionCenteredForEntry(const GridMissionInput& in) const
+{
+    if (!isEntryIntersectionCandidate(in)) return false;
+    const double x_norm = intersectionCenterXNorm(in);
+    const double y_norm = in.intersection_decision.center_y_norm;
+    return std::abs(x_norm) <= config_.entry_center_x_tolerance_norm &&
+           std::abs(y_norm - config_.entry_center_target_y_norm) <=
+               config_.entry_center_y_tolerance_norm;
+}
+
+void GridMission::latchGridOrigin(const GridMissionInput& in, GridMissionOutput& out)
+{
+    if (tracker_ && !origin_latched_) {
+        tracker_->forceOrigin(GridCoord{0, 0}, GridHeading::North);
+        origin_latched_ = true;
+    }
+    intersections_recorded_ = 1;
+    last_node_record_s_ = in.now_s;
+    if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
+        last_node_local_x_ = *in.local_x_m;
+        last_node_local_y_ = *in.local_y_m;
+    }
+    const bool valid_intersection =
+        in.vision && in.vision->intersection.valid &&
+        isGridNodeType(in.intersection_decision.accepted_type);
+    last_node_grid_branch_mask_ = valid_intersection
+        ? rotateCameraBranchMaskToGrid(
+              in.intersection_decision.accepted_branch_mask,
+              GridHeading::North)
+        : 0;
+    last_node_front_open_ =
+        valid_intersection && forwardBranchPresent(in.intersection_decision);
+    if (!origin_published_) {
+        GridNodeEvent origin_event;
+        origin_event.valid = true;
+        origin_event.node_id = 1;
+        origin_event.local_coord = GridCoord{0, 0};
+        origin_event.topology = valid_intersection
+            ? in.intersection_decision.accepted_type
+            : onboard::vision::IntersectionType::Unknown;
+        origin_event.arrival_heading = GridHeading::North;
+        origin_event.camera_branch_mask = valid_intersection
+            ? in.intersection_decision.accepted_branch_mask
+            : 0;
+        origin_event.grid_branch_mask = last_node_grid_branch_mask_;
+        origin_event.first_node = true;
+        origin_event.origin_local_only = true;
+        out.origin_publish_event = origin_event;
+        origin_published_ = true;
+    }
+    armHopStart(in);
 }
 
 bool GridMission::isHardFailsafe(const GridMissionInput& in, std::string& reason) const
@@ -307,49 +445,33 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     AltitudePolicyInput alt_in;
     alt_in.now_s = input.now_s;
     alt_in.rangefinder_m = input.rangefinder_m;
-    if (input.local_x_m.has_value() && input.local_y_m.has_value()) {
-        const double dx = *input.local_x_m - off_pad_origin_x_;
-        const double dy = *input.local_y_m - off_pad_origin_y_;
-        alt_in.distance_from_pad_m = std::sqrt(dx * dx + dy * dy);
-    }
+    // Cycle 16: distance_from_pad is not used for state decisions any more.
+    // Leave it at the default — EntryForward is bounded by intersection
+    // detection + an explicit timeout, not by LOCAL_NED displacement.
     alt_in.off_pad_requested =
         (state_ != GridState::Idle &&
          state_ != GridState::ArmTakeoff &&
-         state_ != GridState::VertiportVerify &&
-         state_ != GridState::VertiportYawAlign);
+         state_ != GridState::MarkerLockYaw);
     AltitudePolicyOutput alt_out = altitude_->update(alt_in);
     out.target_altitude_m = alt_out.target_altitude_m;
     out.altitude_off_pad_confirmed = alt_out.off_pad_confirmed;
 
     populateLineInputs(input, out);
 
-    // Cycle 9: marker stability — increment count for every ID visible this
-    // frame, reset for IDs that vanished. Only markers with count >=
-    // marker_observation_min_frames are treated as real downstream.
+    // Cycle 16: sliding-window marker stability. Push the most prominent
+    // non-vertiport marker ID seen this frame (or -1 if none) into the
+    // window. The window flushes itself when two distinct IDs appear inside
+    // it, so transient mis-identifications never accumulate.
     {
-        std::unordered_map<int, bool> seen_this_frame;
+        int observed = -1;
         if (input.vision) {
             for (const auto& m : input.vision->markers) {
                 if (m.id == config_.vertiport_marker_id) continue;
-                seen_this_frame[m.id] = true;
-                auto it = marker_candidate_count_.find(m.id);
-                if (it == marker_candidate_count_.end()) {
-                    marker_candidate_count_[m.id] = 1;
-                } else {
-                    it->second = std::min(it->second + 1,
-                        std::max(1, config_.marker_observation_min_frames * 4));
-                }
+                observed = m.id;
+                break;
             }
         }
-        // Reset counters for IDs not seen this frame.
-        for (auto it = marker_candidate_count_.begin();
-             it != marker_candidate_count_.end(); ) {
-            if (seen_this_frame.find(it->first) == seen_this_frame.end()) {
-                it = marker_candidate_count_.erase(it);
-            } else {
-                ++it;
-            }
-        }
+        marker_window_.push(observed);
     }
 
     // Dispatch
@@ -358,11 +480,9 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
         out.intent = control::GridControlIntent::Idle;
         break;
     case GridState::ArmTakeoff:           handleArmTakeoff(input, out); break;
-    case GridState::VertiportVerify:      handleVertiportVerify(input, out); break;
-    case GridState::VertiportYawAlign:    handleVertiportYawAlign(input, out); break;
-    case GridState::OffPadForward:        handleOffPadForward(input, out); break;
-    case GridState::LineEnter:            handleLineEnter(input, out); break;
-    case GridState::GridOriginLock:       handleGridOriginLock(input, out); break;
+    case GridState::MarkerLockYaw:        handleMarkerLockYaw(input, out); break;
+    case GridState::EntryForward:         handleEntryForward(input, out); break;
+    case GridState::EntryCenterOrigin:    handleEntryCenterOrigin(input, out); break;
     case GridState::SnakeForward:         handleSnakeForward(input, out); break;
     case GridState::SnakeRecordNode:      handleSnakeRecordNode(input, out); break;
     case GridState::SnakeStopAtCenter:    handleSnakeStopAtCenter(input, out); break;
@@ -389,9 +509,12 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     out.intersections_recorded = intersections_recorded_;
     // Cycle 12 B: expose the fresh intersection center for the cy-feedback
     // deceleration in StopAndCenter intent.
+    out.intersection_center_x_norm = intersectionCenterXNorm(input);
     out.intersection_center_y_norm = input.intersection_decision.center_y_norm;
     out.intersection_valid =
+        input.vision && input.vision->intersection.valid &&
         input.intersection_decision.accepted_type != onboard::vision::IntersectionType::None;
+    out.hop_distance_m = hopDistance(input);
 
     // Cycle 13: compute drone fractional position from last committed node
     // using LOCAL_NED displacement. The composition root forwards this to
@@ -429,6 +552,33 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     return out;
 }
 
+// Cycle 16: hop-to-hop helpers.
+void GridMission::armHopStart(const GridMissionInput& in)
+{
+    if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
+        hop_start_local_x_ = *in.local_x_m;
+        hop_start_local_y_ = *in.local_y_m;
+    } else {
+        hop_start_local_x_.reset();
+        hop_start_local_y_.reset();
+    }
+}
+
+double GridMission::hopDistance(const GridMissionInput& in) const
+{
+    if (!hop_start_local_x_.has_value() || !hop_start_local_y_.has_value()) return 0.0;
+    if (!in.local_x_m.has_value() || !in.local_y_m.has_value()) return 0.0;
+    const double dx = *in.local_x_m - *hop_start_local_x_;
+    const double dy = *in.local_y_m - *hop_start_local_y_;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+bool GridMission::inHopAlignWindow(double distance) const
+{
+    return distance >= config_.hop_align_start_m &&
+           distance <= config_.hop_align_end_m;
+}
+
 // --------------------------- Per-state handlers ---------------------------
 
 void GridMission::handleArmTakeoff(const GridMissionInput& in, GridMissionOutput& out)
@@ -436,53 +586,52 @@ void GridMission::handleArmTakeoff(const GridMissionInput& in, GridMissionOutput
     out.request_arm_takeoff = true;
     out.takeoff_altitude_m = config_.vertiport_altitude_m;
     out.intent = control::GridControlIntent::Idle;  // autopilot.takeoff() handles climb
-    const double trigger = config_.vertiport_altitude_m * 0.7;  // 0.91m at 1.3m target
+    const double trigger = config_.vertiport_altitude_m * 0.7;
     const bool rng_ok = in.rangefinder_m.has_value() && *in.rangefinder_m >= trigger;
     const bool alt_ok = in.local_altitude_m.has_value() && *in.local_altitude_m >= trigger;
     if (rng_ok || alt_ok) {
-        transition(GridState::VertiportVerify, in.now_s, "altitude_reached");
+        // Cycle 16: latch the takeoff yaw and pre-compute the
+        // right-90° target so MarkerLockYaw uses a fixed reference frame.
+        if (in.attitude_yaw_rad.has_value()) {
+            yaw_align_target_rad_ =
+                wrap(*in.attitude_yaw_rad + config_.marker_lock_yaw_delta_rad);
+        } else {
+            yaw_align_target_rad_ = config_.marker_lock_yaw_delta_rad;
+        }
+        transition(GridState::MarkerLockYaw, in.now_s, "altitude_reached");
         vertiport_marker_stable_count_ = 0;
+        vertiport_yaw_stable_count_ = 0;
     }
 }
 
-void GridMission::handleVertiportVerify(const GridMissionInput& in, GridMissionOutput& out)
+void GridMission::handleMarkerLockYaw(const GridMissionInput& in, GridMissionOutput& out)
 {
-    out.intent = control::GridControlIntent::HoldPosition;
+    // Cycle 16: combined "marker centered + yaw +90°" pre-flight. Hovers on
+    // top of the vertiport ArUco marker while rotating the body yaw by
+    // marker_lock_yaw_delta_rad (default +π/2 = right 90°). Hands off to
+    // EntryForward only when BOTH the marker is centered (|err| < tol) and
+    // the yaw error is within tolerance for snake_yaw_stable_frames ticks.
+    out.intent = control::GridControlIntent::MarkerHover;
+    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_altitude_m = config_.vertiport_altitude_m;
+
     auto marker = findMarker(in.vision, config_.vertiport_marker_id);
     if (marker.has_value()) {
         ++vertiport_marker_stable_count_;
+        populateMarkerInputs(in, config_.vertiport_marker_id, out);
         if (vertiport_marker_stable_count_ >= config_.vertiport_marker_stable_frames) {
-            // Mark vertiport as seen but NOT bound to grid coord yet.
             if (registry_) {
                 registry_->observe(marker->id, GridCoord{}, /*grid_coord_valid=*/false,
                                    marker->orientation_deg, in.timestamp_ms, in.frame_seq);
             }
-            // Latch yaw alignment target from marker orientation (rad).
-            const double marker_yaw_rad = marker->orientation_deg * M_PI / 180.0;
-            // Vehicle should align to vertiport orientation; we just lock current yaw + marker_yaw delta.
-            if (in.attitude_yaw_rad.has_value()) {
-                yaw_align_target_rad_ = wrap(*in.attitude_yaw_rad - marker_yaw_rad);
-            } else {
-                yaw_align_target_rad_ = -marker_yaw_rad;
-            }
-            vertiport_yaw_stable_count_ = 0;
-            transition(GridState::VertiportYawAlign, in.now_s, "vertiport_locked");
+            out.vertiport_verified = true;
         }
     } else {
         vertiport_marker_stable_count_ = 0;
-        if (in.now_s - state_entry_s_ > config_.vertiport_verify_timeout_s) {
-            out.last_safety_event = "vertiport_verify_timeout";
-            transition(GridState::EmergencyLand, in.now_s, "vertiport_timeout");
-        }
+        out.marker_detected = false;
     }
-    out.vertiport_verified = vertiport_marker_stable_count_ >= config_.vertiport_marker_stable_frames;
-}
 
-void GridMission::handleVertiportYawAlign(const GridMissionInput& in, GridMissionOutput& out)
-{
-    out.intent = control::GridControlIntent::YawAlign;
-    out.target_yaw_rad = yaw_align_target_rad_;
-    out.vertiport_verified = true;
+    bool yaw_ok = false;
     if (in.attitude_yaw_rad.has_value()) {
         const double err = std::abs(wrap(yaw_align_target_rad_ - *in.attitude_yaw_rad));
         if (err <= config_.vertiport_yaw_tolerance_rad) {
@@ -490,155 +639,158 @@ void GridMission::handleVertiportYawAlign(const GridMissionInput& in, GridMissio
         } else {
             vertiport_yaw_stable_count_ = 0;
         }
-        if (vertiport_yaw_stable_count_ >= config_.vertiport_yaw_stable_frames) {
-            if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
-                off_pad_origin_x_ = *in.local_x_m;
-                off_pad_origin_y_ = *in.local_y_m;
-            }
-            transition(GridState::OffPadForward, in.now_s, "yaw_aligned");
-            off_pad_line_stable_count_ = 0;
+        yaw_ok = (vertiport_yaw_stable_count_ >= config_.vertiport_yaw_stable_frames);
+    }
+
+    const bool marker_centered =
+        out.marker_detected &&
+        std::abs(out.marker_center_error_x_norm) <= config_.marker_lock_center_tol_norm &&
+        std::abs(out.marker_center_error_y_norm) <= config_.marker_lock_center_tol_norm;
+
+    if (marker_centered && yaw_ok) {
+        // Cycle 16: enter the free-flight forward phase with yaw frozen at
+        // the post-rotation target. Latch hop_start so EntryForward can use
+        // LOCAL_NED distance as a safety bound if needed.
+        armHopStart(in);
+        if (decision_engine_) {
+            decision_engine_->reset();
         }
-    } else {
-        // Without yaw, skip alignment and proceed (fail-soft).
-        if (in.now_s - state_entry_s_ > 2.0) {
-            if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
-                off_pad_origin_x_ = *in.local_x_m;
-                off_pad_origin_y_ = *in.local_y_m;
-            }
-            transition(GridState::OffPadForward, in.now_s, "yaw_unknown_skip");
-        }
+        entry_forward_start_frame_seq_ = in.frame_seq;
+        transition(GridState::EntryForward, in.now_s, "marker_lock_done");
+        return;
+    }
+
+    if (in.now_s - state_entry_s_ > config_.vertiport_verify_timeout_s) {
+        last_safety_event_ = "marker_lock_timeout";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "marker_lock_timeout");
     }
 }
 
-void GridMission::handleOffPadForward(const GridMissionInput& in, GridMissionOutput& out)
+void GridMission::handleEntryForward(const GridMissionInput& in, GridMissionOutput& out)
 {
+    // Cycle 16: yaw-frozen forward scoot from the vertiport toward the grid.
+    // There is no line between vertiport and the first grid intersection, so
+    // this phase starts by intentionally ignoring vision: while still over
+    // the vertiport texture, the ArUco pattern and pad artwork produce
+    // convincing false L/T/+ candidates. Once LOCAL_NED says the vehicle has
+    // cleared the pad, we wait for the real first grid intersection.
     out.intent = control::GridControlIntent::ForwardBlind;
+    out.forward_speed_override_mps = config_.entry_forward_speed_mps;
+    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_altitude_m = config_.cruise_altitude_m;
     out.vertiport_verified = true;
 
-    double distance_m = 0.0;
-    if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
-        const double dx = *in.local_x_m - off_pad_origin_x_;
-        const double dy = *in.local_y_m - off_pad_origin_y_;
-        distance_m = std::sqrt(dx * dx + dy * dy);
-    }
+    const double progress = hopDistance(in);
+    const double elapsed_s = in.now_s - state_entry_s_;
+    const bool distance_clear = progress >= config_.entry_blind_clear_distance_m;
+    const bool time_clear = elapsed_s >= config_.entry_blind_min_s;
+    const std::uint32_t frames_since_entry =
+        (entry_forward_start_frame_seq_ == 0 || in.frame_seq < entry_forward_start_frame_seq_)
+        ? 0u
+        : in.frame_seq - entry_forward_start_frame_seq_;
+    const bool frames_clear =
+        config_.entry_blind_min_frames <= 0 ||
+        (frames_since_entry >= static_cast<std::uint32_t>(config_.entry_blind_min_frames));
 
-    // Line trigger disabled here: while still over the vertiport texture, the
-    // 'V' graphic can read as a line. Use only LOCAL_NED distance to clear the
-    // pad before handing off to LineEnter.
-    const bool distance_trigger = distance_m >= config_.off_pad_distance_trigger_m;
-    if (distance_trigger) {
-        transition(GridState::LineEnter, in.now_s, "distance_reached");
+    if (distance_clear && time_clear && frames_clear &&
+        progress >= config_.entry_intersection_min_distance_m &&
+        isEntryIntersectionCandidate(in)) {
+        entry_center_stable_count_ = 0;
+        if (decision_engine_) {
+            decision_engine_->reset();
+        }
+        transition(GridState::EntryCenterOrigin, in.now_s, "first_intersection_seen");
         return;
     }
 
-    if (in.now_s - state_entry_s_ > config_.off_pad_timeout_s) {
-        out.last_safety_event = "off_pad_timeout";
-        transition(GridState::EmergencyLand, in.now_s, "off_pad_timeout");
+    if (in.now_s - state_entry_s_ > config_.entry_forward_timeout_s) {
+        last_safety_event_ = "entry_forward_timeout";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "entry_forward_timeout");
     }
 }
 
-void GridMission::handleLineEnter(const GridMissionInput& in, GridMissionOutput& out)
+void GridMission::handleEntryCenterOrigin(const GridMissionInput& in, GridMissionOutput& out)
 {
-    out.intent = control::GridControlIntent::LineFollow;
+    // Center the first grid intersection under the camera before declaring it
+    // as local origin. This keeps the hop anchor aligned with the actual
+    // (0,0) node instead of the first frame where the L/T/+ entered view.
+    out.intent = control::GridControlIntent::IntersectionCenter;
+    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.vertiport_verified = true;
 
-    // Cycle 8: relax NodeRecord Y band on entry so the first vertiport->grid
-    // intersection latches even when it appears slightly above center.
-    if (decision_engine_ && !in_line_enter_relax_) {
-        decision_engine_->setNodeRecordYBand(node_record_y_min_line_enter_,
-                                             node_record_y_max_default_);
-        in_line_enter_relax_ = true;
+    const bool centered = isIntersectionCenteredForEntry(in);
+    const bool velocity_ok =
+        !in.local_velocity_xy_mps.has_value() ||
+        *in.local_velocity_xy_mps <= config_.entry_center_velocity_threshold_mps;
+
+    if (centered && velocity_ok) {
+        ++entry_center_stable_count_;
+    } else {
+        entry_center_stable_count_ = 0;
     }
 
-    if (nodeJustRecorded(in.intersection_decision) && in.node_event.valid) {
-        transition(GridState::GridOriginLock, in.now_s, "first_node");
+    if (entry_center_stable_count_ >= config_.entry_center_stable_frames) {
+        latchGridOrigin(in, out);
+        if (decision_engine_) {
+            decision_engine_->reset();
+        }
+        transition(GridState::SnakeForward, in.now_s, "origin_centered");
         return;
     }
 
-    // Cycle 8: reset timeout counter while a line is still detected. Only
-    // pure idle (no line) for the full timeout window triggers EmergencyLand.
-    if (in.vision && in.vision->line.detected) {
-        line_enter_last_seen_s_ = in.now_s;
+    if (in.now_s - state_entry_s_ > config_.entry_center_timeout_s) {
+        last_safety_event_ = "entry_center_timeout";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "entry_center_timeout");
     }
-    const double idle_s = (line_enter_last_seen_s_ > 0.0)
-        ? (in.now_s - line_enter_last_seen_s_)
-        : (in.now_s - state_entry_s_);
-    if (idle_s > config_.line_enter_timeout_s) {
-        out.last_safety_event = "line_enter_timeout";
-        transition(GridState::EmergencyLand, in.now_s, "line_enter_timeout");
-    }
-}
-
-void GridMission::handleGridOriginLock(const GridMissionInput& in, GridMissionOutput& out)
-{
-    if (tracker_ && !origin_latched_) {
-        tracker_->forceOrigin(GridCoord{0, 0}, GridHeading::North);
-        origin_latched_ = true;
-    }
-    intersections_recorded_ = 1; // first node is (0,0)
-    last_node_record_s_ = in.now_s;
-    // Cycle 8: restore the strict NodeRecord band now that we are inside the
-    // grid, and latch the (0,0) position for the distance gate.
-    if (decision_engine_) {
-        decision_engine_->setNodeRecordYBand(node_record_y_min_default_,
-                                             node_record_y_max_default_);
-    }
-    in_line_enter_relax_ = false;
-    if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
-        last_node_local_x_ = *in.local_x_m;
-        last_node_local_y_ = *in.local_y_m;
-    }
-    // Cycle 12 A: emit a synthetic GridNodeEvent for the origin (0,0) so the
-    // GCS GridMapTracker observes it as the first committed node. With
-    // first_node=true and arrival_heading=north, GCS computes startCoord =
-    // (0,0) - heading_vector(north) = (0,-1) (using the Cycle 12 flipped
-    // headingVector), which puts `s` at the vertiport position.
-    if (!origin_published_) {
-        GridNodeEvent origin_event;
-        origin_event.valid = true;
-        origin_event.node_id = 1;
-        origin_event.local_coord = GridCoord{0, 0};
-        origin_event.topology = onboard::vision::IntersectionType::Unknown;
-        origin_event.arrival_heading = GridHeading::North;
-        origin_event.camera_branch_mask = 0;
-        origin_event.grid_branch_mask = 0;
-        origin_event.first_node = true;
-        origin_event.origin_local_only = true;
-        out.origin_publish_event = origin_event;
-        origin_published_ = true;
-    }
-    out.intent = control::GridControlIntent::LineFollow;
-    transition(GridState::SnakeForward, in.now_s, "origin_locked");
 }
 
 void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutput& out)
 {
-    // Cycle 12 C: blind forward after SnakeTurn90Again so we drive into the
-    // new column before re-engaging line tracking. The boundary watchdog and
-    // node-record logic below are bypassed for this short window.
-    if (in.now_s < snake_post_turn_blind_until_s_) {
+    // Cycle 16: hop-to-hop. From the last committed node, fly yaw-frozen
+    // body-forward for the whole cell. At the configured align window
+    // (default 1.4-1.7m from the hop start) we open a single LineFollow
+    // burst so vision can correct lateral drift + yaw bias once per cell.
+    // Outside that window the controller stays in ForwardBlind, which keeps
+    // yaw fully locked and ignores any LineDetector arrows.
+    //
+    // The next node arrival is detected by intersection.valid AND a minimum
+    // hop distance gate so the just-departed node's residual lookahead does
+    // not retrigger.
+
+    if (!hop_start_local_x_.has_value()) {
+        armHopStart(in);
+    }
+    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_altitude_m = config_.cruise_altitude_m;
+
+    const double distance = hopDistance(in);
+
+    // Cycle 12 C: blind forward immediately after SnakeTurn90Again so we
+    // physically enter the new column before any vision-driven correction
+    // can fight the rotation.
+    const bool post_turn_blind = in.now_s < snake_post_turn_blind_until_s_;
+    const bool in_align_window = !post_turn_blind && inHopAlignWindow(distance);
+
+    if (in_align_window) {
+        out.intent = control::GridControlIntent::LineFollow;
+    } else {
         out.intent = control::GridControlIntent::ForwardBlind;
-        // Reset line-lost timer and distance-gate anchor for a clean start.
-        line_lost_start_s_ = -1.0;
-        if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
-            last_node_local_x_ = *in.local_x_m;
-            last_node_local_y_ = *in.local_y_m;
+    }
+
+    // Line lost tracking — only matters during the LineFollow window. In
+    // ForwardBlind we do not require a line.
+    if (in_align_window) {
+        if (in.vision && in.vision->line.detected) {
+            line_lost_start_s_ = -1.0;
+        } else if (line_lost_start_s_ < 0.0) {
+            line_lost_start_s_ = in.now_s;
         }
-        return;
-    }
-
-    out.intent = control::GridControlIntent::LineFollow;
-
-    // Line lost tracking
-    if (in.vision && in.vision->line.detected) {
+    } else {
         line_lost_start_s_ = -1.0;
-    } else if (line_lost_start_s_ < 0.0) {
-        line_lost_start_s_ = in.now_s;
-    }
-    if (line_lost_start_s_ > 0.0 &&
-        in.now_s - line_lost_start_s_ > config_.snake_line_lost_emergency_s) {
-        out.last_safety_event = "line_lost_emergency";
-        transition(GridState::EmergencyLand, in.now_s, "line_lost");
-        return;
     }
 
     const bool lockout_active =
@@ -648,18 +800,19 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         (last_turn_complete_s_ > 0.0) &&
         (in.now_s - last_turn_complete_s_ < config_.snake_turn_lockout_s);
 
-    // Cycle 10 boundary watchdog: after the post-record grace window, if idec
-    // independently concludes "turn required" (state == TurnConfirm/TurnReady),
-    // promote to SnakeStopAtCenter immediately. NodeRecord events stop firing
-    // once a boundary is reached because idec is locked into the turn states,
-    // so without this we would just sail off the line.
+    // Boundary watchdog: once idec independently decides a turn is required
+    // (state == TurnReady) and we are past the post-record grace period,
+    // promote to SnakeStopAtCenter even if NodeRecord events are silent.
     const double since_last_record_s = (last_node_record_s_ > 0.0)
         ? (in.now_s - last_node_record_s_)
         : config_.snake_post_record_grace_s + 1.0;
-    // Cycle 11: only TurnReady — idec confirms the intersection is in the
-    // turn_zone Y band, i.e. the drone is physically over the node. TurnConfirm
-    // fires earlier while still approaching and would stop the drone mid-cell.
-    if (since_last_record_s >= config_.snake_post_record_grace_s &&
+    // Cycle 16: also require a minimum hop distance before the watchdog can
+    // fire. Without this, the vertiport texture's residual cross artwork can
+    // trip TurnReady the moment we enter SnakeForward and immediately
+    // promote to SnakeStopAtCenter -> SnakeComplete -> LAND.
+    if (!post_turn_blind &&
+        since_last_record_s >= config_.snake_post_record_grace_s &&
+        distance >= config_.hop_intersection_min_distance_m &&
         in.intersection_decision.required_turn &&
         in.intersection_decision.state == IntersectionDecisionState::TurnReady) {
         last_node_front_open_ = forwardBranchPresent(in.intersection_decision);
@@ -672,25 +825,14 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         return;
     }
 
-    // Cycle 8 distance gate: require LOCAL_NED displacement >= 0.5 * cell_size
-    // from the last recorded node to accept a new NodeRecord. Defends against
-    // the same intersection being re-detected after a brief partial view.
-    bool distance_ok = true;
-    if (last_node_local_x_.has_value() && last_node_local_y_.has_value() &&
-        in.local_x_m.has_value() && in.local_y_m.has_value()) {
-        const double dx = *in.local_x_m - *last_node_local_x_;
-        const double dy = *in.local_y_m - *last_node_local_y_;
-        distance_ok = std::sqrt(dx * dx + dy * dy) >= 0.5 * config_.cell_size_m;
-    }
+    // Cycle 16: next-node arrival. The hop distance gate replaces the old
+    // 0.5×cell_size LOCAL_NED gate from Cycle 8.
+    const bool arrival_distance_ok = distance >= config_.hop_intersection_min_distance_m;
 
-    if (!lockout_active && !turn_lockout_active && distance_ok &&
+    if (!post_turn_blind && !lockout_active && !turn_lockout_active && arrival_distance_ok &&
         nodeJustRecorded(in.intersection_decision) && in.node_event.valid) {
         ++intersections_recorded_;
-        // Cycle 9: tell composition root to commit tracker advance.
         out.commit_tracker_advance = true;
-        // Cache branch state for upcoming handleSnakeRecordNode dwell, so the
-        // boundary check reads stable values rather than a stale node_event
-        // that becomes invalid in subsequent ticks.
         last_node_grid_branch_mask_ = in.node_event.grid_branch_mask;
         last_node_front_open_ = forwardBranchPresent(in.intersection_decision);
         if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
@@ -698,49 +840,54 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
             last_node_local_y_ = *in.local_y_m;
         }
 
-        // Exit conditions check
         if (registry_ && registry_->gridMarkerCount() >= static_cast<std::size_t>(config_.markers_expected)) {
             transition(GridState::SnakeRecordNode, in.now_s, "record_pre_complete");
             last_node_record_s_ = in.now_s;
             return;
         }
-
-        // Check forward branch availability AFTER node
         if (!forwardBranchPresent(in.intersection_decision) ||
             in.node_event.camera_branch_mask == 0) {
-            // boundary reached - transition through RecordNode then StopAtCenter
             transition(GridState::SnakeRecordNode, in.now_s, "record_boundary");
             last_node_record_s_ = in.now_s;
             return;
         }
         transition(GridState::SnakeRecordNode, in.now_s, "record_node");
         last_node_record_s_ = in.now_s;
+        return;
+    }
+
+    // Distance failsafe — if we have gone well past one cell length without
+    // seeing the next intersection, hand off to the EmergencyLand path.
+    if (distance > config_.hop_max_distance_m) {
+        last_safety_event_ = "hop_distance_exceeded";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "hop_distance_exceeded");
     }
 }
 
 void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionOutput& out)
 {
     // Default: line-follow with deceleration through the node (Cycle 9 Option C).
-    out.intent = control::GridControlIntent::LineFollow;
-    out.advance_phase = true;  // cap forward speed to forward_speed_advance_mps
+    // Cycle 16: hold position during the short dwell so vision has clean
+    // frames to settle the branch classification. Marker nodes override to
+    // MarkerHover further down.
+    out.intent = control::GridControlIntent::HoldPosition;
+    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.advance_phase = false;
 
-    // Cycle 9 marker stability: only accept markers seen for N consecutive frames.
-    // Cycle 15: once we have latched a marker for this dwell, hold it even if
-    // the camera momentarily loses sight of the marker — otherwise a single
-    // frame with mks=0 drops focus_marker_id to -1, intent falls back to
-    // LineFollow, and the visual hover effect is lost while dwell continues.
+    // Cycle 16: pick the marker focus from the sliding window. If a stable
+    // ID was latched on a previous tick we keep it for the rest of the dwell
+    // even when the camera momentarily loses the marker.
     int focus_marker_id = -1;
     if (marker_hover_active_ && last_recorded_marker_id_ >= 0) {
         focus_marker_id = last_recorded_marker_id_;
-    } else if (in.vision) {
-        for (const auto& m : in.vision->markers) {
-            if (m.id == config_.vertiport_marker_id) continue;
-            if (registry_ && registry_->hasId(m.id)) continue;
-            auto it = marker_candidate_count_.find(m.id);
-            const int seen = (it != marker_candidate_count_.end()) ? it->second : 0;
-            if (seen < config_.marker_observation_min_frames) continue;
-            focus_marker_id = m.id;
-            break;
+    } else {
+        const int stable_id = marker_window_.bestStableId();
+        if (stable_id >= 0 &&
+            stable_id != config_.vertiport_marker_id &&
+            (!registry_ || !registry_->hasId(stable_id))) {
+            focus_marker_id = stable_id;
         }
     }
     if (focus_marker_id >= 0) {
@@ -795,6 +942,8 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
             snake_stop_stable_count_ = 0;
             return;
         }
+        // Cycle 16: restart hop measurement from the just-recorded node.
+        armHopStart(in);
         transition(GridState::SnakeForward, in.now_s, "node_done");
     }
 }
@@ -862,6 +1011,9 @@ void GridMission::handleSnakeTurn90(const GridMissionInput& in, GridMissionOutpu
             // into the new corridor before re-engaging line tracking.
             snake_post_turn_blind_until_s_ =
                 in.now_s + config_.snake_post_turn_blind_s;
+            // Cycle 16: arm a fresh hop anchor — the column-transition cell
+            // starts here, not at the boundary node.
+            armHopStart(in);
             transition(GridState::SnakeAdvanceOneCell, in.now_s, "turn1_done");
         }
     }
@@ -871,37 +1023,43 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
 {
     // Cycle 12 C: blind forward immediately after the turn so the camera
     // clears the old corridor's line before we try to track again.
-    if (in.now_s < snake_post_turn_blind_until_s_) {
+    if (!hop_start_local_x_.has_value()) {
+        armHopStart(in);
+    }
+    out.target_yaw_rad = yaw_target_rad_;
+    out.target_altitude_m = config_.cruise_altitude_m;
+
+    const double distance = hopDistance(in);
+
+    const bool post_turn_blind = in.now_s < snake_post_turn_blind_until_s_;
+    const bool in_align_window = !post_turn_blind && inHopAlignWindow(distance);
+    if (in_align_window) {
+        out.intent = control::GridControlIntent::LineFollow;
+    } else {
         out.intent = control::GridControlIntent::ForwardBlind;
-        // Reset the distance-gate anchor so the very first node we accept in
-        // the new corridor is honoured even if the LOCAL_NED delta is small.
-        if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
-            last_node_local_x_ = *in.local_x_m;
-            last_node_local_y_ = *in.local_y_m;
-        }
+    }
+
+    if (post_turn_blind) {
         // Hard timeout still applies (snake_advance_timeout_s).
         if (in.now_s - state_entry_s_ > config_.snake_advance_timeout_s) {
-            out.last_safety_event = "advance_timeout";
+            last_safety_event_ = "advance_timeout";
+            out.last_safety_event = last_safety_event_;
             transition(GridState::EmergencyLand, in.now_s, "advance_timeout");
         }
         return;
     }
 
-    out.intent = control::GridControlIntent::LineFollow;
-    out.advance_phase = true;
-
     const bool turn_lockout = in.now_s - last_turn_complete_s_ < config_.snake_turn_lockout_s;
+    const bool arrival_distance_ok = distance >= config_.hop_intersection_min_distance_m;
 
-    if (!turn_lockout &&
+    if (!turn_lockout && arrival_distance_ok &&
         nodeJustRecorded(in.intersection_decision) && in.node_event.valid) {
         ++intersections_recorded_;
         last_node_record_s_ = in.now_s;
 
         // Cycle 15: commit the column-transition cell to the tracker so the
         // subsequent SnakeForward starts from the new column's first row, not
-        // from the old column's last row. Without this, column 2+ commits
-        // overwrite column 1 coords in the GCS grid and SnakeForward's
-        // LineFollow chases the previous column's residual line.
+        // from the old column's last row.
         out.commit_tracker_advance = true;
         if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
             last_node_local_x_ = *in.local_x_m;
@@ -917,8 +1075,10 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
         return;
     }
 
-    if (in.now_s - state_entry_s_ > config_.snake_advance_timeout_s) {
-        out.last_safety_event = "advance_timeout";
+    if (in.now_s - state_entry_s_ > config_.snake_advance_timeout_s ||
+        distance > config_.hop_max_distance_m) {
+        last_safety_event_ = "advance_timeout";
+        out.last_safety_event = last_safety_event_;
         transition(GridState::EmergencyLand, in.now_s, "advance_timeout");
     }
 }
@@ -949,6 +1109,9 @@ void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMission
             // re-engages line tracking.
             snake_post_turn_blind_until_s_ =
                 in.now_s + config_.snake_post_turn_blind_s;
+            // Cycle 16: hop measurement restarts at the boundary node where
+            // the second turn completes — that is the new column's first row.
+            armHopStart(in);
             transition(GridState::SnakeForward, in.now_s, "turn2_done");
         }
     }
