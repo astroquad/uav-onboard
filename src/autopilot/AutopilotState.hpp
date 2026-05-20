@@ -30,10 +30,15 @@ struct AutopilotState {
     std::optional<int> rc_channel_count;
     std::optional<int> rc_rssi;
     std::array<std::uint16_t, 18> rc_channels_pwm {};
+    std::optional<double> attitude_roll_rad;
+    std::optional<double> attitude_pitch_rad;
+    std::optional<double> attitude_yaw_rad;
+    std::optional<double> attitude_yawspeed_rad_s;
     std::chrono::steady_clock::time_point last_heartbeat_time {};
     std::chrono::steady_clock::time_point last_optical_flow_time {};
     std::chrono::steady_clock::time_point last_ekf_status_time {};
     std::chrono::steady_clock::time_point last_rc_channels_time {};
+    std::chrono::steady_clock::time_point last_attitude_time {};
 };
 
 struct MavlinkIds {

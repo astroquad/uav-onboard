@@ -4,6 +4,63 @@ grid_cols = 0
 marker_count = 0
 snake_start_direction = "east"
 
+[grid_mission]
+vertiport_marker_id = 23
+markers_expected = 4
+vertiport_altitude_m = 2.0
+cruise_altitude_m = 2.0
+vertiport_verify_timeout_s = 8.0
+vertiport_marker_stable_frames = 3
+vertiport_yaw_tolerance_deg = 5.0
+off_pad_timeout_s = 15.0
+off_pad_distance_trigger_m = 3.0
+off_pad_line_locked_frames = 3
+line_enter_timeout_s = 10.0
+cell_size_m = 3.0
+snake_record_lockout_s = 3.0
+snake_turn_lockout_s = 3.0
+snake_marker_hover_s = 3.0
+snake_line_lost_warn_s = 4.0
+snake_line_lost_emergency_s = 8.0
+snake_stop_velocity_threshold_mps = 0.05
+# Cycle 13: bumped 8.0 -> 15.0. With forward_speed_advance_mps=0.30 and
+# snake_post_turn_blind_s=1.5, the post-blind line-follow window is
+# (15 - 1.5) * 0.30 = 4.05m which comfortably exceeds cell_size_m=3.0.
+snake_advance_timeout_s = 15.0
+# Cycle 13: was hard-coded 0.18 in GridControlMapperConfig; raised to 0.30 so
+# SnakeAdvanceOneCell can traverse one cell within snake_advance_timeout_s
+# while still allowing the line controller time to recentre after a turn.
+forward_speed_advance_mps = 0.30
+max_intersections = 50
+mission_timeout_s = 600.0
+altitude_ceiling_m = 3.5
+snake_complete_hover_s = 2.0
+# Cycle 9: marker must be seen for N consecutive frames before being treated
+# as a real candidate. Guards against 1-2 frame ArUco false positives.
+# Cycle 11: raised 3 -> 6 because OpenCV ArUco occasionally locks onto
+# intersection cross/T patterns for 3+ frames and would otherwise commit fake
+# IDs (e.g. id=1, id=7 at a non-marker intersection).
+marker_observation_min_frames = 6
+# Cycle 9: dwell at every non-marker intersection while decelerating
+# (forward_speed_advance_mps). Marker intersections override with
+# snake_marker_hover_s.
+snake_record_dwell_s = 0.3
+# Cycle 10: after a NodeRecord, the boundary watchdog in SnakeForward is
+# disabled for this many seconds so the just-recorded node's residual
+# T/L branches don't immediately re-trigger as a boundary.
+snake_post_record_grace_s = 0.8
+# Cycle 12: blind forward duration after each 90° turn (SnakeTurn90 and
+# SnakeTurn90Again). Mirrors the off-pad-forward pattern so the camera moves
+# into the new corridor before re-engaging line tracking.
+snake_post_turn_blind_s = 2.5
+# Cycle 12: cy-feedback deceleration in SnakeStopAtCenter. The drone keeps
+# moving forward at a tapered slow speed until the intersection center
+# reaches stop_center_target_cy, producing a position-based precision stop.
+stop_center_target_cy = 0.55
+stop_center_max_vx_mps = 0.10
+stop_center_taper_gap = 0.30
+initial_snake_turn = "auto"  # auto | left | right
+
 [takeoff]
 target_altitude_m = 2.0
 altitude_reached_ratio = 0.9

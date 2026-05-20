@@ -360,7 +360,10 @@ IntersectionDecision IntersectionDecisionEngine::update(
         decision.required_turn && decision.center_y_norm >= static_cast<float>(config_.late_zone_y);
     decision.overshoot_risk = decision.required_turn && too_late && !in_turn_zone;
 
-    if (isNodeType(decision.accepted_type) && record_lockout_remaining_ == 0) {
+    const bool in_node_zone =
+        decision.center_y_norm >= static_cast<float>(config_.node_record_y_min) &&
+        decision.center_y_norm <= static_cast<float>(config_.node_record_y_max);
+    if (isNodeType(decision.accepted_type) && record_lockout_remaining_ == 0 && in_node_zone) {
         decision.event_ready = true;
         decision.node_recorded = true;
         record_lockout_remaining_ = std::max(1, config_.record_node_once_frames);
@@ -404,6 +407,12 @@ void IntersectionDecisionEngine::startCooldown()
 {
     samples_.clear();
     cooldown_remaining_ = std::max(0, config_.cooldown_frames);
+}
+
+void IntersectionDecisionEngine::setNodeRecordYBand(double y_min, double y_max)
+{
+    config_.node_record_y_min = y_min;
+    config_.node_record_y_max = y_max;
 }
 
 const char* decisionStateName(IntersectionDecisionState state)

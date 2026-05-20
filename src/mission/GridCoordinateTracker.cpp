@@ -94,35 +94,77 @@ GridNodeEvent GridCoordinateTracker::update(
         return event;
     }
 
+    // Cycle 9: peek-only. Compute what the next node WOULD be — its coord
+    // (one cell forward of current_coord_ in current_heading_), topology,
+    // and branches — but do NOT mutate current_coord_/current_heading_/nodes_.
+    // GridMission gates the decision and calls commitAdvance to finalize.
+    GridHeading peek_heading = current_heading_;
+    GridCoord peek_coord = current_coord_;
+    bool peek_first_node = false;
+
     if (!has_origin_) {
-        has_origin_ = true;
-        if (current_heading_ == GridHeading::Unknown) {
-            // Vision-only grid smoke starts from the launch line into the first node.
-            // Until MAVLink/IMU heading is wired in, treat that first arrival as north.
-            current_heading_ = GridHeading::North;
-            using_default_start_heading_ = true;
+        if (peek_heading == GridHeading::Unknown) {
+            peek_heading = GridHeading::North;
         }
-        current_coord_ = {};
-        event.first_node = true;
-    } else if (current_heading_ != GridHeading::Unknown) {
-        current_coord_ = advance(current_coord_, current_heading_);
+        peek_coord = {};
+        peek_first_node = true;
+    } else if (peek_heading != GridHeading::Unknown) {
+        peek_coord = advance(peek_coord, peek_heading);
     }
 
     event.valid = true;
-    event.node_id = next_node_id_++;
-    event.local_coord = current_coord_;
+    event.node_id = next_node_id_;  // not incremented during peek
+    event.local_coord = peek_coord;
     event.topology = decision.accepted_type;
-    event.arrival_heading = current_heading_;
+    event.arrival_heading = peek_heading;
     event.camera_branch_mask = decision.accepted_branch_mask;
     event.grid_branch_mask = rotateCameraBranchMaskToGrid(
         decision.accepted_branch_mask,
-        current_heading_);
+        peek_heading);
+    event.first_node = peek_first_node;
     event.origin_local_only = true;
 
-    nodes_[event.local_coord] = event;
+    // Frame-level dedup: bump regardless of whether mission ends up committing.
+    // Without this, every frame after lockout expiry would re-emit the same
+    // peek event indefinitely.
     last_node_frame_seq_ = frame_seq;
-    current_heading_ = chooseNextHeading(decision);
     return event;
+}
+
+void GridCoordinateTracker::commitAdvance(const GridNodeEvent& event)
+{
+    if (!event.valid) {
+        return;
+    }
+    // Idempotency: if this event was already committed (last_node_frame_seq_
+    // matches and coord identical), skip.
+    if (event.node_id != 0 && event.node_id < next_node_id_ &&
+        nodes_.count(event.local_coord) != 0) {
+        return;
+    }
+
+    if (!has_origin_) {
+        has_origin_ = true;
+        if (current_heading_ == GridHeading::Unknown) {
+            current_heading_ = event.arrival_heading != GridHeading::Unknown
+                ? event.arrival_heading
+                : GridHeading::North;
+            using_default_start_heading_ = true;
+        }
+        current_coord_ = event.local_coord;
+    } else if (current_heading_ != GridHeading::Unknown) {
+        current_coord_ = event.local_coord;
+    }
+
+    GridNodeEvent committed = event;
+    committed.node_id = next_node_id_++;
+    nodes_[committed.local_coord] = committed;
+
+    // chooseNextHeading uses decision-derived branch info; reconstruct minimal
+    // decision from event.camera_branch_mask for the heading choice.
+    IntersectionDecision proxy;
+    proxy.accepted_branch_mask = event.camera_branch_mask;
+    current_heading_ = chooseNextHeading(proxy);
 }
 
 void GridCoordinateTracker::notifyTurnCompleted(GridHeading new_heading)
@@ -150,6 +192,16 @@ void GridCoordinateTracker::resetLocalOrigin()
     nodes_.clear();
 }
 
+void GridCoordinateTracker::forceOrigin(GridCoord coord, GridHeading heading)
+{
+    has_origin_ = true;
+    current_coord_ = coord;
+    current_heading_ = heading;
+    using_default_start_heading_ = false;
+    pending_second_turn_ = false;
+    pending_turn_right_ = true;
+}
+
 GridHeading GridCoordinateTracker::currentHeading() const
 {
     return current_heading_;
@@ -167,6 +219,10 @@ const std::map<GridCoord, GridNodeEvent, GridCoordLess>& GridCoordinateTracker::
 
 GridCoord GridCoordinateTracker::advance(GridCoord coord, GridHeading heading) const
 {
+    // Cycle 13: reverted to screen convention — north = -y, south = +y. The
+    // first grid node is (0,0), then (0,-1), (0,-2)... as the drone proceeds
+    // north up the column; vertiport sits at (0,+1). GCS canvasRow uses
+    // (y - min_y) * 2 so smaller y still renders at the top of the canvas.
     switch (heading) {
     case GridHeading::North:
         --coord.y;

@@ -175,6 +175,12 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
             {"node", nodeToJson(telemetry.vision.intersection_decision.node)},
         }},
         {"grid_node", nodeToJson(telemetry.vision.grid_node)},
+        {"drone_position", {
+            {"valid", telemetry.vision.drone_position.valid},
+            {"cell_progress", telemetry.vision.drone_position.cell_progress},
+            {"grid_offset_x", telemetry.vision.drone_position.grid_offset_x},
+            {"grid_offset_y", telemetry.vision.drone_position.grid_offset_y},
+        }},
         {"marker_detected", telemetry.vision.marker_detected},
         {"marker_id", telemetry.vision.marker_id},
         {"marker_count", telemetry.vision.markers.size()},
@@ -217,6 +223,40 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
         {"line_selected_contour_points", telemetry.debug.line_selected_contour_points},
         {"note", telemetry.note},
     };
+
+    if (telemetry.mission.present) {
+        nlohmann::json markers_found = nlohmann::json::array();
+        for (const auto& m : telemetry.mission.markers_found) {
+            markers_found.push_back({
+                {"id", m.id},
+                {"grid", {m.grid_x, m.grid_y}},
+                {"grid_valid", m.grid_valid},
+                {"orientation_deg", m.orientation_deg},
+            });
+        }
+        message["mission"] = {
+            {"state", telemetry.mission.state},
+            {"control_intent", telemetry.mission.control_intent},
+            {"phase_elapsed_ms", telemetry.mission.phase_elapsed_ms},
+            {"target_altitude_m", telemetry.mission.target_altitude_m},
+            {"altitude_off_pad_confirmed", telemetry.mission.altitude_off_pad_confirmed},
+            {"grid", {
+                {"x", telemetry.mission.grid.x},
+                {"y", telemetry.mission.grid.y},
+                {"heading", telemetry.mission.grid.heading},
+                {"snake_dir", telemetry.mission.grid.snake_dir},
+                {"valid", telemetry.mission.grid.valid},
+            }},
+            {"vertiport", {
+                {"verified", telemetry.mission.vertiport.verified},
+                {"marker_id", telemetry.mission.vertiport.marker_id},
+            }},
+            {"markers_found", markers_found},
+            {"markers_expected", telemetry.mission.markers_expected},
+            {"snake_complete", telemetry.mission.snake_complete},
+            {"last_safety_event", telemetry.mission.last_safety_event},
+        };
+    }
 
     return message.dump();
 }

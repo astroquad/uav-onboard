@@ -83,6 +83,17 @@ struct GridNodeTelemetry {
     bool origin_local_only = true;
 };
 
+// Cycle 13: fractional drone position relative to the last committed grid
+// node, used by the GCS to render the heading arrow at a sub-cell position
+// so the operator can see progress along the line in real time rather than
+// only at intersection commits.
+struct DronePositionTelemetry {
+    bool   valid = false;
+    double cell_progress = 0.0;  // 0.0 (at last node) ~ 1.0 (next node)
+    double grid_offset_x = 0.0;  // fractional grid-frame X offset from last node
+    double grid_offset_y = 0.0;  // fractional grid-frame Y offset from last node
+};
+
 struct IntersectionDecisionTelemetry {
     std::string state = "cruise";
     std::string action = "continue";
@@ -135,6 +146,8 @@ struct VisionTelemetry {
     IntersectionTelemetry intersection;
     IntersectionDecisionTelemetry intersection_decision;
     GridNodeTelemetry grid_node;
+    // Cycle 13: drone fractional position from the last committed grid node.
+    DronePositionTelemetry drone_position;
     bool marker_detected = false;
     int marker_id = -1;
     std::vector<MarkerTelemetry> markers;
@@ -144,6 +157,42 @@ struct GridTelemetry {
     int row = -1;
     int col = -1;
     double heading_deg = 0.0;
+};
+
+struct MissionGridTelemetry {
+    int x = 0;
+    int y = 0;
+    std::string heading = "unknown";
+    std::string snake_dir = "unknown";
+    bool valid = false;
+};
+
+struct MissionVertiportTelemetry {
+    bool verified = false;
+    int marker_id = -1;
+};
+
+struct MissionMarkerEntry {
+    int id = -1;
+    int grid_x = 0;
+    int grid_y = 0;
+    bool grid_valid = false;
+    double orientation_deg = 0.0;
+};
+
+struct MissionTelemetry {
+    bool present = false;
+    std::string state = "idle";
+    std::string control_intent = "idle";
+    std::int64_t phase_elapsed_ms = 0;
+    double target_altitude_m = 0.0;
+    bool altitude_off_pad_confirmed = false;
+    MissionGridTelemetry grid;
+    MissionVertiportTelemetry vertiport;
+    std::vector<MissionMarkerEntry> markers_found;
+    int markers_expected = 0;
+    bool snake_complete = false;
+    std::string last_safety_event;
 };
 
 struct DebugTelemetry {
@@ -198,6 +247,7 @@ struct BringupTelemetry {
     VisionTelemetry vision;
     GridTelemetry grid;
     DebugTelemetry debug;
+    MissionTelemetry mission;
     std::string note;
 };
 

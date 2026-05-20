@@ -122,11 +122,20 @@ late_zone_y = 0.78
 min_prearm_frames = 2
 front_missing_frames = 2
 node_advance_min_frames = 4
+# Cycle 8: NodeRecord is only emitted when the detected intersection centre
+# lies inside this normalized Y band. Avoids latching false nodes off the
+# frame top edge where partial T/+/L geometry yields fused angles.
+node_record_y_min = 0.40
+node_record_y_max = 0.65
 
 [aruco]
 dictionary = "DICT_4X4_50"
 marker_size_mm = 80.0
-min_marker_perimeter_rate = 0.03
+# Cycle 11: raised 0.03 -> 0.05 to reject small candidate quads that the
+# ArUco detector picks up at grid intersections (cross / T) and misclassifies
+# as real markers. 80mm marker at 2m altitude is comfortably above 5% of the
+# image perimeter.
+min_marker_perimeter_rate = 0.05
 max_marker_perimeter_rate = 4.0
 adaptive_thresh_win_size_min = 3
 adaptive_thresh_win_size_max = 23

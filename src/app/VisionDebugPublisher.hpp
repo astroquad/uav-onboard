@@ -30,6 +30,13 @@ struct VisionDebugPublishInput {
     vision::VisionProcessingOutput vision_output;
     mission::IntersectionDecision intersection_decision;
     mission::GridNodeEvent grid_node;
+    // Cycle 13: drone fractional position from the last committed grid node,
+    // used by the GCS GridMapTracker to render the heading arrow at a sub-cell
+    // position so the operator can see the drone moving along the line.
+    bool   drone_position_valid = false;
+    double drone_cell_progress = 0.0;
+    double drone_grid_offset_x = 0.0;
+    double drone_grid_offset_y = 0.0;
     double read_frame_ms = 0.0;
     double jpeg_decode_ms = 0.0;
     double processing_latency_ms = 0.0;

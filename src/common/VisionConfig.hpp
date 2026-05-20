@@ -140,6 +140,11 @@ struct IntersectionDecisionConfig {
     int min_prearm_frames = 2;
     int front_missing_frames = 2;
     int node_advance_min_frames = 4;
+    // NodeRecord requires the detected intersection center to fall within
+    // this normalized Y band. Cycle 8: avoids latching nodes off the frame
+    // top edge where T/+/L geometry is only partially visible.
+    double node_record_y_min = 0.40;
+    double node_record_y_max = 0.65;
 };
 
 struct FrameSourceConfig {

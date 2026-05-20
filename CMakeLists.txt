@@ -55,10 +55,15 @@ add_library(onboard_core STATIC
     src/common/NetworkConfig.cpp
     src/common/Time.cpp
     src/common/VisionConfig.cpp
+    src/control/GridControlMapper.cpp
     src/control/GuidedVelocityController.cpp
+    src/mission/AltitudePolicy.cpp
     src/mission/GridCoordinateTracker.cpp
+    src/mission/GridMission.cpp
     src/mission/IntersectionDecision.cpp
     src/mission/LineFollowMission.cpp
+    src/mission/MarkerRegistry.cpp
+    src/mission/SnakePlanner.cpp
     src/network/UdpTelemetrySender.cpp
     src/protocol/TelemetryMessage.cpp
     src/safety/SafetyMonitor.cpp
@@ -232,6 +237,16 @@ if(BUILD_TOOLS)
         )
         target_include_directories(vision_debug_node PRIVATE src)
         target_link_libraries(vision_debug_node PRIVATE onboard_core onboard_video onboard_vision)
+
+        if(TARGET onboard_autopilot)
+            add_executable(grid_mission_node
+                tools/grid_mission_node.cpp
+                src/app/VisionDebugPublisher.cpp
+            )
+            target_include_directories(grid_mission_node PRIVATE src)
+            target_link_libraries(grid_mission_node PRIVATE
+                onboard_core onboard_autopilot onboard_video onboard_vision)
+        endif()
     else()
         message(WARNING "OpenCV with aruco was not found; camera_preview, aruco_detector_tester, and vision_debug_node will not be built.")
     endif()

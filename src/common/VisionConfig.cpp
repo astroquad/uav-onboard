@@ -244,6 +244,10 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             decision["front_missing_frames"].value_or(config.intersection_decision.front_missing_frames);
         config.intersection_decision.node_advance_min_frames =
             decision["node_advance_min_frames"].value_or(config.intersection_decision.node_advance_min_frames);
+        config.intersection_decision.node_record_y_min =
+            decision["node_record_y_min"].value_or(config.intersection_decision.node_record_y_min);
+        config.intersection_decision.node_record_y_max =
+            decision["node_record_y_max"].value_or(config.intersection_decision.node_record_y_max);
     }
 
     return config;

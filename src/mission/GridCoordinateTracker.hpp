@@ -48,14 +48,24 @@ class GridCoordinateTracker {
 public:
     explicit GridCoordinateTracker(const common::IntersectionDecisionConfig& config);
 
+    // Peek-only: previews what the next node event would look like (its coord,
+    // topology, branches) given the current heading. Does NOT advance internal
+    // state. Cycle 9 split: GridMission decides via distance/lockout gates
+    // whether to commit, then calls commitAdvance to actually move the tracker.
     GridNodeEvent update(
         const IntersectionDecision& decision,
         std::uint32_t frame_seq,
         std::int64_t timestamp_ms);
 
+    // Commit a previously previewed event: advances current_coord_, updates
+    // heading via chooseNextHeading, records the node in the map. Idempotent
+    // if called twice for the same frame_seq.
+    void commitAdvance(const GridNodeEvent& event);
+
     void notifyTurnCompleted(GridHeading new_heading);
     void setHeading(GridHeading heading);
     void resetLocalOrigin();
+    void forceOrigin(GridCoord coord, GridHeading heading);
 
     GridHeading currentHeading() const;
     GridCoord currentCoord() const;

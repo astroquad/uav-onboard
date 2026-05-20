@@ -74,6 +74,7 @@ void AutopilotMavlinkAdapter::requestDefaultStreams()
     requestMessageInterval(MAVLINK_MSG_ID_DISTANCE_SENSOR, 10.0);
     requestMessageInterval(MAVLINK_MSG_ID_LOCAL_POSITION_NED, 10.0);
     requestMessageInterval(MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 5.0);
+    requestMessageInterval(MAVLINK_MSG_ID_ATTITUDE, 20.0);
 #ifdef MAVLINK_MSG_ID_RANGEFINDER
     requestMessageInterval(MAVLINK_MSG_ID_RANGEFINDER, 10.0);
 #endif
@@ -431,6 +432,16 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
         mavlink_global_position_int_t position {};
         mavlink_msg_global_position_int_decode(&message, &position);
         state_.relative_altitude_m = position.relative_alt / 1000.0;
+    } else if (message.msgid == MAVLINK_MSG_ID_ATTITUDE) {
+        mavlink_attitude_t attitude {};
+        mavlink_msg_attitude_decode(&message, &attitude);
+        if (std::isfinite(attitude.roll) && std::isfinite(attitude.pitch) && std::isfinite(attitude.yaw)) {
+            state_.attitude_roll_rad = attitude.roll;
+            state_.attitude_pitch_rad = attitude.pitch;
+            state_.attitude_yaw_rad = attitude.yaw;
+            state_.attitude_yawspeed_rad_s = attitude.yawspeed;
+            state_.last_attitude_time = Clock::now();
+        }
 #ifdef MAVLINK_MSG_ID_OPTICAL_FLOW
     } else if (message.msgid == MAVLINK_MSG_ID_OPTICAL_FLOW) {
         mavlink_optical_flow_t flow {};

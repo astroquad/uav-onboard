@@ -510,6 +510,10 @@ VisionDebugPublishStats VisionDebugPublisher::publish(VisionDebugPublishInput in
         telemetry.vision.intersection_decision =
             toProtocolIntersectionDecision(input.intersection_decision, input.grid_node);
         telemetry.vision.grid_node = toProtocolGridNode(input.grid_node);
+        telemetry.vision.drone_position.valid = input.drone_position_valid;
+        telemetry.vision.drone_position.cell_progress = input.drone_cell_progress;
+        telemetry.vision.drone_position.grid_offset_x = input.drone_grid_offset_x;
+        telemetry.vision.drone_position.grid_offset_y = input.drone_grid_offset_y;
         if (input.grid_node.valid) {
             telemetry.grid.col = input.grid_node.local_coord.x;
             telemetry.grid.row = input.grid_node.local_coord.y;
