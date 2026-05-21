@@ -228,8 +228,6 @@ void loadConfigs(const Options& opt, Configs& cfg)
             g.snake_record_lockout_s = gm["snake_record_lockout_s"].value_or(g.snake_record_lockout_s);
             g.snake_turn_lockout_s = gm["snake_turn_lockout_s"].value_or(g.snake_turn_lockout_s);
             g.snake_marker_hover_s = gm["snake_marker_hover_s"].value_or(g.snake_marker_hover_s);
-            g.snake_line_lost_warn_s = gm["snake_line_lost_warn_s"].value_or(g.snake_line_lost_warn_s);
-            g.snake_line_lost_emergency_s = gm["snake_line_lost_emergency_s"].value_or(g.snake_line_lost_emergency_s);
             g.snake_advance_timeout_s = gm["snake_advance_timeout_s"].value_or(g.snake_advance_timeout_s);
             g.max_intersections = gm["max_intersections"].value_or(g.max_intersections);
             g.mission_timeout_s = gm["mission_timeout_s"].value_or(g.mission_timeout_s);
@@ -241,8 +239,6 @@ void loadConfigs(const Options& opt, Configs& cfg)
                 gm["snake_post_record_grace_s"].value_or(g.snake_post_record_grace_s);
             g.snake_post_turn_blind_s =
                 gm["snake_post_turn_blind_s"].value_or(g.snake_post_turn_blind_s);
-            g.hop_align_start_m = gm["hop_align_start_m"].value_or(g.hop_align_start_m);
-            g.hop_align_end_m = gm["hop_align_end_m"].value_or(g.hop_align_end_m);
             g.hop_max_distance_m = gm["hop_max_distance_m"].value_or(g.hop_max_distance_m);
             g.hop_intersection_min_distance_m =
                 gm["hop_intersection_min_distance_m"].value_or(g.hop_intersection_min_distance_m);

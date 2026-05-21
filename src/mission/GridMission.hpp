@@ -34,6 +34,14 @@ enum class GridState {
     SnakeTurn90,
     SnakeAdvanceOneCell,
     SnakeTurn90Again,
+    // Cycle 26: 3-second marker hover state for turn nodes. Boundary
+    // watchdog and SnakeAdvanceOneCell arrival route through this when a
+    // marker is detected at the cell, so turn-cell markers get the same
+    // 3-second hover that SnakeRecordNode gives to regular-cell markers.
+    // After hover, transitions to whichever GridState was latched in
+    // pending_post_hover_state_ (SnakeStopAtCenter for first turn,
+    // SnakeTurn90Again for second turn).
+    TurnNodeMarkerHover,
     SnakeComplete,
     Land,
     EmergencyLand,
@@ -102,19 +110,15 @@ struct GridMissionConfig {
     double snake_record_lockout_s = 3.0;
     double snake_turn_lockout_s = 3.0;
     double snake_marker_hover_s = 3.0;
-    double snake_line_lost_warn_s = 4.0;
-    double snake_line_lost_emergency_s = 8.0;
     double snake_stop_velocity_threshold_mps = 0.05;
     int    snake_stop_velocity_consecutive_frames = 2;
     double snake_yaw_target_tolerance_rad = 0.0872665;
     int    snake_yaw_stable_frames = 2;
     double snake_advance_timeout_s = 15.0;
-    // Cycle 16: hop-to-hop progress thresholds (LOCAL_NED distance from the
-    // last commit node). Inside [align_start, align_end] the controller runs
-    // a brief LineFollow window to recentre yaw + vy on the line; everywhere
-    // else inside the cell ForwardBlind keeps yaw locked.
-    double hop_align_start_m = 1.4;
-    double hop_align_end_m = 1.7;
+    // Hop-to-hop progress is measured from the last committed node. During
+    // forward hops the mission stays in ForwardBlind: yaw remains locked to
+    // the mission target while the mapper borrows only lateral vy from the
+    // line controller when a straight corridor is confidently visible.
     // Distance failsafe — if we never see the next intersection within this
     // many metres, give up the hop and let the timeout failsafe kick in.
     double hop_max_distance_m = 3.5;
@@ -312,20 +316,14 @@ private:
     void handleSnakeTurn90(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeTurn90Again(const GridMissionInput& in, GridMissionOutput& out);
+    void handleTurnNodeMarkerHover(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeComplete(const GridMissionInput& in, GridMissionOutput& out);
     void handleLand(const GridMissionInput& in, GridMissionOutput& out);
     void handleEmergencyLand(const GridMissionInput& in, GridMissionOutput& out);
 
-    // Cycle 16: hop-to-hop helper — distance from the latched hop_start_*
-    // anchor, plus per-tick LineFollow gating that runs only inside the
-    // configured align window.
+    // Hop-to-hop helper: distance from the latched hop_start_* anchor.
     double hopDistance(const GridMissionInput& in) const;
-    bool   inHopAlignWindow(double distance) const;
     void   armHopStart(const GridMissionInput& in);
-    void   latchHopYawAfterAlign(const GridMissionInput& in,
-                                 bool in_align_window,
-                                 double distance,
-                                 double& yaw_target_rad);
 
     // Helpers
     bool isHardFailsafe(const GridMissionInput& in, std::string& reason) const;
@@ -353,6 +351,15 @@ private:
     // (all markers found mid-column), synthesize the remaining cells of the
     // current column so the grid stored onboard + sent to GCS is closed.
     void synthesizeRemainingColumnNodes();
+    // Cycle 25: at the two turn-cell paths (boundary watchdog and column
+    // transition arrival) handleSnakeRecordNode is skipped, so a marker on
+    // those cells would otherwise be missed. Registers the current stable
+    // marker_window_ id against the supplied grid coord if it is a new
+    // non-vertiport id. Returns the id that was registered (or already
+    // present at this cell), or -1 if there is no marker to hover on. The
+    // caller uses the return value to decide whether to route into
+    // TurnNodeMarkerHover for a 3-second hover before continuing.
+    int tryRegisterCurrentCellMarker(GridCoord coord, const GridMissionInput& in);
     double wrap(double a) const;
 
     GridMissionConfig config_;
@@ -392,9 +399,13 @@ private:
     double yaw_align_target_rad_ = 0.0;
     double turn_origin_x_ = 0.0;
     double turn_origin_y_ = 0.0;
-    double line_lost_start_s_ = -1.0;
     SnakeTurnDir pending_turn_dir_ = SnakeTurnDir::Unknown;
     GridHeading pending_post_turn_heading_ = GridHeading::Unknown;
+    // Cycle 26: GridState to enter after TurnNodeMarkerHover finishes its
+    // 3-second hover. Set at the boundary watchdog (= SnakeStopAtCenter)
+    // or at SnakeAdvanceOneCell arrival (= SnakeTurn90Again).
+    GridState pending_post_hover_state_ = GridState::Idle;
+    int pending_post_hover_marker_id_ = -1;
     bool   snake_turn_first_done_ = false;
     bool   marker_hover_active_ = false;
     int    last_recorded_marker_id_ = -1;
@@ -422,7 +433,6 @@ private:
     // LOCAL_NED displacement from this anchor each tick.
     std::optional<double> hop_start_local_x_;
     std::optional<double> hop_start_local_y_;
-    bool hop_align_window_seen_ = false;
 
     // Cycle 16: sliding-window marker stability detector. Replaces the
     // per-id counter (`marker_candidate_count_`) so transient mis-identifications

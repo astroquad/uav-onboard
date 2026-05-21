@@ -49,6 +49,27 @@ onboard::mission::IntersectionDecision makeIntersectionDecision(
     return decision;
 }
 
+onboard::mission::IntersectionDecision makeStraightDecision(onboard::vision::VisionResult& vis)
+{
+    onboard::mission::IntersectionDecision decision;
+    decision.accepted_type = onboard::vision::IntersectionType::Straight;
+    decision.accepted_branch_mask = 0x05;
+    decision.front_available = true;
+
+    vis.intersection.valid = true;
+    vis.intersection.intersection_detected = true;
+    vis.intersection.type = onboard::vision::IntersectionType::Straight;
+    const int front = static_cast<int>(onboard::vision::BranchDirection::Front);
+    const int back = static_cast<int>(onboard::vision::BranchDirection::Back);
+    vis.intersection.branches[front].direction = onboard::vision::BranchDirection::Front;
+    vis.intersection.branches[front].present = true;
+    vis.intersection.branches[front].angle_deg = -90.0f;
+    vis.intersection.branches[back].direction = onboard::vision::BranchDirection::Back;
+    vis.intersection.branches[back].present = true;
+    vis.intersection.branches[back].angle_deg = 90.0f;
+    return decision;
+}
+
 void setLine(onboard::vision::VisionResult& vis,
              float center_error_norm,
              float angle_deg,
@@ -278,6 +299,17 @@ int main()
     out = mission.update(launch_good_in);
     assert(out.state == onboard::mission::GridState::SnakeForward);
 
+    auto forward_vis = makeVision();
+    auto forward_decision = makeStraightDecision(forward_vis);
+    setLine(forward_vis, 0.15f, 90.0f);
+    auto forward_in = makeInput(1.3, forward_vis, forward_decision);
+    forward_in.local_x_m = 2.2;
+    out = mission.update(forward_in);
+    assert(out.state == onboard::mission::GridState::SnakeForward);
+    assert(out.intent == onboard::control::GridControlIntent::ForwardBlind);
+    assert(out.line_detected);
+    assert(std::abs(out.line_center_error_norm) > 0.01);
+
     onboard::mission::MarkerWindow window;
     window.configure(4, 2);
     window.push(1);
@@ -308,6 +340,21 @@ int main()
     const auto launch_sp = mapper.compute(launch_cmin);
     assert(launch_sp.vx_forward_mps == 0.0f);
     assert(launch_sp.vy_right_mps != 0.0f || launch_sp.yaw_rate_rad_s != 0.0f);
+
+    onboard::control::GridControlMapperInput forward_cmin;
+    forward_cmin.intent = onboard::control::GridControlIntent::ForwardBlind;
+    forward_cmin.forward_speed_override_mps = 0.3;
+    forward_cmin.line_detected = true;
+    forward_cmin.line_center_error_norm = 0.4;
+    forward_cmin.line_angle_error_rad = 0.8;
+    forward_cmin.line_confidence = 1.0;
+    forward_cmin.yaw_available = true;
+    forward_cmin.current_yaw_rad = 0.0;
+    forward_cmin.target_yaw_rad = 0.0;
+    const auto forward_sp = mapper.compute(forward_cmin);
+    assert(forward_sp.vx_forward_mps > 0.0f);
+    assert(forward_sp.vy_right_mps != 0.0f);
+    assert(forward_sp.yaw_rate_rad_s == 0.0f);
 
     return 0;
 }

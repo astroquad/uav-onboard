@@ -66,6 +66,7 @@ const char* gridStateName(GridState state)
     case GridState::SnakeTurn90:          return "SNAKE_TURN_90";
     case GridState::SnakeAdvanceOneCell:  return "SNAKE_ADVANCE_ONE_CELL";
     case GridState::SnakeTurn90Again:     return "SNAKE_TURN_90_AGAIN";
+    case GridState::TurnNodeMarkerHover:  return "TURN_NODE_MARKER_HOVER";
     case GridState::SnakeComplete:        return "SNAKE_COMPLETE";
     case GridState::Land:                 return "LAND";
     case GridState::EmergencyLand:        return "EMERGENCY_LAND";
@@ -122,9 +123,10 @@ void GridMission::reset()
     snake_yaw_stable_count_ = 0;
     snake_launch_align_stable_count_ = 0;
     origin_latched_ = false;
-    line_lost_start_s_ = -1.0;
     pending_turn_dir_ = SnakeTurnDir::Unknown;
     pending_post_turn_heading_ = GridHeading::Unknown;
+    pending_post_hover_state_ = GridState::Idle;
+    pending_post_hover_marker_id_ = -1;
     snake_turn_first_done_ = false;
     marker_hover_active_ = false;
     last_recorded_marker_id_ = -1;
@@ -136,7 +138,6 @@ void GridMission::reset()
     last_node_local_y_.reset();
     hop_start_local_x_.reset();
     hop_start_local_y_.reset();
-    hop_align_window_seen_ = false;
     last_safety_event_.clear();
     last_node_grid_branch_mask_ = 0;
     last_node_front_open_ = false;
@@ -249,6 +250,31 @@ int GridMission::effectiveVertiportMarkerId() const
         : config_.vertiport_marker_id;
 }
 
+int GridMission::tryRegisterCurrentCellMarker(GridCoord coord,
+                                               const GridMissionInput& in)
+{
+    if (!registry_) return -1;
+    const int stable_id = marker_window_.bestStableId();
+    if (stable_id < 0) return -1;
+    if (stable_id == effectiveVertiportMarkerId()) return -1;
+    if (registry_->hasId(stable_id)) {
+        // Already known marker — no fresh registration, no hover needed.
+        return -1;
+    }
+    float orientation = 0.0f;
+    if (auto obs = findMarker(in.vision, stable_id)) {
+        orientation = obs->orientation_deg;
+    }
+    const bool was_new = registry_->observe(stable_id, coord, /*grid_coord_valid=*/true,
+                                            orientation, in.timestamp_ms, in.frame_seq);
+    if (was_new) {
+        std::cerr << "[marker-commit] id=" << stable_id
+                  << " coord=(" << coord.x << "," << coord.y << ")"
+                  << " (turn-cell)\n";
+    }
+    return stable_id;
+}
+
 void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutput& out) const
 {
     if (!in.vision) return;
@@ -267,18 +293,11 @@ void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutp
     out.line_angle_error_rad = diff_deg * M_PI / 180.0;
     out.line_confidence = line.confidence;
 
-    // Cycle 16: hop-aware freeze. The line controller only runs during the
-    // brief mid-cell align window (managed by the SnakeForward /
-    // SnakeAdvanceOneCell handlers). Outside that window we want yaw locked
-    // to the latched target, so we zero both inputs and let the mapper send
-    // ForwardBlind. Even inside the align window we still gate on
-    // `accepted_type == Straight` plus the Front/Back arrow head-tail check
-    // — a T entering the camera mid-window must not pull yaw aside.
-    //
-    // The align window is checked via hopDistance() so this works the same
-    // for SnakeForward, SnakeAdvanceOneCell, and any future hop-driven state.
-    const double distance = hopDistance(in);
-    const bool hop_window_active = inHopAlignWindow(distance);
+    // Forward hops now stay in ForwardBlind for the full cell. Yaw is always
+    // mission-locked in the mapper; we only pass lateral line-center error
+    // through when the current view is a confident straight corridor. Near
+    // intersections and side branches, zero the line input so ForwardBlind
+    // becomes pure yaw-locked dead reckoning again.
     const bool launch_state = state_ == GridState::SnakeLaunchAlign;
     const bool snake_state =
         (state_ == GridState::SnakeForward ||
@@ -293,7 +312,7 @@ void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutp
         return;
     }
 
-    if (!snake_state || !hop_window_active) {
+    if (!snake_state) {
         out.line_angle_error_rad = 0.0;
         out.line_center_error_norm = 0.0;
         return;
@@ -524,6 +543,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     case GridState::SnakeTurn90:          handleSnakeTurn90(input, out); break;
     case GridState::SnakeAdvanceOneCell:  handleSnakeAdvanceOneCell(input, out); break;
     case GridState::SnakeTurn90Again:     handleSnakeTurn90Again(input, out); break;
+    case GridState::TurnNodeMarkerHover:  handleTurnNodeMarkerHover(input, out); break;
     case GridState::SnakeComplete:        handleSnakeComplete(input, out); break;
     case GridState::Land:                 handleLand(input, out); break;
     case GridState::EmergencyLand:        handleEmergencyLand(input, out); break;
@@ -597,7 +617,6 @@ void GridMission::armHopStart(const GridMissionInput& in)
         hop_start_local_x_.reset();
         hop_start_local_y_.reset();
     }
-    hop_align_window_seen_ = false;
 }
 
 double GridMission::hopDistance(const GridMissionInput& in) const
@@ -607,30 +626,6 @@ double GridMission::hopDistance(const GridMissionInput& in) const
     const double dx = *in.local_x_m - *hop_start_local_x_;
     const double dy = *in.local_y_m - *hop_start_local_y_;
     return std::sqrt(dx * dx + dy * dy);
-}
-
-bool GridMission::inHopAlignWindow(double distance) const
-{
-    return distance >= config_.hop_align_start_m &&
-           distance <= config_.hop_align_end_m;
-}
-
-void GridMission::latchHopYawAfterAlign(
-    const GridMissionInput& in,
-    bool in_align_window,
-    double distance,
-    double& yaw_target_rad)
-{
-    if (in_align_window) {
-        hop_align_window_seen_ = true;
-        return;
-    }
-    if (hop_align_window_seen_ && distance > config_.hop_align_end_m) {
-        if (in.attitude_yaw_rad.has_value()) {
-            yaw_target_rad = wrap(*in.attitude_yaw_rad);
-        }
-        hop_align_window_seen_ = false;
-    }
 }
 
 // --------------------------- Per-state handlers ---------------------------
@@ -834,12 +829,11 @@ void GridMission::handleEntryCenterOrigin(const GridMissionInput& in, GridMissio
 
 void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutput& out)
 {
-    // Cycle 16: hop-to-hop. From the last committed node, fly yaw-frozen
-    // body-forward for the whole cell. At the configured align window
-    // (default 1.4-1.7m from the hop start) we open a single LineFollow
-    // burst so vision can correct lateral drift + yaw bias once per cell.
-    // Outside that window the controller stays in ForwardBlind, which keeps
-    // yaw fully locked and ignores any LineDetector arrows.
+    // Hop-to-hop. From the last committed node, fly body-forward for the
+    // whole cell with yaw locked to the column target. ForwardBlind may borrow
+    // only lateral vy from the line controller when populateLineInputs sees a
+    // confident straight corridor, so it recenters without ever granting line
+    // angle authority over yaw.
     //
     // The next node arrival is detected by intersection.valid AND a minimum
     // hop distance gate so the just-departed node's residual lookahead does
@@ -852,31 +846,9 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
 
     const double distance = hopDistance(in);
 
-    // Cycle 12 C: blind forward immediately after SnakeTurn90Again so we
-    // physically enter the new column before any vision-driven correction
-    // can fight the rotation.
     const bool post_turn_blind = in.now_s < snake_post_turn_blind_until_s_;
-    const bool in_align_window = !post_turn_blind && inHopAlignWindow(distance);
-    latchHopYawAfterAlign(in, in_align_window, distance, yaw_align_target_rad_);
     out.target_yaw_rad = yaw_align_target_rad_;
-
-    if (in_align_window) {
-        out.intent = control::GridControlIntent::LineFollow;
-    } else {
-        out.intent = control::GridControlIntent::ForwardBlind;
-    }
-
-    // Line lost tracking — only matters during the LineFollow window. In
-    // ForwardBlind we do not require a line.
-    if (in_align_window) {
-        if (in.vision && in.vision->line.detected) {
-            line_lost_start_s_ = -1.0;
-        } else if (line_lost_start_s_ < 0.0) {
-            line_lost_start_s_ = in.now_s;
-        }
-    } else {
-        line_lost_start_s_ = -1.0;
-    }
+    out.intent = control::GridControlIntent::ForwardBlind;
 
     const bool lockout_active =
         (last_node_record_s_ > 0.0) &&
@@ -935,9 +907,30 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         }
         last_node_record_s_ = in.now_s;
 
+        // Cycle 25: register a marker stable in marker_window_ against the
+        // boundary cell coord. handleSnakeRecordNode (which normally handles
+        // marker hover + registration) is skipped on the boundary watchdog
+        // path; without this, any marker placed on a column-end cell would
+        // never reach the registry.
+        const GridCoord boundary_coord = tracker_
+            ? tracker_->advance(tracker_->currentCoord(), current_heading)
+            : GridCoord{};
+        const int hover_id = tryRegisterCurrentCellMarker(boundary_coord, in);
+
         out.last_safety_event = "";
-        transition(GridState::SnakeStopAtCenter, in.now_s, "boundary_watchdog");
-        snake_stop_stable_count_ = 0;
+        // Cycle 26: if a new marker was registered at this boundary cell,
+        // route through TurnNodeMarkerHover for a 3-second hover before
+        // continuing to SnakeStopAtCenter — matches the marker handling
+        // SnakeRecordNode does for regular cells.
+        if (hover_id >= 0) {
+            pending_post_hover_state_ = GridState::SnakeStopAtCenter;
+            pending_post_hover_marker_id_ = hover_id;
+            last_recorded_marker_id_ = hover_id;
+            transition(GridState::TurnNodeMarkerHover, in.now_s, "boundary_marker_hover");
+        } else {
+            transition(GridState::SnakeStopAtCenter, in.now_s, "boundary_watchdog");
+            snake_stop_stable_count_ = 0;
+        }
         return;
     }
 
@@ -1246,8 +1239,8 @@ void GridMission::handleSnakeTurn90(const GridMissionInput& in, GridMissionOutpu
 
 void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMissionOutput& out)
 {
-    // Cycle 12 C: blind forward immediately after the turn so the camera
-    // clears the old corridor's line before we try to track again.
+    // Advance across the one-cell column transition using the same yaw-locked
+    // ForwardBlind + lateral vy correction model as SnakeForward.
     if (!hop_start_local_x_.has_value()) {
         armHopStart(in);
     }
@@ -1256,14 +1249,8 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
     const double distance = hopDistance(in);
 
     const bool post_turn_blind = in.now_s < snake_post_turn_blind_until_s_;
-    const bool in_align_window = !post_turn_blind && inHopAlignWindow(distance);
-    latchHopYawAfterAlign(in, in_align_window, distance, yaw_target_rad_);
     out.target_yaw_rad = yaw_target_rad_;
-    if (in_align_window) {
-        out.intent = control::GridControlIntent::LineFollow;
-    } else {
-        out.intent = control::GridControlIntent::ForwardBlind;
-    }
+    out.intent = control::GridControlIntent::ForwardBlind;
 
     if (post_turn_blind) {
         // Hard timeout still applies (snake_advance_timeout_s).
@@ -1292,6 +1279,14 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
             last_node_local_y_ = *in.local_y_m;
         }
 
+        // Cycle 25: register marker at the column-transition cell so markers
+        // placed on second-turn cells are not silently missed. The
+        // all_markers check stays out of this path on purpose — it only
+        // fires from handleSnakeRecordNode (N/S heading) so the synthesize
+        // pass that closes the column never runs on a mid-transition E/W
+        // heading.
+        const int hover_id = tryRegisterCurrentCellMarker(in.node_event.local_coord, in);
+
         // Cycle 17: second-turn target also derives from yaw_target_rad_
         // (which itself is yaw_align_target_rad_ + first dir·π/2), so the
         // new column's reference is exactly the original ± π — drift-free.
@@ -1300,7 +1295,18 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
             yaw_target_rad_ = wrap(yaw_target_rad_ + dir * (M_PI / 2.0));
         }
         snake_yaw_stable_count_ = 0;
-        transition(GridState::SnakeTurn90Again, in.now_s, "cell_reached");
+        // Cycle 26: hover for 3 seconds first if this cell had a marker.
+        // pending_post_hover_state_ + the yaw_target_rad_ above are latched
+        // BEFORE the hover so when TurnNodeMarkerHover finishes it can fire
+        // the SnakeTurn90Again rotation against the correct target.
+        if (hover_id >= 0) {
+            pending_post_hover_state_ = GridState::SnakeTurn90Again;
+            pending_post_hover_marker_id_ = hover_id;
+            last_recorded_marker_id_ = hover_id;
+            transition(GridState::TurnNodeMarkerHover, in.now_s, "advance_marker_hover");
+        } else {
+            transition(GridState::SnakeTurn90Again, in.now_s, "cell_reached");
+        }
         return;
     }
 
@@ -1342,6 +1348,53 @@ void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMission
             snake_launch_align_stable_count_ = 0;
             transition(GridState::SnakeLaunchAlign, in.now_s, "turn2_done");
         }
+    }
+}
+
+void GridMission::handleTurnNodeMarkerHover(const GridMissionInput& in,
+                                             GridMissionOutput& out)
+{
+    // Cycle 26: 3-second marker hover at a turn cell before continuing into
+    // the boundary stop (first turn) or the second 90° rotation. Matches
+    // SnakeRecordNode's marker hover for regular cells. pending_post_hover_
+    // state_ controls where to go after hover. yaw_target_rad_ (for the
+    // SnakeTurn90Again path) and snake_stop_stable_count_ (for the
+    // SnakeStopAtCenter path) were already latched before the transition.
+    out.intent = control::GridControlIntent::MarkerHover;
+    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.advance_phase = false;
+
+    const int focus_id = pending_post_hover_marker_id_ >= 0
+        ? pending_post_hover_marker_id_
+        : last_recorded_marker_id_;
+    if (focus_id >= 0) {
+        populateMarkerInputs(in, focus_id, out);
+        // Re-observe each tick so registry.last_seen_ms tracks current
+        // observations (mirrors handleSnakeRecordNode's behaviour).
+        if (registry_) {
+            auto obs = findMarker(in.vision, focus_id);
+            const float orientation = obs.has_value() ? obs->orientation_deg : 0.0f;
+            registry_->observe(focus_id,
+                               tracker_ ? tracker_->currentCoord() : GridCoord{},
+                               /*grid_coord_valid=*/true,
+                               orientation,
+                               in.timestamp_ms,
+                               in.frame_seq);
+        }
+    }
+
+    if (in.now_s - state_entry_s_ >= config_.snake_marker_hover_s) {
+        const GridState next = pending_post_hover_state_ != GridState::Idle
+            ? pending_post_hover_state_
+            : GridState::SnakeStopAtCenter;  // safe default
+        pending_post_hover_state_ = GridState::Idle;
+        pending_post_hover_marker_id_ = -1;
+        last_recorded_marker_id_ = -1;
+        if (next == GridState::SnakeStopAtCenter) {
+            snake_stop_stable_count_ = 0;
+        }
+        transition(next, in.now_s, "marker_hover_done");
     }
 }
 

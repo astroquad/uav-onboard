@@ -12,7 +12,7 @@ namespace onboard::control {
 enum class GridControlIntent {
     Idle,             // no command output (mission not started)
     HoldPosition,     // freeze body velocity to ~0
-    ForwardBlind,     // pure body-forward velocity, ignore vision (off-pad scoot)
+    ForwardBlind,     // body-forward + optional lateral line-centering, yaw locked
     LineFollow,       // line-follow controller @ current cruise alt
     StopAndCenter,    // ramp velocity to 0 while holding altitude
     IntersectionCenter, // center an intersection under the camera before origin/node lock

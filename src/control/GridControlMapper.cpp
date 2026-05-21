@@ -67,6 +67,24 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
             out.yaw_rate_rad_s = static_cast<float>(
                 computeYawRate(input.current_yaw_rad, input.target_yaw_rad));
         }
+        // Cycle 27: lateral line-centering while yaw stays frozen. Without
+        // this the drone tracks a slight LineDetector center bias in body
+        // frame which manifests as a consistent left/right tilt on one of
+        // N/S only (the bias direction in grid frame depends on heading).
+        // angle_error_rad is intentionally zeroed before the line_controller
+        // call so the yaw lock above is the sole yaw authority.
+        // populateLineInputs already nulls the line errors near intersections
+        // (Cycle 15 freeze) so vy here only acts on confident straight-line
+        // detections.
+        if (input.line_detected && line_controller_ != nullptr) {
+            LineControlInput line {};
+            line.line_detected = true;
+            line.center_error_norm = input.line_center_error_norm;
+            line.angle_error_rad = 0.0;
+            line.confidence = input.line_confidence;
+            const ControlSetpoint sp_line = line_controller_->updateLine(line, alt);
+            out.vy_right_mps = sp_line.vy_right_mps;
+        }
         return out;
     }
     case GridControlIntent::LineFollow: {

@@ -47,8 +47,6 @@ cell_size_m = 3.0
 snake_record_lockout_s = 3.0
 snake_turn_lockout_s = 3.0
 snake_marker_hover_s = 3.0
-snake_line_lost_warn_s = 4.0
-snake_line_lost_emergency_s = 8.0
 snake_stop_velocity_threshold_mps = 0.05
 # Cycle 13: bumped 8.0 -> 15.0 to accommodate post-turn blind + hop traversal.
 snake_advance_timeout_s = 15.0
@@ -67,15 +65,13 @@ snake_record_dwell_s = 0.5
 # disabled for this many seconds so the just-recorded node's residual
 # T/L branches don't immediately re-trigger as a boundary.
 snake_post_record_grace_s = 0.8
-# Cycle 12: blind forward duration after each 90° turn (SnakeTurn90 and
-# SnakeTurn90Again). The camera moves into the new corridor before re-engaging
-# line tracking.
+# Cycle 12: forward guard duration after each 90° turn (SnakeTurn90 and
+# SnakeTurn90Again). The camera moves into the new corridor before arrival
+# decisions are accepted.
 snake_post_turn_blind_s = 1.5
-# Cycle 16: hop-to-hop align window. LineFollow only runs while
-# hop_align_start_m <= distance_from_last_node <= hop_align_end_m. Outside this
-# window the controller stays in ForwardBlind with yaw frozen.
-hop_align_start_m = 1.4
-hop_align_end_m = 1.7
+# Forward hops stay in ForwardBlind for the full cell. Yaw is mission-locked;
+# lateral vy line-centering is applied continuously when a confident straight
+# corridor is visible.
 # Distance failsafe — if the next intersection has not been observed within
 # this many metres of the last commit, abort the hop.
 hop_max_distance_m = 3.5
