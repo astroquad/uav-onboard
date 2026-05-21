@@ -24,7 +24,7 @@ enum class GridControlIntent {
 };
 
 struct GridControlMapperConfig {
-    double forward_speed_blind_mps = 0.40;
+    double forward_speed_blind_mps = 0.50;
     double forward_speed_advance_mps = 0.18;  // post-turn slow re-acquire
     double max_yaw_rate_rad_s = 0.6;
     double yaw_align_kp = 1.2;

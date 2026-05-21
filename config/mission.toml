@@ -53,17 +53,19 @@ marker_hover_center_stable_frames = 2
 snake_stop_velocity_threshold_mps = 0.05
 # Cycle 13: bumped 8.0 -> 15.0 to accommodate post-turn blind + hop traversal.
 snake_advance_timeout_s = 15.0
+# Main snake forward speed while yaw is locked and lateral line-centering is active.
+forward_speed_blind_mps = 0.50
 # Cycle 13: was hard-coded 0.18 in GridControlMapperConfig; raised to 0.30.
 forward_speed_advance_mps = 0.30
 max_intersections = 50
 mission_timeout_s = 600.0
 altitude_ceiling_m = 3.5
 snake_complete_hover_s = 2.0
-# Cycle 16: hop-to-hop dwell at each non-marker intersection. The drone holds
-# position for this many seconds while the IntersectionDecision settles on a
-# definitive L/T/+ classification. Marker intersections override with
-# snake_marker_hover_s (3.0s).
-snake_record_dwell_s = 0.5
+# Hop-to-hop dwell at ordinary non-marker intersections. Marker intersections
+# override with snake_marker_hover_s (3.0s); boundary/turn candidates keep a
+# longer dwell so branch classification can settle before turning.
+snake_record_dwell_s = 0.25
+snake_boundary_record_dwell_s = 0.5
 # Cycle 10: after a NodeRecord, the boundary watchdog in SnakeForward is
 # disabled for this many seconds so the just-recorded node's residual
 # T/L branches don't immediately re-trigger as a boundary.

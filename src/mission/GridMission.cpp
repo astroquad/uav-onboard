@@ -1072,9 +1072,14 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
         }
     }
 
+    const bool boundary_record =
+        !last_node_front_open_ || last_node_grid_branch_mask_ == 0;
+    const double record_dwell_s = boundary_record
+        ? config_.snake_boundary_record_dwell_s
+        : config_.snake_record_dwell_s;
     const bool dwell_done = marker_hover_active_
         ? markerHoverComplete(out, in.now_s)
-        : (in.now_s - state_entry_s_ >= config_.snake_record_dwell_s);
+        : (in.now_s - state_entry_s_ >= record_dwell_s);
     if (dwell_done) {
         const int hover_marker_id = marker_hover_active_
             ? last_recorded_marker_id_

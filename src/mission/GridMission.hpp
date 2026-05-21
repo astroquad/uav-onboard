@@ -150,10 +150,10 @@ struct GridMissionConfig {
     // CLI/SnakePlanner override
     SnakeTurnDir initial_snake_turn = SnakeTurnDir::Unknown;
 
-    // Dwell at every non-marker intersection while branches stabilise.
-    // Cycle 16: bumped 0.3 -> 0.5 so the IntersectionDecision has more frames
-    // to settle on a definitive L/T/+ classification.
-    double snake_record_dwell_s = 0.5;
+    // Dwell at non-marker, non-boundary intersections while branches
+    // stabilise. Boundary/turn candidate nodes keep a longer dwell below.
+    double snake_record_dwell_s = 0.25;
+    double snake_boundary_record_dwell_s = 0.5;
 
     // Cycle 10: after a NodeRecord, ignore boundary watchdog for this many
     // seconds so the last node's branches don't immediately re-trigger.

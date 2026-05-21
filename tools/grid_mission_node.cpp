@@ -308,6 +308,8 @@ void loadConfigs(const Options& opt, Configs& cfg)
             g.snake_complete_hover_s = gm["snake_complete_hover_s"].value_or(g.snake_complete_hover_s);
             g.snake_record_dwell_s =
                 gm["snake_record_dwell_s"].value_or(g.snake_record_dwell_s);
+            g.snake_boundary_record_dwell_s =
+                gm["snake_boundary_record_dwell_s"].value_or(g.snake_boundary_record_dwell_s);
             g.snake_post_record_grace_s =
                 gm["snake_post_record_grace_s"].value_or(g.snake_post_record_grace_s);
             g.snake_post_turn_blind_s =
@@ -352,6 +354,8 @@ void loadConfigs(const Options& opt, Configs& cfg)
             // Cycle 13: expose forward_speed_advance_mps so the slow speed
             // applied during SnakeAdvanceOneCell's line-follow phase can be
             // tuned without recompiling.
+            cfg.mapper.forward_speed_blind_mps =
+                gm["forward_speed_blind_mps"].value_or(cfg.mapper.forward_speed_blind_mps);
             cfg.mapper.forward_speed_advance_mps =
                 gm["forward_speed_advance_mps"].value_or(cfg.mapper.forward_speed_advance_mps);
             const double yaw_deg = gm["vertiport_yaw_tolerance_deg"].value_or(5.0);
