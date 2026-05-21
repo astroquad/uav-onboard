@@ -42,6 +42,9 @@ struct GridNodeEvent {
     std::uint8_t grid_branch_mask = 0;
     bool first_node = false;
     bool origin_local_only = true;
+    // False for map-only synthetic nodes that complete the known grid shape
+    // without implying that the drone physically moved to that node.
+    bool updates_current = true;
 };
 
 class GridCoordinateTracker {

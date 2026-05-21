@@ -142,6 +142,9 @@ void GridCoordinateTracker::commitAdvance(const GridNodeEvent& event)
         nodes_.count(event.local_coord) != 0) {
         return;
     }
+    if (!event.updates_current && !has_origin_) {
+        return;
+    }
 
     if (!has_origin_) {
         has_origin_ = true;
@@ -152,7 +155,7 @@ void GridCoordinateTracker::commitAdvance(const GridNodeEvent& event)
             using_default_start_heading_ = true;
         }
         current_coord_ = event.local_coord;
-    } else if (current_heading_ != GridHeading::Unknown) {
+    } else if (event.updates_current && current_heading_ != GridHeading::Unknown) {
         current_coord_ = event.local_coord;
     }
 
@@ -160,11 +163,13 @@ void GridCoordinateTracker::commitAdvance(const GridNodeEvent& event)
     committed.node_id = next_node_id_++;
     nodes_[committed.local_coord] = committed;
 
-    // chooseNextHeading uses decision-derived branch info; reconstruct minimal
-    // decision from event.camera_branch_mask for the heading choice.
-    IntersectionDecision proxy;
-    proxy.accepted_branch_mask = event.camera_branch_mask;
-    current_heading_ = chooseNextHeading(proxy);
+    if (event.updates_current) {
+        // chooseNextHeading uses decision-derived branch info; reconstruct
+        // minimal decision from event.camera_branch_mask for the heading choice.
+        IntersectionDecision proxy;
+        proxy.accepted_branch_mask = event.camera_branch_mask;
+        current_heading_ = chooseNextHeading(proxy);
+    }
 }
 
 void GridCoordinateTracker::notifyTurnCompleted(GridHeading new_heading)

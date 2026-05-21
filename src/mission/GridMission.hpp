@@ -292,6 +292,11 @@ public:
     // >= marker_observation_min_frames (i.e. eligible to be committed).
     std::size_t stableMarkerCandidateCount() const;
 
+    // Cycle 24: marker id latched by MarkerLockYaw. Returns -1 until a
+    // stable candidate has actually been observed, so GCS telemetry can
+    // distinguish "not yet seen" from a real vertiport detection.
+    int activeVertiportMarkerId() const { return active_vertiport_marker_id_; }
+
 private:
     void transition(GridState next, double now_s, const std::string& reason);
 
@@ -334,6 +339,20 @@ private:
     void latchGridOrigin(const GridMissionInput& in, GridMissionOutput& out);
     std::optional<onboard::vision::MarkerObservation> findMarker(
         const onboard::vision::VisionResult* vis, int id) const;
+    // Cycle 24: any-marker variant. Returns the first marker observation in
+    // the current frame, or nullopt if none. Used by MarkerLockYaw to detect
+    // the vertiport without hardcoding its id.
+    std::optional<onboard::vision::MarkerObservation> findAnyMarker(
+        const onboard::vision::VisionResult* vis) const;
+    // Cycle 24: returns the marker id we treat as the vertiport at runtime.
+    // If MarkerLockYaw has already latched the first stable id we use that;
+    // otherwise fall back to the configured default so behaviour matches the
+    // pre-Cycle-24 hardcoded path until the dynamic id is known.
+    int effectiveVertiportMarkerId() const;
+    // Cycle 24: when SnakeComplete fires before reaching the column boundary
+    // (all markers found mid-column), synthesize the remaining cells of the
+    // current column so the grid stored onboard + sent to GCS is closed.
+    void synthesizeRemainingColumnNodes();
     double wrap(double a) const;
 
     GridMissionConfig config_;
@@ -355,6 +374,13 @@ private:
     int    consecutive_boundary_failures_ = 0;
     int    vertiport_marker_stable_count_ = 0;
     int    vertiport_yaw_stable_count_ = 0;
+    // Cycle 24: dynamic vertiport id. The first marker seen during
+    // MarkerLockYaw becomes the vertiport, regardless of config default.
+    // `active_vertiport_marker_id_` is set the moment a candidate becomes
+    // stable; -1 means "not yet detected, fall back to config default".
+    int    active_vertiport_marker_id_ = -1;
+    int    candidate_vertiport_id_ = -1;
+    int    candidate_vertiport_count_ = 0;
     int    entry_center_stable_count_ = 0;
     std::uint32_t entry_forward_start_frame_seq_ = 0;
     int    snake_stop_stable_count_ = 0;
@@ -380,6 +406,12 @@ private:
 
     std::uint8_t last_node_grid_branch_mask_ = 0;
     bool   last_node_front_open_ = false;
+
+    // Cycle 24: queue of synthetic GridNodeEvents drained one-per-tick during
+    // SnakeComplete after an early all-markers-found exit. Each drained event
+    // ends up in tracker.nodes_ (Manhattan revisit planning later) AND in
+    // last_committed_event (GCS map rendering).
+    std::deque<GridNodeEvent> pending_synth_events_;
 
     // Cycle 12 additions
     bool   origin_published_ = false;

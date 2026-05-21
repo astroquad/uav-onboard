@@ -57,6 +57,7 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
             {"grid_branch_mask", node.grid_branch_mask},
             {"first_node", node.first_node},
             {"origin_local_only", node.origin_local_only},
+            {"updates_current", node.updates_current},
         };
     };
 

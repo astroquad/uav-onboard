@@ -108,6 +108,7 @@ protocol::GridNodeTelemetry toProtocolGridNode(const mission::GridNodeEvent& nod
     output.grid_branch_mask = node.grid_branch_mask;
     output.first_node = node.first_node;
     output.origin_local_only = node.origin_local_only;
+    output.updates_current = node.updates_current;
     return output;
 }
 
@@ -518,7 +519,7 @@ VisionDebugPublishStats VisionDebugPublisher::publish(VisionDebugPublishInput in
         // verbatim. The TelemetryMessage JSON serialiser only emits the
         // mission block when input.mission.present == true.
         telemetry.mission = input.mission;
-        if (input.grid_node.valid) {
+        if (input.grid_node.valid && input.grid_node.updates_current) {
             telemetry.grid.col = input.grid_node.local_coord.x;
             telemetry.grid.row = input.grid_node.local_coord.y;
         }

@@ -1,6 +1,7 @@
 #include "mission/GridMission.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <iostream>
 
@@ -110,6 +111,10 @@ void GridMission::reset()
     consecutive_boundary_failures_ = 0;
     vertiport_marker_stable_count_ = 0;
     vertiport_yaw_stable_count_ = 0;
+    active_vertiport_marker_id_ = -1;
+    candidate_vertiport_id_ = -1;
+    candidate_vertiport_count_ = 0;
+    pending_synth_events_.clear();
     entry_center_stable_count_ = 0;
     entry_forward_start_frame_seq_ = 0;
     snake_stop_stable_count_ = 0;
@@ -228,6 +233,20 @@ std::optional<onboard::vision::MarkerObservation> GridMission::findMarker(
         if (m.id == id) return m;
     }
     return std::nullopt;
+}
+
+std::optional<onboard::vision::MarkerObservation> GridMission::findAnyMarker(
+    const onboard::vision::VisionResult* vis) const
+{
+    if (!vis || vis->markers.empty()) return std::nullopt;
+    return vis->markers.front();
+}
+
+int GridMission::effectiveVertiportMarkerId() const
+{
+    return active_vertiport_marker_id_ >= 0
+        ? active_vertiport_marker_id_
+        : config_.vertiport_marker_id;
 }
 
 void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutput& out) const
@@ -478,9 +497,10 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     // it, so transient mis-identifications never accumulate.
     {
         int observed = -1;
+        const int vertiport_id_runtime = effectiveVertiportMarkerId();
         if (input.vision) {
             for (const auto& m : input.vision->markers) {
-                if (m.id == config_.vertiport_marker_id) continue;
+                if (m.id == vertiport_id_runtime) continue;
                 observed = m.id;
                 break;
             }
@@ -649,21 +669,49 @@ void GridMission::handleMarkerLockYaw(const GridMissionInput& in, GridMissionOut
     out.target_yaw_rad = yaw_align_target_rad_;
     out.target_altitude_m = config_.vertiport_altitude_m;
 
-    auto marker = findMarker(in.vision, config_.vertiport_marker_id);
+    // Cycle 24: dynamic vertiport id. Until a stable candidate is latched
+    // into `active_vertiport_marker_id_`, accept any marker as the vertiport
+    // candidate. Once latched, the rest of the mission keys off that id via
+    // effectiveVertiportMarkerId().
+    std::optional<onboard::vision::MarkerObservation> marker;
+    if (active_vertiport_marker_id_ >= 0) {
+        marker = findMarker(in.vision, active_vertiport_marker_id_);
+    } else {
+        marker = findAnyMarker(in.vision);
+        if (marker.has_value()) {
+            if (marker->id == candidate_vertiport_id_) {
+                ++candidate_vertiport_count_;
+            } else {
+                candidate_vertiport_id_ = marker->id;
+                candidate_vertiport_count_ = 1;
+            }
+            if (candidate_vertiport_count_ >= config_.vertiport_marker_stable_frames) {
+                active_vertiport_marker_id_ = candidate_vertiport_id_;
+                marker_window_.clear();
+            }
+        } else {
+            candidate_vertiport_id_ = -1;
+            candidate_vertiport_count_ = 0;
+        }
+    }
     if (marker.has_value()) {
-        ++vertiport_marker_stable_count_;
-        populateMarkerInputs(in, config_.vertiport_marker_id, out);
-        if (vertiport_marker_stable_count_ >= config_.vertiport_marker_stable_frames) {
+        populateMarkerInputs(in, marker->id, out);
+        if (active_vertiport_marker_id_ >= 0 &&
+            marker->id == active_vertiport_marker_id_) {
+            ++vertiport_marker_stable_count_;
             if (registry_) {
                 registry_->observe(marker->id, GridCoord{}, /*grid_coord_valid=*/false,
                                    marker->orientation_deg, in.timestamp_ms, in.frame_seq);
             }
             out.vertiport_verified = true;
+        } else {
+            vertiport_marker_stable_count_ = 0;
         }
     } else {
         vertiport_marker_stable_count_ = 0;
         out.marker_detected = false;
     }
+    out.vertiport_verified = active_vertiport_marker_id_ >= 0;
 
     bool yaw_ok = false;
     if (in.attitude_yaw_rad.has_value()) {
@@ -677,6 +725,7 @@ void GridMission::handleMarkerLockYaw(const GridMissionInput& in, GridMissionOut
     }
 
     const bool marker_centered =
+        active_vertiport_marker_id_ >= 0 &&
         out.marker_detected &&
         std::abs(out.marker_center_error_x_norm) <= config_.marker_lock_center_tol_norm &&
         std::abs(out.marker_center_error_y_norm) <= config_.marker_lock_center_tol_norm;
@@ -952,7 +1001,7 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
     } else {
         const int stable_id = marker_window_.bestStableId();
         if (stable_id >= 0 &&
-            stable_id != config_.vertiport_marker_id &&
+            stable_id != effectiveVertiportMarkerId() &&
             (!registry_ || !registry_->hasId(stable_id))) {
             focus_marker_id = stable_id;
         }
@@ -1001,6 +1050,9 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
         const bool all_markers_found = registry_ &&
             registry_->gridMarkerCount() >= static_cast<std::size_t>(config_.markers_expected);
         if (all_markers_found) {
+            // Cycle 24: close out the rest of the current column so the grid
+            // model onboard (and the GCS render) is a complete rectangle.
+            synthesizeRemainingColumnNodes();
             transition(GridState::SnakeComplete, in.now_s, "all_markers");
             return;
         }
@@ -1296,8 +1348,87 @@ void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMission
 void GridMission::handleSnakeComplete(const GridMissionInput& in, GridMissionOutput& out)
 {
     out.intent = control::GridControlIntent::HoldPosition;
+
+    // Cycle 24: drain one synthetic completion node per tick. Each drained
+    // event is committed to tracker.nodes_ (so the onboard grid model is
+    // closed for future Manhattan revisit planning) AND shipped to the GCS
+    // via last_committed_event so the map renders as a closed rectangle.
+    if (!pending_synth_events_.empty()) {
+        out.commit_tracker_advance = true;
+        out.synthetic_commit_event = pending_synth_events_.front();
+        pending_synth_events_.pop_front();
+        // Keep the hover timer paused while we're still draining; reset
+        // state_entry_s_ so the post-drain hover_s timer starts after the
+        // last synthetic node ships.
+        state_entry_s_ = in.now_s;
+        return;
+    }
+
     if (in.now_s - state_entry_s_ > config_.snake_complete_hover_s) {
         transition(GridState::Land, in.now_s, "snake_done");
+    }
+}
+
+void GridMission::synthesizeRemainingColumnNodes()
+{
+    pending_synth_events_.clear();
+    if (!tracker_) return;
+    const auto& nodes = tracker_->nodes();
+    if (nodes.empty()) return;
+
+    // Determine the rectangular grid extent from the columns that have
+    // already been traversed end-to-end. We trust min_y/max_y across all
+    // committed nodes; by the time we hit SnakeComplete the early columns
+    // each span the full range, so the global min/max equals the column
+    // length we should close out the current column to.
+    int min_y_global = INT_MAX;
+    int max_y_global = INT_MIN;
+    for (const auto& [coord, ev] : nodes) {
+        (void)ev;
+        min_y_global = std::min(min_y_global, coord.y);
+        max_y_global = std::max(max_y_global, coord.y);
+    }
+
+    const GridHeading hd = tracker_->currentHeading();
+    const GridCoord cur = tracker_->currentCoord();
+
+    // Only N/S handled. By the time SnakeComplete fires from the
+    // SnakeRecordNode "all_markers" branch, the drone is mid-column going
+    // either north (-y) or south (+y). E/W only happens during
+    // SnakeAdvanceOneCell which is not a SnakeComplete source.
+    int target_y = cur.y;
+    int step = 0;
+    if (hd == GridHeading::North) {
+        target_y = min_y_global;
+        step = -1;
+    } else if (hd == GridHeading::South) {
+        target_y = max_y_global;
+        step = +1;
+    } else {
+        return;
+    }
+
+    GridCoord walker = cur;
+    while (walker.y != target_y) {
+        walker.y += step;
+        // Skip cells we somehow already have (defensive; should not happen
+        // since we're past the last committed node by construction).
+        if (nodes.count(walker) != 0) continue;
+        GridNodeEvent ev;
+        ev.valid = true;
+        ev.arrival_heading = hd;
+        ev.local_coord = walker;
+        ev.topology = onboard::vision::IntersectionType::Cross;
+        // Mark all four branches present so the rendered grid edges connect
+        // to neighbours and the Manhattan planner sees the cell as a node
+        // with full connectivity. Real branch topology is unknown without
+        // visiting; "fully connected" is the safe default for a closed grid.
+        ev.camera_branch_mask = 0x0F;
+        ev.grid_branch_mask = 0x0F;
+        ev.origin_local_only = true;
+        ev.first_node = false;
+        ev.updates_current = false;
+        pending_synth_events_.push_back(ev);
     }
 }
 

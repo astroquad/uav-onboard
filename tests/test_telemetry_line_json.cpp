@@ -122,7 +122,9 @@ int main()
     assert(json["vision"]["intersection_decision"]["branches"].size() == 2);
     assert(json["vision"]["intersection_decision"]["node"]["valid"].get<bool>());
     assert(json["vision"]["intersection_decision"]["node"]["local_coord"]["x"].get<int>() == 2);
+    assert(json["vision"]["intersection_decision"]["node"]["updates_current"].get<bool>());
     assert(json["vision"]["grid_node"]["grid_branch_mask"].get<int>() == 7);
+    assert(json["vision"]["grid_node"]["updates_current"].get<bool>());
     assert(json["debug"].contains("line_latency_ms"));
     assert(json["debug"]["intersection_latency_ms"].get<double>() == 1.3);
     assert(json["debug"]["intersection_decision_latency_ms"].get<double>() == 0.04);

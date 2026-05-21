@@ -87,6 +87,68 @@ onboard::mission::GridMissionInput makeInput(
 
 int main()
 {
+    {
+        onboard::common::IntersectionDecisionConfig idec_config;
+        onboard::mission::GridCoordinateTracker tracker(idec_config);
+        tracker.forceOrigin({0, 0}, onboard::mission::GridHeading::North);
+
+        onboard::mission::GridNodeEvent synthetic;
+        synthetic.valid = true;
+        synthetic.local_coord = {0, -1};
+        synthetic.arrival_heading = onboard::mission::GridHeading::North;
+        synthetic.updates_current = false;
+        tracker.commitAdvance(synthetic);
+
+        assert(tracker.currentCoord().x == 0);
+        assert(tracker.currentCoord().y == 0);
+        assert(tracker.nodes().count({0, -1}) == 1);
+    }
+
+    {
+        onboard::mission::GridMissionConfig config;
+        config.marker_lock_yaw_delta_rad = 0.0;
+        config.vertiport_marker_id = 23;
+        config.vertiport_marker_stable_frames = 2;
+        config.vertiport_yaw_stable_frames = 1;
+
+        onboard::common::IntersectionDecisionConfig idec_config;
+        onboard::mission::GridCoordinateTracker tracker(idec_config);
+        onboard::mission::MarkerRegistry registry;
+        onboard::mission::AltitudePolicy altitude({});
+        onboard::mission::SnakePlanner snake({});
+        onboard::mission::GridMission mission(
+            config, &tracker, &registry, &altitude, &snake, nullptr);
+
+        mission.start(0.0);
+        assert(mission.activeVertiportMarkerId() == -1);
+
+        auto takeoff_vis = makeVision();
+        auto takeoff_decision = onboard::mission::IntersectionDecision {};
+        auto in = makeInput(0.1, takeoff_vis, takeoff_decision);
+        auto out = mission.update(in);
+        assert(out.state == onboard::mission::GridState::MarkerLockYaw);
+        assert(mission.activeVertiportMarkerId() == -1);
+
+        constexpr int dynamic_vertiport_id = 17;
+        auto marker_vis = makeVision();
+        addMarker(marker_vis, dynamic_vertiport_id, 0.0f, 0.0f);
+        auto marker_in = makeInput(0.2, marker_vis, takeoff_decision);
+        out = mission.update(marker_in);
+        assert(out.state == onboard::mission::GridState::MarkerLockYaw);
+        assert(mission.activeVertiportMarkerId() == -1);
+        assert(!out.vertiport_verified);
+
+        marker_in.now_s = 0.3;
+        marker_in.timestamp_ms = 300;
+        marker_in.frame_seq = 31;
+        out = mission.update(marker_in);
+        assert(out.state == onboard::mission::GridState::EntryForward);
+        assert(mission.activeVertiportMarkerId() == dynamic_vertiport_id);
+        assert(out.vertiport_verified);
+        assert(registry.hasId(dynamic_vertiport_id));
+        assert(registry.gridMarkerCount() == 0);
+    }
+
     onboard::mission::GridMissionConfig config;
     config.marker_lock_yaw_delta_rad = 0.0;
     config.vertiport_marker_stable_frames = 1;
@@ -127,6 +189,7 @@ int main()
     marker_in.local_y_m = 0.0;
     out = mission.update(marker_in);
     assert(out.state == onboard::mission::GridState::EntryForward);
+    assert(mission.activeVertiportMarkerId() == config.vertiport_marker_id);
 
     auto early_vis = makeVision();
     auto early_decision = makeIntersectionDecision(early_vis, 0.0f, 0.55f);

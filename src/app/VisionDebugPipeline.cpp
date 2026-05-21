@@ -120,6 +120,7 @@ protocol::GridNodeTelemetry toProtocolGridNode(const mission::GridNodeEvent& nod
     output.grid_branch_mask = node.grid_branch_mask;
     output.first_node = node.first_node;
     output.origin_local_only = node.origin_local_only;
+    output.updates_current = node.updates_current;
     return output;
 }
 

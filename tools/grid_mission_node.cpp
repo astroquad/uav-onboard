@@ -712,7 +712,10 @@ int main(int argc, char** argv)
             pin.mission.grid.snake_dir = omission::snakeTurnDirName(mout.snake_dir);
             pin.mission.grid.valid = mout.current_heading != omission::GridHeading::Unknown;
             pin.mission.vertiport.verified = mout.vertiport_verified;
-            pin.mission.vertiport.marker_id = cfg.mission.vertiport_marker_id;
+            // Cycle 24: report the marker id MarkerLockYaw actually latched
+            // (which may differ from cfg default if the dynamic-id path
+            // picked a different first marker).
+            pin.mission.vertiport.marker_id = mission.activeVertiportMarkerId();
             pin.mission.markers_expected = cfg.mission.markers_expected;
             pin.mission.snake_complete =
                 mout.state == omission::GridState::SnakeComplete ||
@@ -722,6 +725,11 @@ int main(int argc, char** argv)
             pin.mission.markers_found.clear();
             const double mission_now_s = now_s();
             for (const auto& m : registry.records()) {
+                // Cycle 24: skip records without a valid grid coord. Vertiport
+                // (and any other pre-grid sighting) is recorded with
+                // grid_coord_valid=false; including those here would inflate
+                // markers_found count past markers_expected on GCS.
+                if (!m.grid_coord_valid) continue;
                 onboard::protocol::MissionMarkerEntry e;
                 e.id = m.aruco_id;
                 e.grid_x = m.grid_coord.x;

@@ -81,6 +81,7 @@ struct GridNodeTelemetry {
     int grid_branch_mask = 0;
     bool first_node = false;
     bool origin_local_only = true;
+    bool updates_current = true;
 };
 
 // Cycle 13: fractional drone position relative to the last committed grid
