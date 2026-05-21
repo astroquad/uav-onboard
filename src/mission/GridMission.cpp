@@ -851,10 +851,41 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         distance >= config_.hop_intersection_min_distance_m &&
         in.intersection_decision.required_turn &&
         in.intersection_decision.state == IntersectionDecisionState::TurnReady) {
+        const GridHeading current_heading =
+            tracker_ ? tracker_->currentHeading() : GridHeading::North;
         last_node_front_open_ = forwardBranchPresent(in.intersection_decision);
         last_node_grid_branch_mask_ = rotateCameraBranchMaskToGrid(
-            in.intersection_decision.accepted_branch_mask,
-            tracker_ ? tracker_->currentHeading() : GridHeading::North);
+            in.intersection_decision.accepted_branch_mask, current_heading);
+
+        // Cycle 23: also commit the boundary node here so the last node of
+        // every column reaches the GCS map. IntersectionDecision routes
+        // required_turn intersections directly to TurnConfirm/TurnReady,
+        // skipping NodeRecord, so the regular arrival path below is gated
+        // off. event_ready is still set when cy hits the node band, so
+        // tracker peek typically returns valid=true at this exact frame;
+        // when it does not (cy entered turn_zone only), synthesise an event
+        // describing the boundary node so commitAdvance still fires.
+        ++intersections_recorded_;
+        out.commit_tracker_advance = true;
+        if (in.node_event.valid) {
+            // peek event already describes the boundary node; just commit it.
+        } else if (tracker_) {
+            GridNodeEvent ev;
+            ev.valid = true;
+            ev.arrival_heading = current_heading;
+            ev.local_coord = tracker_->advance(tracker_->currentCoord(), current_heading);
+            ev.topology = in.intersection_decision.accepted_type;
+            ev.camera_branch_mask = in.intersection_decision.accepted_branch_mask;
+            ev.grid_branch_mask = last_node_grid_branch_mask_;
+            ev.origin_local_only = true;
+            out.synthetic_commit_event = ev;
+        }
+        if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
+            last_node_local_x_ = *in.local_x_m;
+            last_node_local_y_ = *in.local_y_m;
+        }
+        last_node_record_s_ = in.now_s;
+
         out.last_safety_event = "";
         transition(GridState::SnakeStopAtCenter, in.now_s, "boundary_watchdog");
         snake_stop_stable_count_ = 0;

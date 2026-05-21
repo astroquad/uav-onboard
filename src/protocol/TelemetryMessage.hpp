@@ -178,6 +178,9 @@ struct MissionMarkerEntry {
     int grid_y = 0;
     bool grid_valid = false;
     double orientation_deg = 0.0;
+    // Cycle 23: onboard wall-clock seconds when this marker was first
+    // committed to the MarkerRegistry. Surfaced on the GCS markers panel.
+    double first_seen_s = 0.0;
 };
 
 struct MissionTelemetry {

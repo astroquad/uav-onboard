@@ -4,6 +4,7 @@
 #include "common/VisionConfig.hpp"
 #include "mission/GridCoordinateTracker.hpp"
 #include "mission/IntersectionDecision.hpp"
+#include "protocol/TelemetryMessage.hpp"
 #include "vision/FrameSource.hpp"
 #include "vision/VisionProcessor.hpp"
 
@@ -37,6 +38,10 @@ struct VisionDebugPublishInput {
     double drone_cell_progress = 0.0;
     double drone_grid_offset_x = 0.0;
     double drone_grid_offset_y = 0.0;
+    // Cycle 23: high-level mission telemetry (state, found-marker registry,
+    // grid coord/heading). Populated by the composition root from the
+    // GridMission output + MarkerRegistry; forwarded verbatim to the GCS.
+    protocol::MissionTelemetry mission;
     double read_frame_ms = 0.0;
     double jpeg_decode_ms = 0.0;
     double processing_latency_ms = 0.0;

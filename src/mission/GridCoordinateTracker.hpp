@@ -71,8 +71,13 @@ public:
     GridCoord currentCoord() const;
     const std::map<GridCoord, GridNodeEvent, GridCoordLess>& nodes() const;
 
-private:
+    // Returns the GridCoord one cell forward of `coord` along `heading`.
+    // Cycle 23: exposed so GridMission can synthesise a boundary commit event
+    // when the IntersectionDecision routes straight to TurnReady (skipping
+    // NodeRecord) and tracker peek did not fire a valid event.
     GridCoord advance(GridCoord coord, GridHeading heading) const;
+
+private:
     GridHeading chooseNextHeading(const IntersectionDecision& decision);
 
     common::IntersectionDecisionConfig config_;

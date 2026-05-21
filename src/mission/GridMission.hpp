@@ -229,6 +229,14 @@ struct GridMissionOutput {
     // GridMission sets this only after lockouts + distance gate pass.
     bool commit_tracker_advance = false;
 
+    // Cycle 23: optional synthetic GridNodeEvent for boundary commits where
+    // IntersectionDecision routed directly to TurnReady (skipping NodeRecord)
+    // and tracker peek did not fire a valid event. When set together with
+    // commit_tracker_advance=true, the composition root must use this event
+    // instead of the peek one. Used so the last boundary node of every snake
+    // column reaches last_committed_event -> GCS.
+    std::optional<GridNodeEvent> synthetic_commit_event;
+
     // Cycle 12: a one-shot synthetic origin event the composition root should
     // forward to the GCS so the start marker (`s`) is rendered at the
     // vertiport position from the moment the grid is locked, rather than

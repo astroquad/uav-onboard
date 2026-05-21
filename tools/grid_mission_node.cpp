@@ -616,9 +616,18 @@ int main(int argc, char** argv)
 
         // Cycle 9: tracker advances only when GridMission says so (post all
         // gates). The earlier tracker.update call above was peek-only.
-        if (mout.commit_tracker_advance && node_event.valid) {
-            tracker.commitAdvance(node_event);
-            last_committed_event = node_event;
+        // Cycle 23: GridMission may attach a synthetic event for boundary
+        // commits where idec skipped NodeRecord and tracker peek returned
+        // valid=false. Prefer the synthetic event when present.
+        if (mout.commit_tracker_advance) {
+            const omission::GridNodeEvent& commit_ev =
+                mout.synthetic_commit_event.has_value()
+                    ? *mout.synthetic_commit_event
+                    : node_event;
+            if (commit_ev.valid) {
+                tracker.commitAdvance(commit_ev);
+                last_committed_event = commit_ev;
+            }
         }
 
         // Cycle 12 A: one-shot synthetic origin event from GRID_ORIGIN_LOCK so
@@ -688,6 +697,44 @@ int main(int argc, char** argv)
             pin.drone_cell_progress = mout.drone_cell_progress;
             pin.drone_grid_offset_x = mout.drone_grid_offset_x;
             pin.drone_grid_offset_y = mout.drone_grid_offset_y;
+            // Cycle 23: populate mission telemetry so the GCS sees the
+            // discovered-marker registry + mission state. Without this the
+            // mission JSON block stayed empty and GCS could not render the
+            // markers panel.
+            pin.mission.present = true;
+            pin.mission.state = omission::gridStateName(mout.state);
+            pin.mission.control_intent = ocontrol::gridControlIntentName(mout.intent);
+            pin.mission.target_altitude_m = mout.target_altitude_m;
+            pin.mission.altitude_off_pad_confirmed = mout.altitude_off_pad_confirmed;
+            pin.mission.grid.x = mout.current_coord.x;
+            pin.mission.grid.y = mout.current_coord.y;
+            pin.mission.grid.heading = omission::gridHeadingName(mout.current_heading);
+            pin.mission.grid.snake_dir = omission::snakeTurnDirName(mout.snake_dir);
+            pin.mission.grid.valid = mout.current_heading != omission::GridHeading::Unknown;
+            pin.mission.vertiport.verified = mout.vertiport_verified;
+            pin.mission.vertiport.marker_id = cfg.mission.vertiport_marker_id;
+            pin.mission.markers_expected = cfg.mission.markers_expected;
+            pin.mission.snake_complete =
+                mout.state == omission::GridState::SnakeComplete ||
+                mout.state == omission::GridState::Land ||
+                mout.state == omission::GridState::Done;
+            pin.mission.last_safety_event = mout.last_safety_event;
+            pin.mission.markers_found.clear();
+            const double mission_now_s = now_s();
+            for (const auto& m : registry.records()) {
+                onboard::protocol::MissionMarkerEntry e;
+                e.id = m.aruco_id;
+                e.grid_x = m.grid_coord.x;
+                e.grid_y = m.grid_coord.y;
+                e.grid_valid = m.grid_coord_valid;
+                e.orientation_deg = static_cast<double>(m.orientation_deg);
+                // Convert absolute first_seen_ms (camera frame clock) into
+                // mission elapsed seconds by anchoring against the current
+                // frame's timestamp_ms and now_s(). first_seen <= now_s.
+                e.first_seen_s = mission_now_s +
+                    (m.first_seen_ms - frame.timestamp_ms) / 1000.0;
+                pin.mission.markers_found.push_back(e);
+            }
             pin.processing_latency_ms = processing_latency_ms;
             pin.read_frame_ms = 0.0;
             pin.capture_fps = 0.0;

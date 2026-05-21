@@ -232,6 +232,7 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
                 {"grid", {m.grid_x, m.grid_y}},
                 {"grid_valid", m.grid_valid},
                 {"orientation_deg", m.orientation_deg},
+                {"first_seen_s", m.first_seen_s},
             });
         }
         message["mission"] = {

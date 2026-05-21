@@ -200,6 +200,15 @@ void GridCoordinateTracker::forceOrigin(GridCoord coord, GridHeading heading)
     using_default_start_heading_ = false;
     pending_second_turn_ = false;
     pending_turn_right_ = true;
+    // The forced origin reserves node_id=1 (latchGridOrigin synthesises an
+    // origin GridNodeEvent with id=1 and ships it to GCS directly without
+    // going through commitAdvance). Without bumping next_node_id_ here, the
+    // first SnakeForward arrival's peek event would also carry node_id=1 and
+    // GCS's id-based dedup would silently drop it — making (0,-1) appear
+    // skipped on the rendered grid even though onboard committed it.
+    if (next_node_id_ < 2) {
+        next_node_id_ = 2;
+    }
 }
 
 GridHeading GridCoordinateTracker::currentHeading() const
