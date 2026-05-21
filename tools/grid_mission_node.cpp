@@ -169,6 +169,72 @@ struct Configs {
     int setpoint_rate_hz = 20;
 };
 
+void applyMarkerHoverConfig(const toml::node_view<toml::node> marker_hover,
+                            Configs& cfg)
+{
+    if (!marker_hover) return;
+
+    cfg.mission.snake_marker_hover_s =
+        marker_hover["hold_s"].value_or(cfg.mission.snake_marker_hover_s);
+    cfg.mission.marker_hover_min_s =
+        marker_hover["min_s"].value_or(
+            marker_hover["min_center_s"].value_or(cfg.mission.marker_hover_min_s));
+    cfg.mission.marker_hover_center_stable_frames =
+        marker_hover["center_stable_frames"].value_or(
+            cfg.mission.marker_hover_center_stable_frames);
+
+    if (const auto center_tol_norm =
+            marker_hover["center_tolerance_norm"].value<double>()) {
+        cfg.mission.marker_hover_center_tolerance_norm = *center_tol_norm;
+    } else if (const auto center_tol_px =
+                   marker_hover["center_tolerance_px"].value<double>()) {
+        const double half_w =
+            std::max(1.0, static_cast<double>(cfg.vision.camera.width) * 0.5);
+        const double half_h =
+            std::max(1.0, static_cast<double>(cfg.vision.camera.height) * 0.5);
+        cfg.mission.marker_hover_center_tolerance_norm =
+            std::max(*center_tol_px / half_w, *center_tol_px / half_h);
+    }
+
+    if (const auto center_kp = marker_hover["center_kp"].value<double>()) {
+        cfg.controller.marker_x_kp = *center_kp;
+        cfg.controller.marker_y_kp = *center_kp;
+    }
+    cfg.controller.marker_x_kp =
+        marker_hover["center_x_kp"].value_or(cfg.controller.marker_x_kp);
+    cfg.controller.marker_y_kp =
+        marker_hover["center_y_kp"].value_or(cfg.controller.marker_y_kp);
+    cfg.controller.max_marker_mps =
+        marker_hover["max_lateral_mps"].value_or(
+            marker_hover["max_marker_mps"].value_or(cfg.controller.max_marker_mps));
+    cfg.controller.marker_deadband_norm =
+        marker_hover["deadband_norm"].value_or(
+            marker_hover["center_deadband_norm"].value_or(
+                cfg.controller.marker_deadband_norm));
+    cfg.controller.marker_output_ema_alpha =
+        marker_hover["output_ema_alpha"].value_or(
+            cfg.controller.marker_output_ema_alpha);
+    cfg.controller.max_marker_rate_mps =
+        marker_hover["max_marker_rate_mps"].value_or(
+            marker_hover["max_lateral_rate_mps"].value_or(
+                cfg.controller.max_marker_rate_mps));
+    cfg.controller.invert_marker_x =
+        marker_hover["invert_x"].value_or(cfg.controller.invert_marker_x);
+    cfg.controller.invert_marker_y =
+        marker_hover["invert_y"].value_or(cfg.controller.invert_marker_y);
+}
+
+void applyMarkerHoverConfigFile(const std::string& path, Configs& cfg)
+{
+    try {
+        auto table = toml::parse_file(path);
+        applyMarkerHoverConfig(table["marker_hover"], cfg);
+    } catch (const toml::parse_error& e) {
+        std::cerr << "[config] marker_hover parse warning (" << path
+                  << "): " << e.what() << "\n";
+    }
+}
+
 void loadConfigs(const Options& opt, Configs& cfg)
 {
     // Network (shared with line-follow path)
@@ -228,6 +294,13 @@ void loadConfigs(const Options& opt, Configs& cfg)
             g.snake_record_lockout_s = gm["snake_record_lockout_s"].value_or(g.snake_record_lockout_s);
             g.snake_turn_lockout_s = gm["snake_turn_lockout_s"].value_or(g.snake_turn_lockout_s);
             g.snake_marker_hover_s = gm["snake_marker_hover_s"].value_or(g.snake_marker_hover_s);
+            g.marker_hover_min_s = gm["marker_hover_min_s"].value_or(g.marker_hover_min_s);
+            g.marker_hover_center_tolerance_norm =
+                gm["marker_hover_center_tolerance_norm"].value_or(
+                    g.marker_hover_center_tolerance_norm);
+            g.marker_hover_center_stable_frames =
+                gm["marker_hover_center_stable_frames"].value_or(
+                    g.marker_hover_center_stable_frames);
             g.snake_advance_timeout_s = gm["snake_advance_timeout_s"].value_or(g.snake_advance_timeout_s);
             g.max_intersections = gm["max_intersections"].value_or(g.max_intersections);
             g.mission_timeout_s = gm["mission_timeout_s"].value_or(g.mission_timeout_s);
@@ -331,6 +404,12 @@ void loadConfigs(const Options& opt, Configs& cfg)
     cfg.controller.output_ema_alpha = 0.4;
     cfg.controller.altitude_kp = 0.4;
     cfg.controller.max_vz_down_mps = 0.35;
+
+    // Marker hover settings live in mission/runtime profiles and affect both
+    // the controller gains and the grid mission's early-exit centering gate.
+    // Apply them after grid defaults so they are not overwritten.
+    applyMarkerHoverConfigFile(joinPath(opt.config_dir, "mission.toml"), cfg);
+    applyMarkerHoverConfigFile(runtime_file, cfg);
 }
 
 std::unique_ptr<ovision::FrameSource> createFrameSource(const std::string& kind)
@@ -388,6 +467,15 @@ void logState(const omission::GridMissionOutput& out,
     snprintf(cy_buf, sizeof(cy_buf), "%.2f", idec.center_y_norm);
     char hop_buf[16];
     snprintf(hop_buf, sizeof(hop_buf), "%.2f", out.hop_distance_m);
+    char mkx_buf[16];
+    char mky_buf[16];
+    if (out.marker_detected) {
+        snprintf(mkx_buf, sizeof(mkx_buf), "%.2f", out.marker_center_error_x_norm);
+        snprintf(mky_buf, sizeof(mky_buf), "%.2f", out.marker_center_error_y_norm);
+    } else {
+        snprintf(mkx_buf, sizeof(mkx_buf), "-");
+        snprintf(mky_buf, sizeof(mky_buf), "-");
+    }
     // Cycle 10: registry ID list (committed markers).
     std::string regids;
     {
@@ -409,6 +497,7 @@ void logState(const omission::GridMissionOutput& out,
               << " yaw=" << fmt(ap.attitude_yaw_rad)
               << " line=" << (vis.line.detected ? 1 : 0)
               << " mks=" << vis.markers.size()
+              << " mkerr=(" << mkx_buf << "," << mky_buf << ")"
               << " coord=(" << out.current_coord.x << "," << out.current_coord.y << ")"
               << " hd=" << headingName(out.current_heading)
               << " nodes=" << out.intersections_recorded

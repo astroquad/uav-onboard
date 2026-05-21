@@ -184,6 +184,14 @@ int main()
     config.entry_center_velocity_threshold_mps = 0.20;
     config.entry_center_stable_frames = 2;
     config.entry_center_timeout_s = 12.0;
+    config.hop_intersection_min_distance_m = 0.1;
+    config.snake_record_lockout_s = 0.0;
+    config.snake_turn_lockout_s = 0.0;
+    config.marker_window_frames = 1;
+    config.marker_window_min_count = 1;
+    config.marker_hover_min_s = 0.8;
+    config.marker_hover_center_tolerance_norm = 0.10;
+    config.marker_hover_center_stable_frames = 2;
     config.snake_launch_align_stable_frames = 2;
     config.snake_launch_align_timeout_s = 3.0;
 
@@ -309,6 +317,49 @@ int main()
     assert(out.intent == onboard::control::GridControlIntent::ForwardBlind);
     assert(out.line_detected);
     assert(std::abs(out.line_center_error_norm) > 0.01);
+
+    auto marker_node_vis = makeVision();
+    addMarker(marker_node_vis, 1, 0.4f, 0.4f);
+    auto marker_node_decision = makeStraightDecision(marker_node_vis);
+    marker_node_decision.event_ready = true;
+    marker_node_decision.node_recorded = true;
+    onboard::mission::GridNodeEvent node_event;
+    node_event.valid = true;
+    node_event.local_coord = {0, -1};
+    node_event.arrival_heading = onboard::mission::GridHeading::North;
+    node_event.topology = onboard::vision::IntersectionType::Straight;
+    node_event.camera_branch_mask = 0x05;
+    node_event.grid_branch_mask = 0x05;
+    auto marker_node_in = makeInput(4.0, marker_node_vis, marker_node_decision);
+    marker_node_in.local_y_m = -0.2;
+    marker_node_in.node_event = node_event;
+    out = mission.update(marker_node_in);
+    assert(out.state == onboard::mission::GridState::SnakeRecordNode);
+    assert(out.commit_tracker_advance);
+    tracker.commitAdvance(node_event);
+
+    auto off_marker_vis = makeVision();
+    addMarker(off_marker_vis, 1, 0.4f, 0.4f);
+    auto off_marker_decision = makeStraightDecision(off_marker_vis);
+    auto off_marker_in = makeInput(4.1, off_marker_vis, off_marker_decision);
+    out = mission.update(off_marker_in);
+    assert(out.state == onboard::mission::GridState::SnakeRecordNode);
+    assert(out.intent == onboard::control::GridControlIntent::MarkerHover);
+    assert(out.marker_detected);
+
+    auto centered_marker_vis = makeVision();
+    addMarker(centered_marker_vis, 1, 0.02f, 0.02f);
+    auto centered_marker_decision = makeStraightDecision(centered_marker_vis);
+    auto centered_marker_in = makeInput(4.9, centered_marker_vis, centered_marker_decision);
+    out = mission.update(centered_marker_in);
+    assert(out.state == onboard::mission::GridState::SnakeRecordNode);
+    assert(out.intent == onboard::control::GridControlIntent::MarkerHover);
+
+    centered_marker_in.now_s = 5.0;
+    centered_marker_in.timestamp_ms = 5000;
+    centered_marker_in.frame_seq = 501;
+    out = mission.update(centered_marker_in);
+    assert(out.state == onboard::mission::GridState::SnakeLaunchAlign);
 
     onboard::mission::MarkerWindow window;
     window.configure(4, 2);

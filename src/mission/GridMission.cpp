@@ -129,7 +129,10 @@ void GridMission::reset()
     pending_post_hover_marker_id_ = -1;
     snake_turn_first_done_ = false;
     marker_hover_active_ = false;
+    marker_hover_start_s_ = -1.0;
+    marker_hover_centered_count_ = 0;
     last_recorded_marker_id_ = -1;
+    completion_hover_marker_id_ = -1;
     if (registry_) registry_->reset();
     if (tracker_) tracker_->resetLocalOrigin();
     if (altitude_) altitude_->reset();
@@ -358,6 +361,53 @@ void GridMission::populateMarkerInputs(const GridMissionInput& in,
         out.marker_center_error_x_norm = (m->center_px.x - width * 0.5) / (width * 0.5);
         out.marker_center_error_y_norm = (m->center_px.y - height * 0.5) / (height * 0.5);
     }
+}
+
+void GridMission::beginMarkerHover(int marker_id, double now_s)
+{
+    if (!marker_hover_active_ ||
+        last_recorded_marker_id_ != marker_id ||
+        marker_hover_start_s_ < 0.0) {
+        marker_hover_start_s_ = now_s;
+        marker_hover_centered_count_ = 0;
+    }
+    marker_hover_active_ = true;
+    last_recorded_marker_id_ = marker_id;
+}
+
+void GridMission::clearMarkerHover()
+{
+    marker_hover_active_ = false;
+    marker_hover_start_s_ = -1.0;
+    marker_hover_centered_count_ = 0;
+}
+
+bool GridMission::updateMarkerHoverCenterGate(const GridMissionOutput& out)
+{
+    const double tol = std::max(0.0, config_.marker_hover_center_tolerance_norm);
+    const bool centered =
+        out.marker_detected &&
+        std::abs(out.marker_center_error_x_norm) <= tol &&
+        std::abs(out.marker_center_error_y_norm) <= tol;
+    if (centered) {
+        ++marker_hover_centered_count_;
+    } else {
+        marker_hover_centered_count_ = 0;
+    }
+    return marker_hover_centered_count_ >=
+        std::max(1, config_.marker_hover_center_stable_frames);
+}
+
+bool GridMission::markerHoverComplete(const GridMissionOutput& out, double now_s)
+{
+    const double start_s = marker_hover_start_s_ >= 0.0
+        ? marker_hover_start_s_
+        : state_entry_s_;
+    const double elapsed_s = now_s - start_s;
+    const double max_s = std::max(0.0, config_.snake_marker_hover_s);
+    const double min_s = std::min(std::max(0.0, config_.marker_hover_min_s), max_s);
+    const bool centered = updateMarkerHoverCenterGate(out);
+    return (elapsed_s >= min_s && centered) || elapsed_s >= max_s;
 }
 
 double GridMission::intersectionCenterXNorm(const GridMissionInput& in) const
@@ -1000,8 +1050,7 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
         }
     }
     if (focus_marker_id >= 0) {
-        marker_hover_active_ = true;
-        last_recorded_marker_id_ = focus_marker_id;
+        beginMarkerHover(focus_marker_id, in.now_s);
         populateMarkerInputs(in, focus_marker_id, out);
         out.intent = control::GridControlIntent::MarkerHover;
         out.advance_phase = false;  // full hover during marker hold
@@ -1023,11 +1072,14 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
         }
     }
 
-    const double dwell_s = marker_hover_active_
-        ? config_.snake_marker_hover_s
-        : config_.snake_record_dwell_s;
-    if (in.now_s - state_entry_s_ >= dwell_s) {
-        marker_hover_active_ = false;
+    const bool dwell_done = marker_hover_active_
+        ? markerHoverComplete(out, in.now_s)
+        : (in.now_s - state_entry_s_ >= config_.snake_record_dwell_s);
+    if (dwell_done) {
+        const int hover_marker_id = marker_hover_active_
+            ? last_recorded_marker_id_
+            : -1;
+        clearMarkerHover();
         // Cycle 10: re-evaluate branches with the FRESH idec at dwell end.
         // The branch topology can resolve during the dwell (e.g. T -> L as the
         // drone closes in on a corner), and we must not stick with the
@@ -1043,6 +1095,7 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
         const bool all_markers_found = registry_ &&
             registry_->gridMarkerCount() >= static_cast<std::size_t>(config_.markers_expected);
         if (all_markers_found) {
+            completion_hover_marker_id_ = hover_marker_id;
             // Cycle 24: close out the rest of the current column so the grid
             // model onboard (and the GCS render) is a complete rectangle.
             synthesizeRemainingColumnNodes();
@@ -1369,6 +1422,7 @@ void GridMission::handleTurnNodeMarkerHover(const GridMissionInput& in,
         ? pending_post_hover_marker_id_
         : last_recorded_marker_id_;
     if (focus_id >= 0) {
+        beginMarkerHover(focus_id, in.now_s);
         populateMarkerInputs(in, focus_id, out);
         // Re-observe each tick so registry.last_seen_ms tracks current
         // observations (mirrors handleSnakeRecordNode's behaviour).
@@ -1384,12 +1438,16 @@ void GridMission::handleTurnNodeMarkerHover(const GridMissionInput& in,
         }
     }
 
-    if (in.now_s - state_entry_s_ >= config_.snake_marker_hover_s) {
+    const bool hover_done = focus_id >= 0
+        ? markerHoverComplete(out, in.now_s)
+        : (in.now_s - state_entry_s_ >= config_.snake_marker_hover_s);
+    if (hover_done) {
         const GridState next = pending_post_hover_state_ != GridState::Idle
             ? pending_post_hover_state_
             : GridState::SnakeStopAtCenter;  // safe default
         pending_post_hover_state_ = GridState::Idle;
         pending_post_hover_marker_id_ = -1;
+        clearMarkerHover();
         last_recorded_marker_id_ = -1;
         if (next == GridState::SnakeStopAtCenter) {
             snake_stop_stable_count_ = 0;
@@ -1401,6 +1459,13 @@ void GridMission::handleTurnNodeMarkerHover(const GridMissionInput& in,
 void GridMission::handleSnakeComplete(const GridMissionInput& in, GridMissionOutput& out)
 {
     out.intent = control::GridControlIntent::HoldPosition;
+    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.advance_phase = false;
+    if (completion_hover_marker_id_ >= 0) {
+        populateMarkerInputs(in, completion_hover_marker_id_, out);
+        out.intent = control::GridControlIntent::MarkerHover;
+    }
 
     // Cycle 24: drain one synthetic completion node per tick. Each drained
     // event is committed to tracker.nodes_ (so the onboard grid model is

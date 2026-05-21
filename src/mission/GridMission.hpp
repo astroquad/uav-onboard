@@ -109,7 +109,13 @@ struct GridMissionConfig {
     double cell_size_m = 3.0;
     double snake_record_lockout_s = 3.0;
     double snake_turn_lockout_s = 3.0;
+    // Marker hover is capped by snake_marker_hover_s, but it may finish early
+    // once the marker is centered enough for a few frames. This avoids
+    // spending the whole dwell chasing pixel-perfect center.
     double snake_marker_hover_s = 3.0;
+    double marker_hover_min_s = 0.8;
+    double marker_hover_center_tolerance_norm = 0.10;
+    int    marker_hover_center_stable_frames = 2;
     double snake_stop_velocity_threshold_mps = 0.05;
     int    snake_stop_velocity_consecutive_frames = 2;
     double snake_yaw_target_tolerance_rad = 0.0872665;
@@ -331,6 +337,10 @@ private:
     void populateMarkerInputs(const GridMissionInput& in,
                               int marker_id_focus,
                               GridMissionOutput& out) const;
+    void beginMarkerHover(int marker_id, double now_s);
+    void clearMarkerHover();
+    bool updateMarkerHoverCenterGate(const GridMissionOutput& out);
+    bool markerHoverComplete(const GridMissionOutput& out, double now_s);
     bool isEntryIntersectionCandidate(const GridMissionInput& in) const;
     bool isIntersectionCenteredForEntry(const GridMissionInput& in) const;
     double intersectionCenterXNorm(const GridMissionInput& in) const;
@@ -408,7 +418,10 @@ private:
     int pending_post_hover_marker_id_ = -1;
     bool   snake_turn_first_done_ = false;
     bool   marker_hover_active_ = false;
+    double marker_hover_start_s_ = -1.0;
+    int    marker_hover_centered_count_ = 0;
     int    last_recorded_marker_id_ = -1;
+    int    completion_hover_marker_id_ = -1;
     bool   started_ = false;
     std::string last_safety_event_;
 
