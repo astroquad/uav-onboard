@@ -1,20 +1,91 @@
-# Astroquad Gazebo Vision World
+# Astroquad Gazebo Assets
 
-This directory contains Astroquad-owned Gazebo assets for the current SITL vision step.
+This directory contains Astroquad-owned Gazebo worlds, models, and textures for
+vision, line-follow, and grid-mission SITL testing.
 
-Run from `uav-onboard` with ArduPilot Gazebo models and Astroquad models on the resource path:
+## Line-Tracing Test World
 
-```bash
-GZ_SIM_SYSTEM_PLUGIN_PATH="$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}" \
-GZ_SIM_RESOURCE_PATH="$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/worlds:$PWD/sim/gazebo/models:$PWD/sim/gazebo/worlds:${GZ_SIM_RESOURCE_PATH:-}" \
-  gz sim -v4 -r sim/gazebo/worlds/line_tracing_test_world.sdf
+World:
+
+```text
+worlds/line_tracing_test_world.sdf
 ```
 
-The line-tracing test world uses the local `iris_with_downward_camera` wrapper around the existing ArduPilot Iris model and includes `line_tracing_course`, which provides a white ground plane, a high-contrast 10 cm black line, and a 50 cm x 50 cm ArUco ID 1 marker texture at 3 m forward on the line. The default Gazebo camera topic is configured in `config/vision.toml`.
+Launcher:
 
-`worlds/astroquad_line_camera_fixture.sdf` and `worlds/astroquad_marker_center_fixture.sdf` are detector smoke fixtures. They use `astroquad_static_downward_camera` at 1.2 m AGL so line and marker vision can be checked without starting ArduPilot SITL. The marker fixture uses the same 50 cm x 50 cm ID 1 marker texture as the flight course.
+```bash
+bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh
+```
 
-The active ID 1 texture is `models/line_tracing_course/materials/textures/aruco_id1.png`. The user-provided `/home/mseoky/test_aruco_marker/aruco2.png` was verified as OpenCV `DICT_4X4_50` ID 1 and copied into that canonical texture name.
+The line-tracing world uses `iris_with_downward_camera` and
+`line_tracing_course`. It provides a white ground plane, a 10cm black line, and
+50cm ArUco marker textures for detector and line-follow smoke tests.
+
+Default camera topic:
+
+```text
+/world/line_tracing_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image
+```
+
+## Grid Arena Test World
+
+World:
+
+```text
+worlds/grid_arena_test_world.sdf
+```
+
+Launcher:
+
+```bash
+bash ~/astroquad/uav-onboard/scripts/grid_arena_test.sh
+```
+
+The grid arena is the current full mission SITL course:
+
+- 3m x 3m x 0.7m vertiport box centered at world origin.
+- Vertiport top texture with ArUco ID 23.
+- 5 x 8 grid cells, 3m cell size, black 10cm grid lines on white ground.
+- 50cm ArUco grid markers on 60cm white pads:
+  ID 1 at world `(11.5, 3.0)`, ID 2 at `(17.5, 9.0)`,
+  ID 3 at `(23.5, 6.0)`, ID 4 at `(26.5, 12.0)`.
+- Iris starts on the vertiport top with yaw 90deg.
+
+Default grid camera topic from `config/runtime.sitl.grid.toml`:
+
+```text
+/world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image
+```
+
+Current mission command:
+
+```bash
+WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
+
+cd ~/astroquad/uav-onboard
+./build/grid_mission_node \
+  --config config \
+  --target sitl \
+  --vision gazebo \
+  --world grid \
+  --line-mode dark_on_light \
+  --marker-count 4 \
+  --video \
+  --gcs-ip "$WINDOWS_GCS_IP"
+```
+
+`--world grid` loads the grid runtime profile and normally removes the need for
+manual `--gazebo-topic`. Use `--gazebo-topic` only when testing a custom world
+or fixture.
+
+## Static Vision Fixtures
+
+Detector-only fixtures without ArduPilot SITL:
+
+```text
+worlds/astroquad_line_camera_fixture.sdf
+worlds/astroquad_marker_center_fixture.sdf
+```
 
 Fixture topics:
 
@@ -23,12 +94,32 @@ Fixture topics:
 /world/astroquad_marker_center_fixture/model/astroquad_static_downward_camera/link/downward_camera_link/sensor/downward_camera/image
 ```
 
-The original `/home/mseoky/test_aruco_marker` files are kept as raw assets. Their verified OpenCV IDs are:
+Example:
+
+```bash
+GZ_SIM_SYSTEM_PLUGIN_PATH="$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}" \
+GZ_SIM_RESOURCE_PATH="$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/worlds:$PWD/sim/gazebo/models:$PWD/sim/gazebo/worlds:${GZ_SIM_RESOURCE_PATH:-}" \
+  gz sim -s -v2 -r sim/gazebo/worlds/astroquad_marker_center_fixture.sdf
+
+./build/vision_debug_node --config config --target sitl --vision gazebo \
+  --gazebo-topic /world/astroquad_marker_center_fixture/model/astroquad_static_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --count 5 --no-telemetry --no-video
+```
+
+## Models And Textures
+
+| Path | Role |
+|---|---|
+| `models/iris_with_downward_camera` | Wrapper around ArduPilot Iris with downward camera. |
+| `models/line_tracing_course` | Line-tracing smoke course and marker textures. |
+| `models/astroquad_grid_course` | Current vertiport + grid arena course. |
+| `models/astroquad_static_downward_camera` | Fixed camera model for deterministic detector fixtures. |
+
+Gazebo downward-camera zoom is controlled in:
 
 ```text
-aruco2.png -> DICT_4X4_50 ID 1
-aruco3.png -> DICT_4X4_50 ID 2
-aruco4.png -> DICT_4X4_50 ID 3
-aruco1.png -> DICT_4X4_50 ID 4
-Vmarker.png -> future vertiport visual, not an ArUco fixture marker
+models/iris_with_downward_camera/model.sdf
 ```
+
+Change `<horizontal_fov>`: smaller values zoom in, larger values zoom out. FOV
+edits require restarting Gazebo but not rebuilding C++.

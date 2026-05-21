@@ -1,8 +1,11 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.7
-Last updated: 2026-05-14
+Version: v1.8
+Last updated: 2026-05-21
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
+
+`protocol_version` in JSON remains integer `1`. The document version changes
+when fields or operating rules are clarified.
 
 ## 1. Channels
 
@@ -13,21 +16,33 @@ This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/doc
 | Video stream | onboard -> GCS | UDP MJPEG chunks | 5600 | implemented |
 | GCS discovery | GCS -> LAN broadcast | UDP text beacon | 5601 | implemented |
 
-Ports and destination addresses are configured in each repo's `config/network.toml`.
+Ports and destination addresses are configured in each repo's
+`config/network.toml`. Telemetry and video are best-effort; packet loss must
+not block onboard mission logic.
 
 ## 2. Compatibility Rules
 
-- Every JSON message includes `protocol_version`, `type`, `seq`, and `timestamp_ms`.
-- Receivers ignore unknown fields.
-- Receivers should drop malformed JSON without terminating the process.
-- `protocol_version` is currently `1`.
-- UDP telemetry and video are best-effort. Missing packets must not block mission logic.
-- Debug video streaming is never mission-critical. If video sending falls behind, onboard drops old frames and keeps the latest frame/result for vision and telemetry.
-- Runtime selection between fake, Gazebo camera, and Raspberry Pi camera sources does not change the telemetry JSON or MJPEG chunk wire format. Source/runtime identity may be reported in existing debug fields such as `debug.note`.
+- Every JSON packet includes `protocol_version`, `type`, `seq`, and
+  `timestamp_ms`.
+- Receivers ignore unknown fields and drop malformed JSON without terminating.
+- Runtime source selection (`fake`, Gazebo camera, Raspberry Pi camera) does
+  not change telemetry JSON or MJPEG chunk format.
+- Debug video is never mission-critical. Onboard may drop old video frames and
+  continue processing the latest camera frame.
+- GCS overlay rendering uses only onboard metadata. GCS does not run marker,
+  line, or intersection detection locally.
+- `vision.grid_node` is an event-style field, but `grid_mission_node` resends
+  the latest committed node every frame for UDP-loss tolerance. GCS deduplicates
+  by node id and coordinate.
+- `vision.drone_position` carries fractional progress from the last committed
+  grid node. The current GCS parser accepts it; the current ASCII grid map still
+  renders the heading arrow at the latest committed node.
 
 ## 3. Telemetry JSON
 
-Telemetry packets are sent from onboard to GCS over UDP. During vision debugging, onboard sends one telemetry packet per processed camera frame so GCS can match marker and line metadata to the video frame.
+Telemetry packets are sent from onboard to GCS over UDP. Vision/debug and
+mission staging executables usually send one telemetry packet per processed
+camera frame so GCS can match metadata to the optional MJPEG frame id.
 
 Required top-level fields:
 
@@ -74,56 +89,56 @@ Required top-level fields:
     "measured_capture_fps": 11.8,
     "frame_seq": 358,
     "autofocus_mode": "manual",
-    "lens_position": 0.67,
+    "lens_position": -1.0,
     "exposure_mode": "sport",
     "shutter_us": 0,
     "gain": 0.0,
     "awb": "auto"
   },
   "vision": {
-    "line_detected": false,
-    "line_offset": 0.0,
-    "line_angle": 0.0,
+    "line_detected": true,
+    "line_offset": -12.3,
+    "line_angle": 91.4,
     "line": {
-      "detected": false,
-      "raw_detected": false,
-      "filtered": false,
+      "detected": true,
+      "raw_detected": true,
+      "filtered": true,
       "held": false,
       "rejected_jump": false,
-      "tracking_point_px": { "x": 0.0, "y": 0.0 },
-      "raw_tracking_point_px": { "x": 0.0, "y": 0.0 },
-      "centroid_px": { "x": 0.0, "y": 0.0 },
-      "center_offset_px": 0.0,
-      "raw_center_offset_px": 0.0,
-      "angle_deg": 0.0,
-      "raw_angle_deg": 0.0,
-      "confidence": 0.0,
+      "tracking_point_px": { "x": 467.7, "y": 396.0 },
+      "raw_tracking_point_px": { "x": 468.1, "y": 396.0 },
+      "centroid_px": { "x": 470.0, "y": 405.0 },
+      "center_offset_px": -12.3,
+      "raw_center_offset_px": -11.9,
+      "angle_deg": 91.4,
+      "raw_angle_deg": 92.0,
+      "confidence": 0.76,
       "contour_px": []
     },
     "intersection_detected": false,
     "intersection_score": 0.0,
     "intersection": {
-      "valid": false,
+      "valid": true,
       "detected": false,
-      "type": "none",
-      "raw_type": "none",
-      "stable": false,
+      "type": "straight",
+      "raw_type": "straight",
+      "stable": true,
       "held": false,
-      "center_px": { "x": 0.0, "y": 0.0 },
-      "raw_center_px": { "x": 0.0, "y": 0.0 },
-      "score": 0.0,
-      "raw_score": 0.0,
-      "branch_mask": 0,
-      "branch_count": 0,
-      "stable_frames": 0,
-      "radius_px": 0.0,
-      "selected_mask_index": -1,
+      "center_px": { "x": 480.0, "y": 390.0 },
+      "raw_center_px": { "x": 480.0, "y": 390.0 },
+      "score": 0.72,
+      "raw_score": 0.70,
+      "branch_mask": 5,
+      "branch_count": 2,
+      "stable_frames": 3,
+      "radius_px": 50.0,
+      "selected_mask_index": 0,
       "branches": [
         {
           "direction": "front",
-          "present": false,
-          "score": 0.0,
-          "endpoint_px": { "x": 0.0, "y": 0.0 },
+          "present": true,
+          "score": 0.9,
+          "endpoint_px": { "x": 480.0, "y": 280.0 },
           "angle_deg": -90.0
         }
       ]
@@ -131,29 +146,29 @@ Required top-level fields:
     "intersection_decision": {
       "state": "cruise",
       "action": "continue",
-      "accepted_type": "none",
-      "best_observed_type": "none",
+      "accepted_type": "straight",
+      "best_observed_type": "straight",
       "event_ready": false,
       "turn_candidate": false,
       "required_turn": false,
-      "front_available": false,
+      "front_available": true,
       "node_recorded": false,
       "cooldown_active": false,
-      "accepted_branch_mask": 0,
-      "window_frames": 0,
-      "age_ms": 0,
-      "confidence": 0.0,
-      "center_px": { "x": 0.0, "y": 0.0 },
-      "center_y_norm": 0.0,
-      "approach_phase": "far",
+      "accepted_branch_mask": 5,
+      "window_frames": 6,
+      "age_ms": 416,
+      "confidence": 0.82,
+      "center_px": { "x": 480.0, "y": 390.0 },
+      "center_y_norm": 0.54,
+      "approach_phase": "turn_zone",
       "overshoot_risk": false,
       "too_late_to_turn": false,
       "branches": [
         {
           "direction": "front",
-          "present_frames": 0,
-          "max_score": 0.0,
-          "average_score": 0.0
+          "present_frames": 6,
+          "max_score": 0.94,
+          "average_score": 0.82
         }
       ],
       "node": {
@@ -169,36 +184,42 @@ Required top-level fields:
       }
     },
     "grid_node": {
-      "valid": false,
-      "id": 0,
-      "local_coord": { "x": 0, "y": 0 },
-      "topology": "unknown",
-      "arrival_heading": "unknown",
-      "camera_branch_mask": 0,
-      "grid_branch_mask": 0,
+      "valid": true,
+      "id": 3,
+      "local_coord": { "x": 0, "y": -2 },
+      "topology": "T",
+      "arrival_heading": "north",
+      "camera_branch_mask": 7,
+      "grid_branch_mask": 7,
       "first_node": false,
       "origin_local_only": true
     },
+    "drone_position": {
+      "valid": true,
+      "cell_progress": 0.42,
+      "grid_offset_x": 0.0,
+      "grid_offset_y": -0.42
+    },
     "marker_detected": true,
-    "marker_id": 7,
+    "marker_id": 2,
     "marker_count": 1,
     "markers": [
       {
-        "id": 7,
-        "center_px": { "x": 312.4, "y": 188.6 },
+        "id": 2,
+        "center_px": { "x": 502.4, "y": 382.6 },
         "corners_px": [
-          { "x": 280.1, "y": 150.2 },
-          { "x": 344.5, "y": 151.0 },
-          { "x": 343.8, "y": 222.9 },
-          { "x": 279.4, "y": 221.7 }
+          { "x": 474.1, "y": 354.2 },
+          { "x": 531.5, "y": 355.0 },
+          { "x": 530.8, "y": 412.9 },
+          { "x": 473.4, "y": 411.7 }
         ],
         "orientation_deg": 0.7
       }
     ]
   },
   "grid": {
-    "row": -1,
-    "col": -1,
+    "row": -2,
+    "col": 0,
     "heading_deg": 0.0
   },
   "debug": {
@@ -231,125 +252,75 @@ Required top-level fields:
     "line_candidates_evaluated": 3,
     "line_roi_pixels": 141312,
     "line_selected_contour_points": 48,
-    "note": "vision_debug_node"
+    "note": "grid_mission"
   }
 }
 ```
 
-### 3.2 Field Notes
+### 3.2 Optional Mission Object
 
-| Field | Type | Meaning |
-|---|---|---|
-| `system.board_model` | string | Onboard Linux board model, usually from device tree. |
-| `system.os_release` | string | Onboard OS pretty name when available. |
-| `system.uptime_s` | number | Onboard OS uptime in seconds. |
-| `system.cpu_temp_c` | number | Pi CPU temperature in Celsius when available. |
-| `system.throttled_raw` | string | Raw `vcgencmd get_throttled` output, for example `throttled=0x0`. |
-| `system.cpu_load_1m` | number | 1-minute Linux load average. |
-| `system.mem_available_kb` | `uint64` | Linux `MemAvailable` from `/proc/meminfo`. |
-| `system.wifi_signal_dbm` | number | Wi-Fi signal level from `/proc/net/wireless` when available. |
-| `system.wifi_tx_bitrate_mbps` | number | Wi-Fi tx bitrate from `iw dev wlan0 link` when available. |
-| `camera.sensor_model` | string | Configured sensor model, currently expected to be `imx519` for the Pi 4 upgrade. |
-| `camera.camera_index` | int | rpicam camera index passed with `--camera`. |
-| `camera.frame_seq` | `uint32` | Must match the MJPEG video `frame_id` for the same camera frame. |
-| `camera.timestamp_ms` | `int64` | Not currently a nested field. Use top-level `timestamp_ms` as frame capture time. |
-| `camera.configured_fps` | number | Configured rpicam capture FPS. |
-| `camera.measured_capture_fps` | number | Rolling measured onboard capture/read FPS. |
-| `camera.autofocus_mode` | string | Configured rpicam autofocus mode. |
-| `camera.lens_position` | number | Configured manual lens position/dioptre when used. |
-| `camera.exposure_mode` | string | Configured rpicam exposure mode. |
-| `camera.shutter_us` | int | Configured fixed shutter in microseconds; `0` means automatic/default. |
-| `camera.gain` | number | Configured analogue gain; `0.0` means automatic/default. |
-| `camera.awb` | string | Configured auto white balance mode. |
-| `vision.line_detected` | `bool` | Legacy summary field. True when the detailed line object is detected. |
-| `vision.line_offset` | number | Legacy summary field. Same value as `vision.line.center_offset_px`. |
-| `vision.line_angle` | number | Legacy summary field. Same value as `vision.line.angle_deg`. |
-| `vision.line.detected` | `bool` | True when a usable line contour/tracking point was found. |
-| `vision.line.raw_detected` | `bool` | True when the current raw detector frame found a candidate before smoothing/hold logic. |
-| `vision.line.filtered` | `bool` | True when the reported line has passed through the stabilizer. |
-| `vision.line.held` | `bool` | True when the stabilizer is temporarily holding the previous line because the current raw frame was missing or rejected. |
-| `vision.line.rejected_jump` | `bool` | True when the current raw candidate was suppressed as a sudden offset/angle jump. |
-| `vision.line.tracking_point_px` | object | Representative line point used for tracing. GCS draws it as a green point. |
-| `vision.line.raw_tracking_point_px` | object | Raw detector tracking point before EMA/hold filtering. |
-| `vision.line.centroid_px` | object | Contour centroid fallback/diagnostic point. |
-| `vision.line.center_offset_px` | number | Horizontal offset from image center to `tracking_point_px`. |
-| `vision.line.raw_center_offset_px` | number | Raw offset before stabilizer filtering. |
-| `vision.line.angle_deg` | number | Image-plane line angle. |
-| `vision.line.raw_angle_deg` | number | Raw detector angle before stabilizer filtering. |
-| `vision.line.confidence` | number | 0.0 to 1.0 confidence estimate from contour quality. |
-| `vision.line.contour_px` | array | Simplified connected line candidate contour/polyline in image pixel coordinates. GCS draws it in magenta, including cross-shaped intersections when they are part of the selected contour. |
-| `vision.intersection_detected` | `bool` | Legacy summary field. True for stabilized `+`, `T`, or `L` intersection types. False for `straight`, `none`, or `unknown`. |
-| `vision.intersection_score` | number | Stabilized intersection confidence score. |
-| `vision.intersection.valid` | `bool` | True when the intersection classifier has a usable classification result for the frame or a short held result. |
-| `vision.intersection.detected` | `bool` | True when the stabilized type is a turn/branching intersection: `+`, `T`, or `L`. |
-| `vision.intersection.type` | string | Stabilized type: `none`, `unknown`, `straight`, `L`, `T`, or `+`. |
-| `vision.intersection.raw_type` | string | Current-frame raw classifier type before temporal smoothing. |
-| `vision.intersection.stable` | `bool` | True after the same type has survived the stabilizer for the required frame count. |
-| `vision.intersection.held` | `bool` | True when the stabilizer is briefly holding the previous type because the raw frame is missing or weak. |
-| `vision.intersection.center_px` | object | Stabilized center point used by GCS to draw the intersection overlay. |
-| `vision.intersection.raw_center_px` | object | Raw center point before temporal smoothing. |
-| `vision.intersection.raw_score` | number | Current-frame raw confidence before temporal smoothing. |
-| `vision.intersection.branch_mask` | int | Bit mask for present branches in front/right/back/left order. |
-| `vision.intersection.branch_count` | int | Number of branches classified as present. |
-| `vision.intersection.stable_frames` | int | Number of consecutive frames supporting the current stabilized type. |
-| `vision.intersection.radius_px` | number | Approximate source-image center sampling radius used for debug overlay context. |
-| `vision.intersection.selected_mask_index` | int | Index of the line polarity mask that produced the selected classification. |
-| `vision.intersection.branches[]` | array | Per-direction branch observations. Directions are `front`, `right`, `back`, and `left`; each entry includes `present`, `score`, `endpoint_px`, and `angle_deg`. |
-| `vision.intersection_decision.state` | string | Mission/debug decision state: `cruise`, `candidate`, `node_record`, `turn_confirm`, `turn_ready`, or `cooldown`. |
-| `vision.intersection_decision.action` | string | Debug action hint. This is not a Pixhawk command. Current values include `continue`, `prepare_turn`, and `hold`. |
-| `vision.intersection_decision.accepted_type` | string | Short-window accepted topology after branch evidence aggregation. |
-| `vision.intersection_decision.best_observed_type` | string | Highest single-frame topology observed in the decision window. |
-| `vision.intersection_decision.event_ready` | `bool` | True when this frame produced a grid node event. |
-| `vision.intersection_decision.turn_candidate` | `bool` | True when side evidence and front-branch/policy gating make a turn candidate. |
-| `vision.intersection_decision.required_turn` | `bool` | True when the decision layer believes a turn may be required; control is still future work. |
-| `vision.intersection_decision.front_available` | `bool` | True when recent evidence still supports a branch in the camera-forward direction. |
-| `vision.intersection_decision.center_y_norm` | number | Intersection center Y normalized by frame height, used for approach phase and late/overshoot flags. |
-| `vision.intersection_decision.approach_phase` | string | Image-space phase: `far`, `approaching`, `turn_zone`, `late`, or `passed`. |
-| `vision.intersection_decision.overshoot_risk` | `bool` | True when a required turn candidate is already past the allowed turn zone. |
-| `vision.intersection_decision.branches[]` | array | Per-direction decision evidence with `present_frames`, `max_score`, and `average_score`. |
-| `vision.intersection_decision.node` | object | Grid node event attached to this decision when available. |
-| `vision.grid_node` | object | Latest grid node event for this frame. `local_coord` is local-only until official competition origin conversion is implemented. |
-| `vision.marker_detected` | `bool` | True when `markers` is not empty. |
-| `vision.marker_id` | `int` | First detected marker id, kept for backward compatibility. `-1` means none. |
-| `vision.marker_count` | `int` | Number of entries in `vision.markers`. |
-| `vision.markers[].center_px` | object | Marker center in image pixel coordinates. |
-| `vision.markers[].corners_px` | array | Four marker corners in image pixel coordinates, ordered as OpenCV returns them. |
-| `vision.markers[].orientation_deg` | number | Image-plane angle from corner 0 to corner 1. |
-| `debug.processing_latency_ms` | number | Onboard decode and detector processing latency after a camera frame has been read. |
-| `debug.read_frame_ms` | number | Time spent waiting for/reading one MJPEG camera frame. |
-| `debug.jpeg_decode_ms` | number | Time spent decoding the camera JPEG for onboard detectors. |
-| `debug.aruco_latency_ms` | number | ArUco detector latency for the frame. |
-| `debug.line_latency_ms` | number | Line detector latency for the frame. |
-| `debug.intersection_latency_ms` | number | Intersection classifier latency for the frame. |
-| `debug.intersection_decision_latency_ms` | number | Short-window decision and grid-node update latency for the frame. |
-| `debug.telemetry_build_ms` | number | Most recently measured telemetry JSON serialization latency. |
-| `debug.telemetry_send_ms` | number | Most recently measured UDP telemetry send call latency. |
-| `debug.video_submit_ms` | number | Most recently measured latest-frame video queue submit latency. |
-| `debug.video_send_ms` | number | Most recently measured onboard UDP MJPEG chunk send latency in the video worker. |
-| `debug.capture_fps` | number | Rolling measured camera read FPS. |
-| `debug.processing_fps` | number | Rolling measured detector loop FPS. |
-| `debug.debug_video_send_fps` | number | Configured best-effort debug video send cap. |
-| `debug.video_chunk_pacing_us` | int | Configured delay between UDP video chunks. |
-| `debug.cpu_temp_c` | number | Raspberry Pi CPU temperature in Celsius when available; `0.0` when unavailable. |
-| `debug.telemetry_bytes` | `uint64` | Most recently serialized telemetry payload size. |
-| `debug.video_jpeg_bytes` | `uint64` | Raw camera JPEG byte size for this frame. |
-| `debug.video_sent_frames` | `uint64` | Number of frames sent by the onboard video worker. |
-| `debug.video_dropped_frames` | `uint64` | Number of stale frames replaced before the video worker could send them. |
-| `debug.video_skipped_frames` | `uint64` | Number of camera frames intentionally not submitted to video because debug video send FPS is capped. |
-| `debug.video_chunks_sent` | `uint64` | Total number of UDP video chunks sent by the onboard video worker. |
-| `debug.video_send_failures` | `uint64` | Number of failed UDP video frame send attempts in the onboard video worker. |
-| `debug.video_chunk_count` | `int` | Number of UDP chunks in the most recently sent MJPEG frame. |
-| `debug.line_mask_count` | `int` | Number of threshold masks evaluated by the line detector. |
-| `debug.line_contours_found` | `int` | Number of line candidate contours found before filtering. |
-| `debug.line_candidates_evaluated` | `int` | Number of ranked contours actually scored. |
-| `debug.line_roi_pixels` | `int` | Pixel count of the resized ROI processed by the line detector. |
-| `debug.line_selected_contour_points` | `int` | Number of simplified contour points sent in telemetry. |
+The serializer supports a richer `mission` object, but the current
+`VisionDebugPublisher` path used by `vision_debug_node`, `line_follow_node`,
+and `grid_mission_node` does not yet populate it. For those executables, the
+console log and `debug.note` identify the active runtime, while GCS mission
+state remains minimal.
 
-GCS overlay rendering uses only onboard vision metadata. It does not run marker, line, or intersection detection locally.
+Reserved richer shape:
 
-## 4. Video Stream
+```json
+{
+  "mission": {
+    "state": "SNAKE_FORWARD",
+    "control_intent": "fwd_blind",
+    "phase_elapsed_ms": 1250,
+    "target_altitude_m": 2.0,
+    "altitude_off_pad_confirmed": true,
+    "grid": {
+      "x": 0,
+      "y": -2,
+      "heading": "north",
+      "snake_dir": "right",
+      "valid": true
+    },
+    "vertiport": {
+      "verified": true,
+      "marker_id": 23
+    },
+    "markers_found": [
+      {
+        "id": 2,
+        "grid": [0, -2],
+        "grid_valid": true,
+        "orientation_deg": 0.7
+      }
+    ],
+    "markers_expected": 4,
+    "snake_complete": false,
+    "last_safety_event": ""
+  }
+}
+```
 
-Video uses UDP datagrams containing a 28-byte `AQV1` header followed by a JPEG payload chunk.
+## 4. Field Notes
+
+| Field | Meaning |
+|---|---|
+| `camera.frame_seq` | Matches the MJPEG video `frame_id` for the same camera frame. |
+| `vision.line.*` | Filtered line-tracking result. `tracking_point_px.x` is the lateral control reference. |
+| `vision.line.contour_px` | Simplified selected contour. Intersections may appear as cross-shaped contours. |
+| `vision.intersection.*` | Stabilized per-frame topology from the line mask. `straight` is valid but not a turn node. |
+| `vision.intersection_decision.*` | Sliding-window decision layer over intersection classification. It emits node/turn readiness hints, not Pixhawk commands. |
+| `vision.grid_node` | Latest committed grid node event. In `grid_mission_node`, this is intentionally resent every frame. |
+| `vision.grid_node.local_coord` | Local exploration coordinates only; official competition origin conversion is not implemented. |
+| `vision.drone_position` | Fractional progress from the last committed node, derived from short-window local estimate displacement. |
+| `vision.markers[]` | ArUco observations in the current frame. Marker commitment/stability is onboard mission logic, not a GCS decision. |
+| `grid.row`, `grid.col` | Legacy convenience fields mirrored from valid `vision.grid_node`; default `-1` when unknown. |
+| `debug.note` | Runtime source such as `vision_debug`, `line_follow`, or `grid_mission`. |
+
+## 5. Video Stream
+
+Video uses UDP datagrams containing a 28-byte `AQV1` header followed by a JPEG
+payload chunk.
 
 Header layout, big-endian:
 
@@ -367,15 +338,13 @@ Header layout, big-endian:
 Rules:
 
 - Maximum payload per datagram is 1200 bytes.
-- GCS reassembles a JPEG frame only after all chunks for the same `frame_id` arrive.
+- GCS displays a JPEG only after all chunks for the same `frame_id` arrive.
 - Incomplete frames are dropped.
-- GCS keeps displaying the last complete frame if the next UDP frame is incomplete.
-- `timestamp_ms` is the onboard capture timestamp. It is useful for telemetry
-  correlation when clocks are synchronized. GCS does not display a video
-  latency estimate because the laptop and Pi clocks are not assumed to be
-  synchronized and the debug video path is best-effort.
+- GCS keeps the last complete frame through temporary UDP drops.
+- GCS does not display a video latency estimate because onboard and laptop
+  clocks are not assumed synchronized.
 
-## 5. GCS Discovery Beacon
+## 6. GCS Discovery Beacon
 
 GCS broadcasts the following text payload to UDP port 5601 once per second:
 
@@ -383,40 +352,31 @@ GCS broadcasts the following text payload to UDP port 5601 once per second:
 AQGCS1 video_port=5600
 ```
 
-When onboard is configured with `gcs.ip = "255.255.255.255"` or `0.0.0.0`, video/debug tools listen for this beacon before streaming. If a beacon is received, onboard uses the sender IP as the GCS destination and the advertised `video_port` as the video destination port.
+When onboard is configured with `gcs.ip = "255.255.255.255"` or `0.0.0.0`,
+video/debug tools listen for this beacon before streaming. If a beacon is
+received, onboard uses the sender IP and advertised video port for unicast
+debug video. If discovery fails, onboard falls back to configured destination
+IP and port.
 
-This avoids manual laptop IP entry for normal same-LAN testing. If discovery fails, onboard falls back to the configured destination IP and port.
+## 7. Autopilot Integration Notes
 
-## 6. Hardware and Autopilot Integration Notes
+Primary control mode is ArduPilot `GUIDED` with MAVLink
+`SET_POSITION_TARGET_LOCAL_NED` body-frame velocity setpoints. SITL uses UDP
+MAVLink; real Pixhawk1 bench/line-follow support uses serial or USB serial
+through `SerialMavlinkTransport`.
 
-This section is not a wire-format schema change. It records the current MVP hardware and control assumptions so telemetry, command, and MAVLink work stay aligned.
+Current boundaries:
 
-| Device | Connection | Role |
-|---|---|---|
-| Pixhawk1 | Airframe center | Flight controller. Attitude stabilization, motor output, sensor fusion, mode management. |
-| MicoAir MTF-01 Optical Flow & Range Sensor | Pixhawk TELEM2 or SERIAL4/5 | GPS-denied horizontal motion estimate and floor distance. Optical Flow + ToF range input for ArduPilot/EKF. |
-| Raspberry Pi 4 | Pixhawk USB or TELEM1 | OpenCV vision processing, line/intersection/ArUco decisions, MAVLink control command sender. |
-| IMX519 Camera | Raspberry Pi CSI | Downward image input for line center, line angle, and ArUco marker detection. |
-| Power Module | Pixhawk POWER | Pixhawk power and battery voltage/current measurement. |
-| RC Receiver | Pixhawk RC IN | Manual takeover and emergency intervention. |
-| ESC/Motor/PDB | Pixhawk MAIN OUT + power distribution | Motor actuation. |
-| TFmini Plus | Excluded from default build | Backup rangefinder only if MTF-01 range is unstable. |
-| External Compass | Excluded | Initial plan uses Pixhawk internal compass/IMU. |
+- `line_follow_node` supports SITL UDP and guarded real Pixhawk1 serial paths.
+- `mavlink_probe` and `mavlink_motor_test` are no-arm/props-removed bench tools.
+- `grid_mission_node` is current SITL grid mission staging. `--target pixhawk1`
+  is limited to `--no-arm` smoke; real grid mission arm/takeoff is not enabled.
+- Command channel fields for GCS-originated mission control remain planned.
 
-Primary control mode is GUIDED velocity control through MAVLink `SET_POSITION_TARGET_LOCAL_NED` using body-frame velocity setpoints. This depends on a stable ArduPilot local estimate from optical flow and range data.
+## 8. Command Channel
 
-Fallback control mode is ALT_HOLD with `RC_CHANNELS_OVERRIDE`. It is reserved for degraded/manual-like testing when GUIDED velocity control or the local estimate is unreliable. Mission logic must stay shared; only the output backend should switch between GUIDED velocity and RC override.
-
-The MAVLink transport must be configurable:
-
-- SITL/Gazebo: UDP or TCP endpoint from the onboard process to ArduPilot SITL.
-- Real Pixhawk: serial or USB MAVLink endpoint from Raspberry Pi 4 to Pixhawk.
-
-The protocol-level expectation is that onboard telemetry eventually reports at least the active control backend, ArduPilot mode, armed state, heartbeat health, battery state, altitude/range health, and failsafe state. Those fields are not yet defined in v1.7.
-
-## 7. Command Channel
-
-The command channel is planned but not implemented in this milestone. Reserved command message types:
+The command channel is planned but not implemented. Reserved command message
+types:
 
 - `start_mission`
 - `abort_mission`
@@ -425,32 +385,35 @@ The command channel is planned but not implemented in this milestone. Reserved c
 - `request_status`
 - `set_control_backend`
 
-Command messages will use JSON with the same common top-level fields and will receive a `CMD_ACK` telemetry response.
+Command messages will use JSON with the same common top-level fields and should
+receive a `CMD_ACK` telemetry response when implemented.
 
-## 8. Current Executables
+## 9. Current Executables
 
 | Executable | Repo | Purpose |
 |---|---|---|
-| `uav_onboard` | onboard | Current basic telemetry bring-up sender; final onboard mission composition root for vision, mission, control, safety, telemetry, and MAVLink. |
-| `video_streamer` | onboard | Raw MJPEG streaming smoke tool. |
-| `vision_debug_node` | onboard | Pi camera capture, ArUco/line/intersection detection, local grid-node decision, raw video send, vision telemetry send. |
-| `uav_gcs` | GCS | Current basic telemetry receiver; final GCS composition root for mission dashboard, command sender, telemetry/video/logging, and safety status. |
+| `uav_onboard` | onboard | Basic telemetry bring-up sender; final onboard composition root target. |
+| `vision_debug_node` | onboard | Camera/vision telemetry and optional raw MJPEG debug video. |
+| `line_follow_node` | onboard | Short line-follow mission staging for SITL and guarded Pixhawk1 tests. |
+| `grid_mission_node` | onboard | Current grid arena snake-mission SITL staging executable. |
+| `mavlink_probe` | onboard | No-arm Pixhawk/MAVLink/local-estimate/parameter probe. |
+| `mavlink_motor_test` | onboard | Props-removed low-throttle motor command check. |
+| `video_streamer` | onboard | Raw MJPEG transport smoke tool. |
+| `uav_gcs` | GCS | Basic telemetry receiver; final GCS composition root target. |
 | `uav_gcs_video` | GCS | Raw MJPEG video viewer. |
-| `uav_gcs_vision_debug` | GCS | Vision bring-up/debug executable with MJPEG video viewer, vision log window, and GCS-side marker/line/intersection overlay. |
+| `uav_gcs_vision_debug` | GCS | Vision telemetry/video/log window and GCS-side overlays. |
 
-## 9. Change Log
+## 10. Change Log
 
 | Version | Date | Change |
 |---|---|---|
 | v1.0 | 2026-04-24 | Initial JSON telemetry, command, and video protocol draft. |
-| v1.1 | 2026-04-27 | Added `vision.markers[]`, frame-synchronized marker telemetry, `debug.aruco_latency_ms`, and GCS discovery beacon details. |
-| v1.2 | 2026-04-27 | Added `vision.line`, `debug.line_latency_ms`, GCS line overlay metadata, and explicit best-effort debug video rules. |
-| v1.3 | 2026-04-27 | Added line stabilizer state, raw line diagnostics, latency breakdown, video queue counters, and line detector workload counters. |
-| v1.3 | 2026-04-28 | No schema change; high-altitude line detector/stabilizer tuning continues to use the existing `vision.line.*` and `debug.line_*` fields. |
-| v1.4 | 2026-04-28 | Added debug video chunk/send/skip counters and optional Pi CPU temperature telemetry for diagnosing frame drops and thermal throttling. |
-| v1.5 | 2026-04-28 | Added Raspberry Pi 4 + IMX519 camera/system telemetry, capture/processing FPS, debug video pacing config, and video send failure counters. |
-| v1.5 | 2026-04-29 | No schema change; synchronized example defaults to the performance profile: 960x720 camera, 5 FPS opt-in debug video, and 150us chunk pacing. |
-| v1.6 | 2026-04-30 | Added structured `vision.intersection`, branch ray metadata, `debug.intersection_latency_ms`, and GCS intersection overlay/log support. |
-| v1.7 | 2026-05-01 | Added `vision.intersection_decision`, `vision.grid_node`, branch evidence telemetry, local grid node coordinates, and `debug.intersection_decision_latency_ms`. |
-| v1.7 | 2026-05-13 | No schema change; documented MVP hardware, GUIDED velocity primary control, RC override fallback, and SITL/real-Pixhawk transport assumptions. |
-| v1.7 | 2026-05-14 | No schema change; synchronized docs after fake/Gazebo/rpicam runtime profile work and documented that frame-source selection preserves the existing telemetry/video wire format. |
+| v1.1 | 2026-04-27 | Added marker telemetry and GCS discovery beacon. |
+| v1.2 | 2026-04-27 | Added line telemetry and best-effort debug video rules. |
+| v1.3 | 2026-04-27 | Added line stabilizer diagnostics and video queue counters. |
+| v1.4 | 2026-04-28 | Added video chunk/send counters and Pi CPU temperature telemetry. |
+| v1.5 | 2026-04-28 | Added Pi 4 + IMX519 camera/system telemetry and FPS counters. |
+| v1.6 | 2026-04-30 | Added structured intersection telemetry and GCS overlay/log support. |
+| v1.7 | 2026-05-01 | Added intersection decision and local grid-node telemetry. |
+| v1.7 | 2026-05-14 | No schema change; documented runtime source profiles. |
+| v1.8 | 2026-05-21 | Added `vision.drone_position`, clarified committed-node resend semantics, documented grid mission staging and current mission telemetry limits. |

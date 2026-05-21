@@ -2,9 +2,9 @@
 # Gazebo + ArduCopter SITL launcher for the Astroquad grid arena test world.
 # Run from WSL: bash ~/astroquad/uav-onboard/scripts/grid_arena_test.sh
 #
-# NOTE: 격자 임무용 onboard executable 은 아직 없다. 현재는 world 로드 + SITL
-# 부팅까지가 검증 범위이고, vision-only smoke 는 line_follow_node/vision_debug_node
-# 의 기존 옵션을 그대로 사용한다. 격자 mission program 은 추후 step 에서 추가.
+# NOTE: grid arena mission staging executable is now grid_mission_node.
+# This script only launches Gazebo + ArduCopter SITL; run grid_mission_node
+# from a second terminal after the simulator is ready.
 
 set -euo pipefail
 
@@ -104,7 +104,7 @@ echo "    cd $ARDUCOPTER_DIR"
 echo "    sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON ${MAVPROXY_ARGS[*]} --out 127.0.0.1:14550 --add-param-file \"$INDOOR_PARAM_FILE\" --wipe-eeprom"
 echo
 echo "포트 구분:"
-echo "    MAVLink SITL -> onboard line_follow_node: UDP 127.0.0.1:14550"
+echo "    MAVLink SITL -> onboard grid_mission_node/line_follow_node: UDP 127.0.0.1:14550"
 echo "    Astroquad onboard -> Windows GCS telemetry: UDP <Windows GCS IP>:14550"
 echo "    Astroquad onboard -> Windows GCS MJPEG video: UDP <Windows GCS IP>:5600"
 echo
@@ -118,8 +118,10 @@ else
     echo "    ip route | awk '/default/ {print \$3; exit}'"
 fi
 echo
-echo "격자 임무 program 은 아직 없음. 기본 config 의 gazebo_topic 은 line_tracing_test_world"
-echo "기준이라, 격자 world 에서는 반드시 --gazebo-topic 으로 override 해야 카메라 frame 이 잡힙니다."
+echo "Grid mission runtime:"
+echo "    grid_mission_node --world grid 는 config/runtime.sitl.grid.toml 의"
+echo "    grid_arena_test_world camera topic 을 사용합니다. custom fixture 만"
+echo "    --gazebo-topic 으로 override 하세요."
 echo
 echo "Vision-only smoke (격자 world 카메라 토픽 지정):"
 echo "    cd $ONBOARD_DIR"
@@ -132,6 +134,12 @@ echo "    cd $ONBOARD_DIR"
 echo "    ./build/line_follow_node --config config --target sitl --vision gazebo \\"
 echo "      --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \\"
 echo "      --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
+echo
+echo "Grid mission SITL:"
+echo "    cd $ONBOARD_DIR"
+echo "    ./build/grid_mission_node --config config --target sitl --vision gazebo \\"
+echo "      --world grid --line-mode dark_on_light --marker-count 4 \\"
+echo "      --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Mission Planner 미러 권장 설정:"
 if [[ -n "$WSL_IP" ]]; then

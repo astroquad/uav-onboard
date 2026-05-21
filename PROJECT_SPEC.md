@@ -3,339 +3,270 @@
 > 제24회 한국로봇항공기경연대회 중급부문 멀티콥터형 드론 실내 조난자 탐색 온보드 소프트웨어 기준 문서  
 > **이 문서는 팀원과 코딩 에이전트가 공통으로 참조하는 Single Source of Truth입니다.**
 
-최종 수정: 2026-05-15
-
----
+최종 수정: 2026-05-21
 
 ## 1. 프로젝트 목적
 
-GPS 없는 실내 환경에서, 하향 카메라 기반 라인트레이싱과 ArUco 마커 인식을 통해 격자 구역 내 조난자(마커)를 탐색하고, 탐색 결과를 역순으로 재방문한 뒤 자동 복귀·착륙하는 드론 온보드 소프트웨어를 개발한다.
+`uav-onboard`는 Raspberry Pi 4에서 하향 카메라 비전, 격자 미션 상태머신,
+MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 
-현재 레포는 최종 미션 소프트웨어 전체 중 **카메라 입력, onboard vision, telemetry, debug video bring-up, intersection decision, local grid-node telemetry** 단계까지 구현되어 있다. 비전 인식은 MVP 기준 거의 완료된 것으로 보고, 다음 핵심 작업은 mission state machine, Pixhawk/MAVLink control, safety/failsafe를 연결하는 것이다.
+최종 목표는 GPS 없는 격자 환경에서 이륙, grid snake 탐색, ArUco 조난자
+마커 기록, 번호 역순 재방문, 출발점 복귀, 자동 착륙까지 수행하는 것이다.
 
-최종 운용 실행 파일은 `./build/uav_onboard`다. 현재 `uav_onboard`는 basic telemetry bring-up sender에 가깝지만, 최종적으로는 vision, mission, control, safety, telemetry, MAVLink를 조립하는 onboard composition root가 되어야 한다. `vision_debug_node`는 계속 비전 bring-up/debug 실행 파일로 유지한다.
+현재 구현 기준은 다음과 같이 나뉜다.
 
-문서 계층:
+- `uav_onboard`: basic telemetry bring-up sender. 최종 composition root 목표.
+- `vision_debug_node`: 현재 안정적인 camera/vision/GCS debug runtime.
+- `line_follow_node`: SITL 및 guarded Pixhawk1 line-follow staging.
+- `grid_mission_node`: 현재 grid arena full-snake SITL staging.
 
-- 전체 시스템 공통 기준은 `development-log/SYSTEM_SPEC.md`를 따른다.
-- 72시간/1주일 MVP 계획은 `development-log/MVP_PLAN.md`를 따른다.
-- 이 문서는 `uav-onboard` repo의 책임, 모듈, 실행 파일, 빌드/테스트 기준만 상세히 다룬다.
-- `development-log/RESEARCH.md`와 `development-log/PLAN.md`는 매 스텝마다 바뀌는 작업용 scratchpad다.
-
----
-
-## 2. 미션 시나리오 요약
-
-최종 목표 시나리오는 full grid mission이다.
-
-```text
-[이륙] -> [라인 추종, 격자 진입] -> [Snake 탐색, 교차점마다 ArUco 인식]
-      -> [모든 마커 발견] -> [마커 번호 역순 재방문] -> [출발점 복귀] -> [자동 착륙]
-```
-
-1. **이륙**: 이륙 포인트에서 자동 이륙. ArduPilot GUIDED/AUTO 기반 명령을 사용한다.
-2. **격자 진입**: 이륙 포인트에서 격자 구역까지 연결된 라인을 따라 이동한다.
-3. **Snake 탐색**: 격자 구역 내부를 지그재그로 순회하며 교차점을 방문한다.
-4. **마커 인식**: 각 교차점에서 ArUco 마커 ID를 인식하고 격자 좌표와 묶어 저장한다.
-5. **역순 재방문**: 발견된 마커를 번호 역순으로 재방문한다.
-6. **복귀 및 착륙**: 출발점으로 복귀 후 자동 착륙한다.
-
-### 2.1 Near-Term MVP Scope
-
-72시간 실기체 MVP는 최종 목표의 부분 집합이다.
-
-```text
-[MTF-01 bring-up] -> [자동 이륙] -> [짧은 직선 라인 추종] -> [라인 끝/timeout 안전 착륙]
-```
-
-MVP에서 제외하는 것:
-
-- full snake grid exploration
-- ArUco marker revisit
-- official coordinate conversion
-- GCS full command UI
-- 교차점 회전/분기 의사결정
-
-이 기능들은 최종 목표에 남기되, 첫 실기체 자동비행 gate의 선행 조건으로 두지 않는다.
-
----
-
-## 3. 이 레포의 책임 범위
+## 2. 책임 범위
 
 | 구분 | 내용 |
 |---|---|
-| 담당 | Pi camera frame 획득, ArUco/line/intersection detection, local grid-node 판단, vision telemetry 생성, optional raw debug video 송신, mission state/grid/path/control/MAVLink/safety |
+| 담당 | Pi camera frame 획득, ArUco/line/intersection detection, local grid-node 판단, mission state machine, grid/snake policy, control intent mapping, MAVLink adapter, safety, telemetry/debug video |
 | 미담당 | 자세 안정화와 모터 제어는 ArduPilot/Pixhawk 담당, GCS UI/overlay/log window는 `uav-gcs` 담당 |
 
-중요한 역할 분리:
+역할 분리:
 
-- Onboard는 ArUco marker 정보와 line tracing 정보를 계산해 telemetry로 보낸다.
-- Onboard는 영상에 box, contour, text, tracking point overlay를 그리지 않는다.
-- GCS raw video는 debug 관제용 best-effort channel이며 mission-critical 경로가 아니다.
-- 최종 시연에서는 GCS 없이 onboard만 실행할 수 있어야 하므로, 미션 판단에 필요한 정보는 onboard에 있어야 한다.
+- Onboard가 mission-critical 판단을 한다.
+- GCS는 onboard metadata를 시각화하고 기록한다.
+- Onboard는 raw camera frame에 overlay를 그리지 않는다.
+- Debug video는 best-effort 관제 채널이며 mission logic의 입력이 아니다.
 
----
-
-## 4. 현재 구현 상태
+## 3. 현재 구현 상태
 
 | 영역 | 상태 | 구현 위치 |
 |---|---|---|
-| Raspberry Pi camera capture | 구현됨 | `src/camera/RpicamMjpegSource.*` |
-| UDP telemetry sender | 구현됨 | `src/network/UdpTelemetrySender.*` |
-| Telemetry JSON v1.7 serialization | 구현됨 | `src/protocol/TelemetryMessage.*` |
-| UDP MJPEG debug video chunk 송신 | 구현됨 | `src/video/*` |
-| GCS discovery 수신 후 video unicast | 구현됨 | `tools/vision_debug_node.cpp`, `tools/video_streamer.cpp` |
-| ArUco marker detection | 구현됨 | `src/vision/ArucoDetector.*` |
-| Marker stabilization | 구현됨 | `src/vision/MarkerStabilizer.*` |
-| Line tracing MVP | 구현됨 | `src/vision/LineMaskBuilder.*`, `src/vision/LineDetector.*` |
-| Line stabilizer | 구현됨 | `src/vision/LineStabilizer.*` |
-| Intersection classifier/stabilizer | 구현됨 | `src/vision/IntersectionDetector.*`, `src/vision/IntersectionStabilizer.*` |
-| Intersection decision/local grid node | 구현됨 | `src/mission/IntersectionDecision.*`, `src/mission/GridCoordinateTracker.*` |
-| Pi 4 + IMX519 camera/focus/exposure config | 구현됨 | `config/vision.toml`, `src/common/VisionConfig.*` |
-| System/camera/debug telemetry | 구현됨 | `src/app/VisionDebugPipeline.cpp` |
-| Gazebo/SITL vision world | 구현됨 | `sim/gazebo/`, `scripts/line_tracing_test.sh`, `scripts/grid_arena_test.sh`, `config/runtime.sitl.toml` |
-| Runtime frame sources | 구현됨 | `src/vision/FrameSource.hpp`, `FakeFrameSource`, `GazeboCameraSource`, `RpicamFrameSource` |
-| Vision processor library path | 구현됨 | `src/vision/VisionProcessor.*` |
-| GCS publisher reuse | 구현됨 | `src/app/VisionDebugPublisher.*` |
-| Line-follow staging mission | 구현됨/SITL 검증 중 | `tools/line_follow_node.cpp`, `src/mission/LineFollowMission.*` |
-| MAVLink UDP SITL adapter | 구현됨 | `src/autopilot/AutopilotMavlinkAdapter.*`, `UdpMavlinkTransport.*` |
-| Full mission state machine | 부분 구현 | `src/mission/`, full snake/revisit planned |
-| Full grid map/path planner/revisit policy | 미구현 | planned in `src/mission/` |
-| Pixhawk/MAVLink serial | 미구현 | planned serial transport, current SITL UDP transport implemented |
-| Control module | 부분 구현 | `src/control/GuidedVelocityController.*` |
-| Safety/failsafe | 부분 구현 | `src/safety/SafetyMonitor.*`, line/heartbeat/timeout MVP |
-| File logging | 미구현 | `src/logging/.gitkeep`, `logs/.gitkeep` |
+| Raspberry Pi camera capture | 구현됨 | `src/camera/RpicamMjpegSource.*`, `src/vision/RpicamFrameSource.*` |
+| Runtime frame sources | 구현됨 | `FakeFrameSource`, `GazeboCameraSource`, `RpicamFrameSource` |
+| Vision processor | 구현됨 | `src/vision/VisionProcessor.*` |
+| ArUco detector/stabilizer | 구현됨 | `ArucoDetector.*`, `MarkerStabilizer.*` |
+| Line mask/detector/stabilizer | 구현됨 | `LineMaskBuilder.*`, `LineDetector.*`, `LineStabilizer.*` |
+| Intersection classifier/stabilizer | 구현됨 | `IntersectionDetector.*`, `IntersectionStabilizer.*` |
+| Intersection decision | 구현됨 | `src/mission/IntersectionDecision.*` |
+| Local grid coordinate tracker | 구현됨 | `src/mission/GridCoordinateTracker.*` |
+| Grid mission state machine | SITL staging | `src/mission/GridMission.*`, `tools/grid_mission_node.cpp` |
+| Snake boundary planner | 구현됨 | `src/mission/SnakePlanner.*` |
+| Marker registry/window gate | 구현됨 | `src/mission/MarkerRegistry.*`, `GridMission::MarkerWindow` |
+| Guided velocity line/marker controller | 구현됨 | `src/control/GuidedVelocityController.*` |
+| Grid intent -> setpoint mapper | 구현됨 | `src/control/GridControlMapper.*` |
+| Altitude policy | 구현됨 | `src/mission/AltitudePolicy.*` |
+| MAVLink UDP transport | 구현됨 | `src/autopilot/UdpMavlinkTransport.*` |
+| MAVLink serial transport | 구현됨 | `src/autopilot/SerialMavlinkTransport.*` |
+| Autopilot adapter | 구현됨 | `src/autopilot/AutopilotMavlinkAdapter.*` |
+| Safety monitor | 부분 구현 | `src/safety/SafetyMonitor.*`, mission-local failsafe |
+| GCS telemetry/video publisher | 구현됨 | `src/app/VisionDebugPublisher.*` |
+| Gazebo line/grid worlds | 구현됨 | `sim/gazebo/`, `scripts/line_tracing_test.sh`, `scripts/grid_arena_test.sh` |
+| Pixhawk bench tools | 구현됨 | `tools/mavlink_probe.cpp`, `tools/mavlink_motor_test.cpp` |
+| GCS command receiver | 미구현 | planned |
+| Marker reverse revisit / return home | 미구현 | planned |
+| Official coordinate conversion | 미구현 | planned |
+| File logging subsystem | 미구현 | `logs/`, future `src/logging` |
 
----
-
-## 5. 하드웨어/소프트웨어 환경
-
-### 5.1 Target Hardware
+## 4. 하드웨어/소프트웨어 기준
 
 | 모델/장치 | 연결 위치 | 역할 |
 |---|---|---|
 | Pixhawk1 | 기체 중앙 | 비행 제어기. 자세 안정화, 모터 출력, 센서 융합, 모드 관리 |
-| MicoAir MTF-01 Optical Flow & Range Sensor | Pixhawk TELEM2 또는 SERIAL4/5 | GPS 없이 수평 이동 추정 + 바닥 거리 측정. Optical Flow + ToF range 통합 |
-| Raspberry Pi 4 | Pixhawk USB 또는 TELEM1 | OpenCV 비전 처리, 라인/교차점/ArUco 판단, MAVLink 제어 명령 전송 |
-| IMX519 Camera | Raspberry Pi CSI | 하향 영상 입력. 라인 중심, 라인 각도, ArUco 마커 인식 |
-| Power Module | Pixhawk POWER | Pixhawk 전원 공급, 배터리 전압/전류 측정 |
-| RC Receiver | Pixhawk RC IN | 수동 조종 takeover, 비상 개입 |
+| MicoAir MTF-01 Optical Flow & Range Sensor | Pixhawk TELEM2 또는 SERIAL4/5 | GPS 없이 수평 이동 추정 + 바닥 거리 측정 |
+| Raspberry Pi 4 | Pixhawk USB 또는 TELEM1 | OpenCV 비전, mission, MAVLink command sender |
+| IMX519 Camera | Raspberry Pi CSI | 하향 영상 입력 |
+| Power Module | Pixhawk POWER | 전압/전류 측정 |
+| RC Receiver | Pixhawk RC IN 또는 운용 중인 RC 경로 | 수동 takeover, 비상 개입 |
 | ESC/Motor/PDB | Pixhawk MAIN OUT + 전원분배 | 실제 모터 구동 |
-| TFmini Plus | 기본 구성에서는 제외 | MTF-01 range가 불안정할 때 예비 rangefinder |
-| External Compass | 제외 | 일단 Pixhawk 내부 compass/IMU 기준으로 진행 |
-
-제어 primary는 ArduPilot `GUIDED` mode에서 MAVLink `SET_POSITION_TARGET_LOCAL_NED` body-frame velocity setpoint를 보내는 방식이다. 이 방식은 MTF-01 optical flow/range 기반 local estimate가 안정적이어야 한다. `ALT_HOLD + RC_CHANNELS_OVERRIDE`는 fallback backend로만 둔다.
-
-MTF-01 bring-up은 제어 구현 전 gate다. ArduPilot에서 optical flow와 rangefinder가 안정적으로 들어오지 않으면 GUIDED velocity 기반 line-follow 비행은 진행하지 않는다.
-
-### 5.2 Software Dependencies
 
 | 항목 | 현재 기준 |
 |---|---|
 | Language | C++17 |
 | Build | CMake 3.16+ |
-| Config | TOML via `tomlplusplus` |
+| Config | `tomlplusplus` |
 | JSON | `nlohmann/json` |
+| Vision | OpenCV 4.x + aruco |
 | Camera runtime | `rpicam-vid` MJPEG stdout |
-| Vision | OpenCV 4.x with `aruco` for vision tools/node |
-| Network | UDP socket, Windows compatibility where tools support it |
-| Tests | CTest + lightweight assert-based tests |
-| MAVLink | ArduPilot-generated headers를 우선 사용하고, 없으면 CMake가 MAVLink `c_library_v2` headers를 build tree로 fetch |
+| MAVLink | ArduPilot headers or fetched MAVLink `c_library_v2` |
+| Tests | CTest + assert-style unit tests |
 
-`scripts/setup_rpi_dependencies.sh`는 Raspberry Pi OS Lite 64-bit 기준으로 build tools, OpenCV, rpicam/libcamera 계열 package, `iw`, JSON/TOML/dev package를 설치/확인한다.
-
-Raspberry Pi에서도 `line_follow_node`가 빌드되어야 한다. ArduPilot source/build tree가 없는 Pi에서는 CMake `ONBOARD_FETCH_MAVLINK=ON` 기본값이 MAVLink C headers를 자동으로 내려받는다. 오프라인 빌드에서는 `-DMAVLINK_INCLUDE_DIR=/path/to/include`를 명시한다.
-
----
-
-## 6. 온보드 시스템 아키텍처
-
-### 6.1 Target Architecture
-
-ROS를 직접 쓰지는 않지만, 목표 구조는 ROS node graph와 비슷하게 모듈 간 입력/출력 타입만 공유하고 내부 상태를 침범하지 않는 형태다.
+## 5. 모듈 구조
 
 ```text
-CameraSource
-  -> VisionPipeline
-  -> MissionStateMachine
-  -> GuidanceController
-  -> ControlBackend
+FrameSource
+  -> VisionProcessor
+  -> IntersectionDecisionEngine
+  -> GridCoordinateTracker
+  -> GridMission
+  -> GridControlMapper
   -> AutopilotMavlinkAdapter
 
 Support:
-  SafetyMonitor observes Vision/Mission/Autopilot/GCS state
-  TelemetryPublisher observes state snapshots
-  CommandReceiver injects high-level mission commands
-  DebugVideoPublisher observes camera frames only
+  VisionDebugPublisher sends telemetry/debug video
+  SafetyMonitor and mission-local failsafe observe runtime state
 ```
 
-`vision_debug_node`와 최종 `uav_onboard`는 같은 `VisionPipeline`을 재사용할 수 있다. 차이는 composition root다. `vision_debug_node`는 vision + telemetry + optional debug video만 묶고, `uav_onboard`는 vision + mission + control + safety + telemetry + MAVLink를 묶는다.
+Library targets:
 
-### 6.2 Current Implemented Debug Pipeline
+- `onboard_core`: config, telemetry, mission, control, safety, UDP telemetry.
+- `onboard_video`: camera MJPEG model and UDP MJPEG streamer.
+- `onboard_vision`: OpenCV detectors, frame sources, processor.
+- `onboard_autopilot`: MAVLink adapter and UDP/serial transports.
 
-```text
-IMX519 camera
-  -> rpicam-vid --codec mjpeg -o -
-  -> RpicamMjpegSource
-  -> JPEG frame extraction
-  -> one onboard JPEG decode for detectors
-  -> ArucoDetector and/or LineDetector
-  -> LineStabilizer
-  -> TelemetryMessage JSON
-  -> UDP telemetry to GCS
-  -> optional raw MJPEG UDP debug video to GCS
-```
+경계 규칙:
 
-`vision_debug_node`가 현재 통합 bring-up/debug 실행 파일이다. 기본값은 metadata-only이며, GCS camera/overlay 확인이 필요할 때만 `--video`를 붙인다. 제어 코드는 `VisionDebugPipeline` 내부에 넣지 않는다. vision loop는 typed output을 만들고, mission/control runtime이 그 결과를 구독하거나 callback으로 받아 처리한다.
+- `VisionProcessor`는 frame metadata를 받아 `VisionResult`를 만든다. MAVLink,
+  flight mode, mission state를 모른다.
+- `GridMission`은 vision/decision/autopilot snapshot을 받아 state와 control
+  intent를 만든다. MAVLink packet을 직접 만들지 않는다.
+- `GridControlMapper`는 mission intent를 body velocity/yaw/altitude setpoint로
+  바꾼다.
+- `AutopilotMavlinkAdapter`는 mode/arm/takeoff/land/setpoint 송수신만 담당한다.
+- Debug video는 mission-critical path에 들어가지 않는다.
 
----
+## 6. Vision 알고리즘 기준
 
-## 7. 주요 모듈 요구사항
+### Line
 
-### 7.1 Camera
+현재 line path는 `LineMaskBuilder -> LineDetector -> LineStabilizer`다.
 
-- `rpicam-vid` MJPEG stdout을 안정적으로 읽는다.
-- IMX519 focus/exposure/AWB/denoise/orientation option을 config와 CLI override로 전달한다.
-- 현재 기본 capture는 `960x720`, `12 FPS`, MJPEG quality `45`다.
-- Continuous autofocus는 mission run에서 focus hunting 가능성이 있으므로 기본은 manual focus 후보값을 사용한다.
+- `mask_strategy = "white_fill"` 기본. `dark_on_light`에서는 dark fill path를
+  사용해 검은 격자선을 흰 바닥에서 잡는다.
+- ROI는 `roi_top_ratio` 아래만 처리하고 `process_width`로 축소한다.
+- 후보 contour는 면적순으로 제한하고, anchor/lookahead band projection으로
+  tracking X를 측정한다.
+- 전체 contour centroid가 아니라 line 폭 run의 중심을 control reference로
+  쓰므로 T/+ 교차점과 넓은 바닥 blob에 덜 끌린다.
+- stabilizer는 EMA, hold, reacquire, offset velocity gate를 적용한다.
+- marker polygon 및 marker-like square occluder가 밝은 라인 mask에서 제거될
+  수 있다.
 
-### 7.2 Vision
+### Intersection
 
-- Camera frame을 받아 mission 판단에 필요한 수치 측정값만 생성한다.
-- ArUco는 marker id, corners, center, orientation을 계산한다.
-- Line tracing은 detected/raw/filtered/held/rejected state, tracking point, offset, angle, confidence, contour를 계산한다.
-- GCS 표시용 overlay drawing은 하지 않는다.
-- 교차점 `+`, `T`, `L` 분류는 다음 단계에서 line following contour와 분리된 `IntersectionCandidate`로 추가한다.
+- `IntersectionDetector`는 line mask와 raw line을 기준으로 branch ray score를
+  계산한다.
+- `IntersectionStabilizer`는 raw `straight`, `L`, `T`, `+` 결과를 temporal
+  smoothing한다.
+- `IntersectionDecisionEngine`은 최근 branch evidence window를 사용한다.
+- `node_record_y_min/max` band 안에서만 node record를 낸다.
+- weak fourth branch가 `T`를 `+`로 끌어올리지 못하도록
+  `high_confidence_score` gate를 둔다.
+- `turn_ready`, `overshoot_risk`, `too_late_to_turn`은 mission/debug 판단이며
+  직접 Pixhawk command가 아니다.
 
-### 7.3 Mission
+### Marker
 
-- 상태머신 운용, 격자 좌표 갱신, marker 저장, path planning을 담당한다.
-- Snake 탐색과 역순 marker revisit을 구현해야 한다.
-- 현재 `IntersectionDecision`과 `GridCoordinateTracker`는 구현되어 있으나, 전체 mission state machine과 marker revisit policy는 아직 구현 전이다.
-- 72시간 MVP에서는 축소 상태머신 `IDLE`, `TAKEOFF`, `LINE_FOLLOW`, `LAND`, `COMPLETE`, `ABORT`만 사용한다.
-- Full snake/revisit 상태는 최종 목표에는 남기되 MVP 이후에 활성화한다.
+- ArUco dictionary는 `DICT_4X4_50`.
+- Grid mission에서는 vertiport marker ID 23은 grid marker count에서 제외한다.
+- Grid marker는 `MarkerWindow`가 최근 프레임에서 같은 ID를 충분히 확인할 때
+  commit된다.
+- window 안에 서로 다른 실제 marker ID가 섞이면 window를 비워 ambiguous
+  commit을 막는다.
 
-### 7.4 Control
+## 7. Grid Mission 알고리즘
 
-- Mission 판단을 ArduPilot에 보낼 고수준 명령으로 변환한다.
-- Velocity setpoint, yaw rate, hover, takeoff, land 명령을 생성한다.
-- 현재는 directory placeholder만 존재한다.
-
-### 7.5 Autopilot / MAVLink
-
-- Pixhawk와의 MAVLink 통신만 담당한다.
-- Heartbeat, mode, arm/takeoff/land, velocity setpoint, battery/status 수신을 구현해야 한다.
-- `config/autopilot.toml`은 현재 `/dev/serial0`, `115200`, MAVLink system/component id 후보값을 담고 있다.
-- SITL/Gazebo 개발에서는 UDP/TCP endpoint를 사용하고, 실기체에서는 serial/USB endpoint를 사용한다. Mission/control 코드는 endpoint 종류를 몰라야 한다.
-
-### 7.6 Telemetry and Command
-
-- Telemetry는 UDP JSON으로 GCS에 송신한다.
-- Debug vision 단계에서는 processed camera frame마다 telemetry를 송신해 video frame과 `frame_seq`로 맞출 수 있게 한다.
-- Command channel은 TCP JSON으로 계획되어 있으며 아직 구현 전이다.
-- 72시간 MVP에서는 GCS command channel을 필수 구현 범위에서 제외한다. 시작/중단은 onboard CLI/config, RC takeover, Pixhawk mode/land 절차를 우선 사용한다.
-
-### 7.7 Debug Video
-
-- Raw camera JPEG만 best-effort로 보낸다.
-- Old frame은 drop하고 최신 frame만 유지해 vision loop를 막지 않는다.
-- 기본 `debug_video.enabled = false`다.
-- `--video`를 켠 경우 기본 target은 `5 FPS`, chunk pacing `150us`다.
-
-### 7.8 Safety and Logging
-
-- Safety는 line lost, GCS lost, Pixhawk heartbeat lost, mission timeout, low battery를 감시해야 한다.
-- Logging은 headless 운용을 위해 file logging을 제공해야 한다.
-- 현재는 config와 placeholder만 존재한다.
-
----
-
-## 8. 데이터 흐름
-
-### 8.1 Current Vision Telemetry Flow
-
-```text
-CameraFrame
-  -> ArUco/Line detector output
-  -> protocol::TelemetryMessage
-  -> UDP telemetry JSON
-  -> GCS TelemetryStore / log / overlay
-```
-
-### 8.2 Target Mission Control Flow
-
-```text
-VisionOutput
-  -> Mission::update()
-  -> GridMap / MarkerMap / MissionState
-  -> MissionCommand
-  -> Control::execute()
-  -> MAVLink message
-  -> Pixhawk
-```
-
----
-
-## 9. 상태머신 목표
+Grid arena mission state:
 
 ```text
 IDLE
-  -> TAKEOFF
-  -> LINE_FOLLOW_TO_GRID
-  -> GRID_EXPLORE
-  -> REVISIT_MARKERS
-  -> RETURN_HOME
+  -> ARM_TAKEOFF
+  -> MARKER_LOCK_YAW
+  -> ENTRY_FORWARD
+  -> ENTRY_CENTER_ORIGIN
+  -> SNAKE_LAUNCH_ALIGN
+  -> SNAKE_FORWARD
+  -> SNAKE_RECORD_NODE
+  -> SNAKE_STOP_AT_CENTER
+  -> SNAKE_TURN_90
+  -> SNAKE_ADVANCE_ONE_CELL
+  -> SNAKE_TURN_90_AGAIN
+  -> SNAKE_COMPLETE
   -> LAND
-  -> MISSION_COMPLETE
+  -> DONE
 
-Any state -> EMERGENCY_LAND
+any active state -> EMERGENCY_LAND
 ```
 
-| 현재 상태 | 전환 조건 | 다음 상태 |
-|---|---|---|
-| IDLE | GCS START 명령 | TAKEOFF |
-| TAKEOFF | 목표 고도 도달 | LINE_FOLLOW_TO_GRID |
-| LINE_FOLLOW_TO_GRID | 격자 진입 교차점 감지 | GRID_EXPLORE |
-| GRID_EXPLORE | Snake 탐색 완료 또는 marker 목표 충족 | REVISIT_MARKERS |
-| REVISIT_MARKERS | 전체 재방문 완료 | RETURN_HOME |
-| RETURN_HOME | 출발점 도달 | LAND |
-| LAND | 착륙 완료 | MISSION_COMPLETE |
-| any | Safety 이벤트 | EMERGENCY_LAND |
+핵심 규칙:
 
----
+- Gazebo ground-truth pose를 쓰지 않는다.
+- 단거리 distance/hover 기준으로 MAVLink `LOCAL_POSITION_NED`, attitude,
+  rangefinder, vision event, elapsed time만 사용한다.
+- Vertiport와 grid 사이에는 line이 없으므로 `ENTRY_FORWARD`는 yaw-frozen
+  blind forward다.
+- 첫 grid intersection은 보는 즉시 origin으로 확정하지 않고
+  `ENTRY_CENTER_ORIGIN`에서 X/Y 중심과 속도 gate를 통과해야 `(0,0)`이 된다.
+- `GridCoordinateTracker::update()`는 peek-only다. Mission gate가 승인할 때만
+  `commitAdvance()`로 tracker 상태를 전진시킨다.
+- `grid_mission_node`는 GCS UDP loss에 대비해 최신 committed grid node를 매
+  frame telemetry에 다시 실어 보낸다.
+- Snake hop은 last committed node의 LOCAL_NED 위치에서 시작한다.
+- Cell 중간 `hop_align_start_m..hop_align_end_m` 구간에서만 line following을
+  열고, 나머지는 yaw-locked `ForwardBlind`를 사용한다.
+- Boundary에서는 `SnakePlanner`가 첫 valid turn 방향을 latch하고, 이후
+  boundary마다 left/right를 strict alternation한다.
+- 기대 alternation branch가 없으면 반대 방향으로 backtrack하지 않고 snake를
+  complete로 보고 land한다.
+- 현재는 marker count 충족 또는 snake complete 후 land한다. Marker ID 역순
+  재방문과 출발점 복귀는 아직 구현하지 않았다.
 
-## 10. Protocol and Telemetry
+## 8. Control / MAVLink
 
-현재 공통 protocol 문서:
+Primary:
+
+- ArduPilot `GUIDED`
+- MAVLink `SET_POSITION_TARGET_LOCAL_NED`
+- Body-frame velocity setpoint
+
+현재 intent:
+
+| Intent | 역할 |
+|---|---|
+| `Idle` | command 없음 |
+| `HoldPosition` | body velocity 0 + altitude hold |
+| `ForwardBlind` | yaw locked forward flight |
+| `LineFollow` | line lateral correction + yaw lock |
+| `StopAndCenter` | boundary center deceleration |
+| `IntersectionCenter` | first origin/node center X/Y correction |
+| `LaunchAlign` | outgoing line lateral/yaw settle before hop |
+| `YawTurn` | 90도 yaw-only turn |
+| `MarkerHover` | marker center hold + yaw target |
+| `Land` | mapper는 setpoint를 내지 않고 LAND/GUIDED landing path가 처리 |
+
+Real hardware boundary:
+
+- `line_follow_node --target pixhawk1` has guarded serial support.
+- `mavlink_probe` and `mavlink_motor_test` are the required bench tools.
+- `grid_mission_node --target pixhawk1` is not a real arm/takeoff grid mission
+  path yet; use `--no-arm` for smoke only.
+
+## 9. Protocol
+
+공통 protocol 문서:
 
 - `uav-onboard/docs/PROTOCOL.md`
 - `uav-gcs/docs/PROTOCOL.md`
 
-현재 문서 version은 v1.7이며 JSON top-level `protocol_version`은 호환성을 위해 integer `1`이다.
-
-채널:
-
-| Channel | Direction | Transport | Port | Status |
-|---|---|---|---:|---|
-| Telemetry | onboard -> GCS | UDP JSON | 14550 | implemented |
-| Command | GCS -> onboard | TCP JSON | 14551 | planned |
-| Video | onboard -> GCS | UDP MJPEG chunks | 5600 | implemented |
-| GCS discovery | GCS -> LAN broadcast | UDP text beacon | 5601 | implemented |
+현재 문서 version은 v1.8이고 JSON top-level `protocol_version`은 호환성을
+위해 integer `1`이다.
 
 주요 telemetry group:
 
 - `system.*`: board, OS, uptime, CPU temp, throttling, load, memory, Wi-Fi
-- `camera.*`: IMX519 sensor/config/focus/exposure/capture FPS/frame seq
-- `vision.markers[]`: ArUco marker metadata
-- `vision.line.*`: line tracing metadata
-- `grid.*`: 현재 placeholder. 기본 row/col은 `-1`
-- `debug.*`: onboard timing, video counters, line workload counters
+- `camera.*`: sensor/config/focus/exposure/capture FPS/frame seq
+- `vision.line.*`: line tracking metadata
+- `vision.intersection.*`: stabilized intersection classifier output
+- `vision.intersection_decision.*`: sliding-window node/turn decision
+- `vision.grid_node.*`: latest committed local grid node
+- `vision.drone_position.*`: fractional progress from last committed node
+- `vision.markers[]`: current-frame ArUco observations
+- `debug.*`: timing, video counters, line workload counters
 
----
+`MissionTelemetry` richer fields are present in the serializer, but current
+`VisionDebugPublisher` users do not populate them yet. `grid_mission_node`
+state is currently authoritative in its console log plus `debug.note =
+"grid_mission"`.
 
-## 11. 현재 Runtime Defaults
+## 10. Current Config Defaults
 
-`config/vision.toml` 기준:
+`config/vision.toml`:
 
 ```toml
 [camera]
@@ -343,40 +274,50 @@ sensor_model = "imx519"
 width = 960
 height = 720
 fps = 12
+mode = "2328:1748:10:P"
 jpeg_quality = 45
-autofocus_mode = ""
-lens_position = -1.0
 focus_absolute = 1984
-focus_device = "/dev/v4l-subdev1"
 exposure = "sport"
-
-[debug_video]
-enabled = false
-send_fps = 5
-jpeg_quality = 40
-chunk_pacing_us = 150
 
 [line]
 mode = "light_on_dark"
-mask_strategy = "local_contrast"
+mask_strategy = "white_fill"
 process_width = 480
 roi_top_ratio = 0.08
 lookahead_y_ratio = 0.55
 lookahead_band_ratio = 0.06
-morph_open_kernel = 1
-morph_close_kernel = 7
-filter_enabled = true
+
+[debug_video]
+enabled = false
+send_fps = 5
+chunk_pacing_us = 150
 ```
 
-해상도/화질은 ArUco bench용 고화질보다 onboard 처리 여유를 우선한다. 50cm x 50cm marker를 약 2m 고도에서 보는 대회 조건을 우선 가정하며, 부족할 때만 `--camera-width`, `--camera-height`, `--camera-quality`, `--lens-position`으로 튜닝한다.
+`config/mission.toml [grid_mission]` 주요값:
 
----
+```toml
+vertiport_marker_id = 23
+markers_expected = 4
+vertiport_altitude_m = 2.0
+cruise_altitude_m = 2.0
+marker_lock_yaw_delta_deg = 90.0
+entry_forward_speed_mps = 0.30
+entry_blind_clear_distance_m = 1.80
+entry_intersection_min_distance_m = 1.80
+entry_center_target_y_norm = 0.55
+cell_size_m = 3.0
+hop_align_start_m = 1.4
+hop_align_end_m = 1.7
+hop_max_distance_m = 3.5
+hop_intersection_min_distance_m = 1.0
+marker_window_frames = 8
+marker_window_min_count = 4
+```
 
-## 12. 현재 디렉토리 구조와 파일 역할
+## 11. Directory / File Roles
 
 ```text
 uav-onboard/
-├─ .gitignore
 ├─ CMakeLists.txt
 ├─ PROJECT_SPEC.md
 ├─ README.md
@@ -384,213 +325,53 @@ uav-onboard/
 │  ├─ autopilot.toml
 │  ├─ mission.toml
 │  ├─ network.toml
+│  ├─ pixhawk1_usb.expected.toml
+│  ├─ pixhawk1_usb.params
+│  ├─ runtime.pixhawk1.toml
+│  ├─ runtime.sitl.grid.toml
+│  ├─ runtime.sitl.toml
 │  ├─ safety.toml
 │  └─ vision.toml
 ├─ docs/PROTOCOL.md
-├─ logs/.gitkeep
 ├─ scripts/
-│  ├─ .gitkeep
+│  ├─ grid_arena_test.sh
+│  ├─ line_tracing_test.sh
 │  └─ setup_rpi_dependencies.sh
+├─ sim/gazebo/
 ├─ src/
-│  ├─ app/VisionDebugPipeline.cpp
-│  ├─ app/VisionDebugPipeline.hpp
-│  ├─ autopilot/.gitkeep
-│  ├─ camera/CameraFrame.hpp
-│  ├─ camera/RpicamMjpegSource.cpp
-│  ├─ camera/RpicamMjpegSource.hpp
-│  ├─ common/NetworkConfig.cpp
-│  ├─ common/NetworkConfig.hpp
-│  ├─ common/Time.cpp
-│  ├─ common/Time.hpp
-│  ├─ common/VisionConfig.cpp
-│  ├─ common/VisionConfig.hpp
-│  ├─ control/.gitkeep
-│  ├─ logging/.gitkeep
-│  ├─ main.cpp
-│  ├─ mission/.gitkeep
-│  ├─ network/UdpTelemetrySender.cpp
-│  ├─ network/UdpTelemetrySender.hpp
-│  ├─ protocol/TelemetryMessage.cpp
-│  ├─ protocol/TelemetryMessage.hpp
-│  ├─ safety/.gitkeep
-│  ├─ video/UdpMjpegStreamer.cpp
-│  ├─ video/UdpMjpegStreamer.hpp
-│  ├─ video/VideoPacket.cpp
-│  ├─ video/VideoPacket.hpp
-│  └─ vision/
-│     ├─ ArucoDetector.cpp
-│     ├─ ArucoDetector.hpp
-│     ├─ LineDetector.cpp
-│     ├─ LineDetector.hpp
-│     ├─ LineStabilizer.cpp
-│     ├─ LineStabilizer.hpp
-│     ├─ OpenCvCameraSource.cpp
-│     ├─ OpenCvCameraSource.hpp
-│     └─ VisionTypes.hpp
-├─ test_data/
-│  ├─ images/.gitkeep
-│  ├─ logs/.gitkeep
-│  └─ videos/.gitkeep
+│  ├─ app/                  # VisionDebugPipeline / VisionDebugPublisher
+│  ├─ autopilot/            # MAVLink adapter + UDP/serial transports
+│  ├─ camera/               # rpicam MJPEG capture
+│  ├─ common/               # config/time helpers
+│  ├─ control/              # setpoint model, guided velocity, grid mapper
+│  ├─ mission/              # altitude, grid mission, tracker, snake, marker registry
+│  ├─ network/              # UDP telemetry sender
+│  ├─ protocol/             # telemetry JSON serializer
+│  ├─ safety/               # safety monitor
+│  ├─ video/                # UDP MJPEG streamer
+│  └─ vision/               # detectors, stabilizers, frame sources, processor
 ├─ tests/
-│  ├─ CMakeLists.txt
-│  ├─ test_line_stabilizer.cpp
-│  └─ test_telemetry_line_json.cpp
 └─ tools/
-   ├─ aruco_detector_tester.cpp
-   ├─ camera_preview.cpp
-   ├─ line_detector_tuner.cpp
-   ├─ mock_gcs_command.cpp
-   ├─ replay_vision.cpp
-   ├─ video_streamer.cpp
-   └─ vision_debug_node.cpp
 ```
 
-Root/config/docs:
+Key tools:
 
-| 파일 | 역할 |
+| File | Role |
 |---|---|
-| `CMakeLists.txt` | build graph, dependencies, optional OpenCV vision tools, tests |
-| `README.md` | 현행 build/run/bring-up guide |
-| `config/network.toml` | GCS IP/ports, telemetry interval |
-| `config/vision.toml` | IMX519 camera, debug video, ArUco, line config |
-| `config/autopilot.toml` | future Pixhawk/MAVLink serial config |
-| `config/mission.toml` | future grid/marker/takeoff mission config |
-| `config/safety.toml` | future failsafe thresholds/timeouts |
-| `docs/PROTOCOL.md` | onboard/GCS common protocol spec |
+| `tools/vision_debug_node.cpp` | camera/vision/GCS debug runtime |
+| `tools/line_follow_node.cpp` | line-follow staging mission |
+| `tools/grid_mission_node.cpp` | current grid arena staging mission |
+| `tools/mavlink_probe.cpp` | no-arm Pixhawk/MAVLink bench probe |
+| `tools/mavlink_motor_test.cpp` | props-removed motor command check |
+| `tools/grid_image_smoke.cpp` | deterministic image-grid smoke |
+| `tools/marker_grid_replay.cpp` | marker/grid replay helper |
 
-Core source:
+Current focused tests cover telemetry JSON, line/marker/intersection
+stabilizers, intersection decision, guided velocity control, line-follow
+mission, grid mission entry/origin, safety monitor, fake frame source, vision
+processor, and MAVLink UDP/serial adapter behavior.
 
-| 파일 | 역할 |
-|---|---|
-| `src/main.cpp` | 현재 basic telemetry bring-up app `uav_onboard`; 최종 mission runtime composition root로 확장 예정 |
-| `src/app/VisionDebugPipeline.*` | current integrated camera/vision/telemetry/debug-video pipeline |
-| `src/camera/*` | rpicam MJPEG capture and frame model |
-| `src/common/*` | config parsing and time utility |
-| `src/network/UdpTelemetrySender.*` | UDP telemetry sender |
-| `src/protocol/TelemetryMessage.*` | telemetry data model and JSON serialization |
-| `src/video/*` | UDP MJPEG packet/chunk streamer |
-| `src/vision/*` | ArUco, line detector, line stabilizer, OpenCV camera helper, vision types |
-
-Tests/tools:
-
-| 파일 | 역할 |
-|---|---|
-| `tests/test_line_stabilizer.cpp` | stabilizer regression |
-| `tests/test_telemetry_line_json.cpp` | telemetry JSON regression |
-| `tools/vision_debug_node.cpp` | main Pi vision debug executable |
-| `tools/video_streamer.cpp` | standalone video streamer |
-| `tools/line_detector_tuner.cpp` | offline line tuning |
-| `tools/aruco_detector_tester.cpp` | offline ArUco test |
-| `tools/camera_preview.cpp` | OpenCV camera smoke tool |
-| `tools/mock_gcs_command.cpp` | command channel placeholder |
-| `tools/replay_vision.cpp` | replay placeholder |
-
-전체 tracked 파일 인덱스:
-
-```text
-.gitignore
-CMakeLists.txt
-PROJECT_SPEC.md
-README.md
-config/autopilot.toml
-config/mission.toml
-config/network.toml
-config/safety.toml
-config/vision.toml
-docs/PROTOCOL.md
-logs/.gitkeep
-scripts/.gitkeep
-scripts/setup_rpi_dependencies.sh
-src/app/.gitkeep
-src/app/VisionDebugPipeline.cpp
-src/app/VisionDebugPipeline.hpp
-src/autopilot/.gitkeep
-src/camera/CameraFrame.hpp
-src/camera/RpicamMjpegSource.cpp
-src/camera/RpicamMjpegSource.hpp
-src/common/.gitkeep
-src/common/NetworkConfig.cpp
-src/common/NetworkConfig.hpp
-src/common/Time.cpp
-src/common/Time.hpp
-src/common/VisionConfig.cpp
-src/common/VisionConfig.hpp
-src/control/.gitkeep
-src/logging/.gitkeep
-src/main.cpp
-src/mission/.gitkeep
-src/network/.gitkeep
-src/network/UdpTelemetrySender.cpp
-src/network/UdpTelemetrySender.hpp
-src/protocol/.gitkeep
-src/protocol/TelemetryMessage.cpp
-src/protocol/TelemetryMessage.hpp
-src/safety/.gitkeep
-src/video/UdpMjpegStreamer.cpp
-src/video/UdpMjpegStreamer.hpp
-src/video/VideoPacket.cpp
-src/video/VideoPacket.hpp
-src/vision/.gitkeep
-src/vision/ArucoDetector.cpp
-src/vision/ArucoDetector.hpp
-src/vision/LineDetector.cpp
-src/vision/LineDetector.hpp
-src/vision/LineStabilizer.cpp
-src/vision/LineStabilizer.hpp
-src/vision/OpenCvCameraSource.cpp
-src/vision/OpenCvCameraSource.hpp
-src/vision/VisionTypes.hpp
-test_data/images/.gitkeep
-test_data/logs/.gitkeep
-test_data/videos/.gitkeep
-tests/CMakeLists.txt
-tests/test_line_stabilizer.cpp
-tests/test_telemetry_line_json.cpp
-tools/aruco_detector_tester.cpp
-tools/camera_preview.cpp
-tools/line_detector_tuner.cpp
-tools/mock_gcs_command.cpp
-tools/replay_vision.cpp
-tools/video_streamer.cpp
-tools/vision_debug_node.cpp
-```
-
----
-
-## 13. 빌드, 실행, 테스트
-
-Pi setup:
-
-```bash
-bash scripts/setup_rpi_dependencies.sh
-```
-
-Build:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-```
-
-최종 onboard runtime 목표:
-
-```bash
-./build/uav_onboard --config config
-```
-
-Metadata-only vision run:
-
-```bash
-./build/vision_debug_node --config config --line-only --line-mode light_on_dark
-```
-
-GCS camera/overlay까지 확인:
-
-```bash
-./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
-```
-
-Tests:
+## 12. Build / Run / Test
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
@@ -598,32 +379,51 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
----
+Vision debug:
 
-## 14. 개발 우선순위
+```bash
+./build/vision_debug_node --config config --line-only --line-mode dark_on_light --video
+```
+
+Line-follow SITL:
+
+```bash
+./build/line_follow_node --config config --target sitl --vision gazebo \
+  --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>
+```
+
+Grid mission SITL:
+
+```bash
+./build/grid_mission_node --config config --target sitl --vision gazebo \
+  --world grid --line-mode dark_on_light --marker-count 4 \
+  --video --gcs-ip <windows-gcs-ip>
+```
+
+Pixhawk bench:
+
+```bash
+./build/mavlink_probe --config config --target pixhawk1 \
+  --duration-ms 12000 --strict-local-estimate
+```
+
+## 13. 개발 우선순위
 
 | 순서 | 작업 | 이유/검증 |
 |---:|---|---|
-| 1 | 비전 기준선 freeze와 smoke 재검증 | 이미 완성된 vision path를 안정 기준으로 고정 |
-| 2 | MAVLink adapter 구현 | SITL/Pixhawk 연결 준비, heartbeat/mode/arm/takeoff/land/velocity |
-| 3 | GUIDED velocity control backend 구현 | A안 primary 제어. line offset/angle -> body velocity/yaw |
-| 4 | RC override fallback backend 구현 | B안 fallback. mission logic은 공유하고 출력만 교체 |
-| 5 | `uav_onboard` mission composition root 확장 | Vision/Mission/Control/Safety/Telemetry/MAVLink 조립 |
-| 6 | Mission state machine 구현 | TAKEOFF/LINE_FOLLOW/GRID_EXPLORE/RETURN/LAND |
-| 7 | Safety monitor 구현 | line/GCS/Pixhawk/battery/RC takeover timeout |
-| 8 | Command channel 구현 | GCS START/ABORT/EMERGENCY LAND/backend 선택 |
-| 9 | File logging 구현 | 비행 후 재현과 보고서 자료 |
-| 10 | SITL -> props-off bench -> low-altitude grid subset 테스트 | 단계별 통합 검증 |
+| 1 | `grid_mission_node` SITL snake 안정화 | 현재 full-grid 알고리즘의 중심 |
+| 2 | GCS mission/grid telemetry 보강 | console-only state를 GCS에도 구조화 |
+| 3 | Grid mission unit/integration tests 확대 | Entry/origin/hop/turn/marker commit 회귀 방지 |
+| 4 | Real Pixhawk grid mission no-arm smoke 확정 | serial/vision/control path 분리 검증 |
+| 5 | Full mission composition을 `uav_onboard`로 수렴 | 최종 실행 파일 정리 |
+| 6 | Marker reverse revisit / return home policy | 대회 최종 미션 완성 |
+| 7 | GCS command channel 연동 | START/ABORT/EMERGENCY LAND/backend 선택 |
+| 8 | File logging/replay | 비행 후 재현성과 보고서 자료 |
 
----
+## 14. 아직 하지 않는 것
 
-## 15. 향후 확장 가능성
-
-| 항목 | 방향 |
-|---|---|
-| 카메라 추가 | camera source interface를 명확히 분리해 다중 카메라 지원 |
-| Protocol 최적화 | JSON 부하가 커지면 MessagePack/FlatBuffers 검토 |
-| 시뮬레이터 연동 | MAVLink adapter를 SITL endpoint로 교체 |
-| ROS2 이식 | Vision/Mission/Control 경계 유지 후 node화 |
-| Log replay | `tools/replay_vision.cpp`를 실제 replay/tuning 도구로 확장 |
-| OTA/deploy | `scripts/`에 rsync/deploy/run helper 추가 |
+- GCS가 자율주행 판단을 대신하지 않는다.
+- Gazebo ground-truth pose를 mission 입력으로 쓰지 않는다.
+- `grid_mission_node --target pixhawk1 --allow-arm-takeoff`를 열지 않는다.
+- Debug video frame loss를 mission failure로 보지 않는다.
+- Marker reverse revisit/return-home을 구현된 기능처럼 문서화하지 않는다.

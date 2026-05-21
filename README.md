@@ -1,709 +1,301 @@
 # uav-onboard
 
-Onboard software for the indoor UAV search mission.
+Onboard software for the Astroquad indoor/grid UAV search mission.
 
-This project owns camera processing, mission state management, MAVLink control,
-GCS communication, safety handling, and headless logging.
+Current target hardware is Raspberry Pi 4 + IMX519 CSI camera + Pixhawk1.
+The codebase now has three practical runtime layers:
 
-Current target hardware is Raspberry Pi 4 + IMX519-78 16MP AF CSI camera.
-The previous Raspberry Pi Zero 2 W/ZeroCam path is kept conceptually supported,
-but new camera defaults and bring-up notes assume the Pi 4 IMX519 setup.
+- `vision_debug_node`: camera/vision/GCS telemetry bring-up.
+- `line_follow_node`: short line-follow mission staging for SITL and guarded
+  real Pixhawk1 tests.
+- `grid_mission_node`: current grid-arena snake mission staging for SITL.
+
+The final product target is still `uav_onboard`, but today that executable is a
+basic telemetry bring-up sender. Mission development should keep sharing the
+libraries already factored out of the tools instead of copying detector code
+between executables.
 
 ## Layout
 
-- `config/`: runtime TOML configuration
-- `src/`: mission application source
-- `tools/`: local development and debugging utilities
-- `test_data/`: captured images, videos, and logs for repeatable tests
-- `tests/`: unit tests
-- `scripts/`: build, deploy, and run helpers
-- `docs/`: design notes and protocol reference
-- `logs/`: runtime logs
+- `config/`: network, vision, mission, safety, runtime, Pixhawk parameter files
+- `src/`: reusable onboard libraries
+- `tools/`: staging executables and smoke tools
+- `tests/`: CTest targets
+- `scripts/`: dependency and SITL launcher helpers
+- `sim/gazebo/`: Astroquad-owned Gazebo worlds/models/textures
+- `docs/`: protocol reference
+- `logs/`, `test_data/`: runtime/captured artifacts
 
-## Executable Roles
+## Main Executables
 
-The onboard codebase should keep debug, staging, and final mission programs
-separate while sharing the same libraries.
-
-Current executables:
-
-- `uav_onboard`: current basic telemetry bring-up sender. This is the final
-  onboard composition root target and should eventually assemble vision,
-  mission, control, safety, telemetry, and MAVLink.
-- `vision_debug_node`: vision bring-up/debug program. It owns camera capture,
-  detector execution, telemetry, and optional debug video. It must not grow
-  MAVLink control logic.
-- `video_streamer`: raw MJPEG video transport smoke tool.
-- `line_detector_tuner`, `aruco_detector_tester`, `grid_image_smoke`,
-  `marker_grid_replay`: offline vision tuning and regression tools.
-
-Allowed staging executables:
-
-- `mission_node` or `line_follow_node`: temporary MVP executables for
-  auto-takeoff, short straight line following, and safe landing. These are
-  acceptable while the mission runtime is still being assembled, but the stable
-  result should be folded back into `uav_onboard`.
-
-Code reuse rule:
-
-- Do not copy detector or debug pipeline code into a mission executable.
-- Split reusable detector execution into a `VisionPipeline`/`VisionRuntime`
-  style library and link it from both `vision_debug_node` and the mission
-  staging executable.
-- CMake target linking is the mechanism for sharing compiled modules, but it is
-  not enough by itself if the runtime loop remains trapped inside
-  `VisionDebugPipeline`.
-- `VisionPipeline` should produce typed vision output. Mission, control,
-  safety, and MAVLink code consume that output outside the vision module.
+| Executable | Role |
+|---|---|
+| `uav_onboard` | Basic telemetry sender; final composition root target. |
+| `vision_debug_node` | Camera source + ArUco/line/intersection processing + GCS telemetry + optional MJPEG video. |
+| `line_follow_node` | Auto takeoff, short line follow, marker hover/landing staging. Supports SITL UDP and guarded Pixhawk1 serial paths. |
+| `grid_mission_node` | Current full grid-arena snake mission staging. SITL is the active arm/takeoff target. |
+| `mavlink_probe` | No-arm Pixhawk heartbeat/local estimate/RC/battery/parameter probe. |
+| `mavlink_motor_test` | Props-removed low-throttle motor command check. |
+| `video_streamer` | Raw MJPEG transport smoke tool. |
+| `line_detector_tuner`, `aruco_detector_tester`, `grid_image_smoke`, `marker_grid_replay` | Offline vision/regression tools. |
 
 ## Build
 
-On a clean Raspberry Pi OS Lite 64-bit install, set up build dependencies first:
+On Raspberry Pi OS Lite 64-bit:
 
 ```bash
 bash scripts/setup_rpi_dependencies.sh
-```
-
-Optional development tools:
-
-```bash
-bash scripts/setup_rpi_dependencies.sh --with-dev-tools
-```
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-```
-
-## Camera Bring-Up
-
-For Raspberry Pi 4 + IMX519-78, verify the rpicam/libcamera path first:
-
-```bash
-rpicam-hello --version
-rpicam-hello --list-cameras
-rpicam-still -t 1000 --nopreview -o test_data/images/imx519_smoke.jpg
-rpicam-vid -t 5000 --nopreview --codec mjpeg --width 640 --height 480 --framerate 12 -o /tmp/imx519_test.mjpeg
-```
-
-Focus smoke tests:
-
-```bash
-rpicam-hello -t 0 --autofocus-mode manual --lens-position 0 --info-text "lp %lp focus %focus"
-v4l2-ctl -d /dev/v4l-subdev1 --list-ctrls-menus
-v4l2-ctl -d /dev/v4l-subdev1 --set-ctrl focus_absolute=1984
-rpicam-still -t 1000 --nopreview -o test_data/images/focus_v4l2_1984.jpg
-```
-
-On the current IMX519 setup, libcamera reports no AF algorithm, so
-`--lens-position` may show `lp -1.00` and have no effect. The lens hardware is
-available as `/dev/v4l-subdev1` with `focus_absolute`; set it through
-`camera.focus_absolute` in `config/vision.toml`.
-
-The older OpenCV camera smoke tool is still available, but CSI cameras on
-Raspberry Pi OS are validated primarily through `rpicam-*`:
-
-```bash
-./build/camera_preview --device 0 --frames 30 --save test_data/images/camera_smoke.jpg
-```
-
-Expected output includes the captured frame size, measured FPS, and the saved
-image path.
-
-For any Raspberry Pi CSI camera, the same rpicam checks remain the source of truth:
-
-```bash
-rpicam-hello --list-cameras
-rpicam-still -t 1000 --nopreview -o test_data/images/camera_smoke.jpg
-```
-
-## Video Stream Bring-Up
-
-Start `uav_gcs_video` on the laptop first, then run the onboard streamer.
-With the default broadcast address in `config/network.toml`, `video_streamer`
-listens for the GCS discovery beacon and then streams to the discovered laptop
-IP by unicast:
-
-```bash
-./build/video_streamer --source rpicam --config config
-```
-
-If discovery is blocked by the network, override the destination explicitly:
-
-```bash
-./build/video_streamer --source rpicam --config config --gcs-ip <laptop-ip>
-```
-
-For a local sender smoke test without the Pi camera:
-
-```bash
-./build/video_streamer --source test-pattern --gcs-ip 127.0.0.1 --port 5600 --count 30
-```
-
-`video_streamer` sends MJPEG frames over UDP in small chunks. It is a best-effort
-debug stream; dropped frames are acceptable so video output does not become part
-of the future mission-critical vision loop.
-
-## Tests
-
-Configure with tests enabled:
-
-```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Current focused tests cover telemetry JSON generation, line/intersection
-stabilization, and synthetic intersection classification when OpenCV is
-available.
-
-MAVLink headers are required for `line_follow_node` and the autopilot adapter.
-CMake first looks for ArduPilot-generated headers under `~/ardupilot/...` and
-system include paths. If they are not present, it downloads the MAVLink
-`c_library_v2` headers into the build tree and adapts them to the existing
-`mavlink/v2.0/ardupilotmega/mavlink.h` include path. On a Raspberry Pi without
-an ArduPilot checkout, a normal configure should still include
-`line_follow_node`:
-
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
-cmake --build build
-```
-
-For offline builds, preinstall/provide the headers and pass the include root
-explicitly:
+MAVLink headers are required for the autopilot tools. CMake first looks for
+ArduPilot-generated headers and then downloads MAVLink `c_library_v2` into the
+build tree when needed. Offline builds can pass:
 
 ```bash
 cmake -S . -B build -DMAVLINK_INCLUDE_DIR=/path/to/include
 ```
 
-## Vision Debug: ArUco and Line Tracing
+## Camera Bring-Up
 
-Start `uav_gcs_vision_debug` on the laptop first. Then run this on the
-Raspberry Pi:
+Current camera defaults live in `config/vision.toml`:
 
-```bash
-./build/vision_debug_node --config config
+```toml
+[camera]
+sensor_model = "imx519"
+width = 960
+height = 720
+fps = 12
+mode = "2328:1748:10:P"
+jpeg_quality = 45
+focus_absolute = 1984
+focus_device = "/dev/v4l-subdev1"
+exposure = "sport"
+
+[debug_video]
+enabled = false
+send_fps = 5
+jpeg_quality = 40
+chunk_pacing_us = 150
 ```
 
-This node captures Pi camera MJPEG frames, decodes each frame once, runs enabled
-onboard detectors, sends vision metadata as telemetry, and sends the original
-camera JPEG to GCS. It does not draw overlays on the Raspberry Pi.
-
-The onboard side still sends only metadata for ArUco markers and line tracing.
-All marker boxes, line contours, labels, and tracking-point overlays are drawn
-by GCS. Keep this separation: onboard CPU time is reserved for future mission
-logic and MAVLink control, and debug video may be disabled entirely for final
-mission runs.
-
-Current detectors:
-
-- ArUco marker detection.
-- Line tracing MVP using the shared resized ROI mask builder. The current
-  default `white_fill` strategy detects wide white tape/paper as filled blobs,
-  then uses an anchor-band projection, contour scoring, and onboard EMA/hold
-  filtering for sudden offset jumps. `local_contrast` remains available as a
-  comparison/tuning strategy.
-- Intersection classification using the same line mask, largest-blob center
-  candidates, branch ray scoring, angle-based `L` vs `straight` checks, and
-  onboard temporal smoothing for `+`, `T`, `L`, and `straight`.
-- Intersection decision telemetry that aggregates recent branch evidence,
-  records `L`/`T`/`+` as local grid node events, and reports turn candidates,
-  approach phase, and overshoot risk without sending Pixhawk control commands.
-
-The debug video path is opt-in, best-effort, and non-critical. By default the
-onboard process captures camera frames only to compute ArUco/line metadata and
-system telemetry. If GCS video streaming is explicitly enabled and falls behind,
-old video frames are dropped and the vision loop keeps working on the latest
-camera frame/result. Future mission decision and control output must stay on
-the critical path; GCS video is only an observation aid. The Pi 4 + IMX519
-default captures 960x720 at 12 FPS with MJPEG quality 45, while forcing the
-2328x1748 IMX519 sensor mode so the camera keeps the wider full-sensor view
-without making the onboard decode/detector/video path process 1640x1232 frames.
-GCS video receiver discovery is skipped unless debug video is enabled.
-
-Mission-style metadata-only examples:
+Validate the camera path before running mission code:
 
 ```bash
-./build/vision_debug_node --config config --count 100
-./build/vision_debug_node --config config --gcs-ip <laptop-ip>
-./build/vision_debug_node --config config --no-video
-./build/vision_debug_node --config config --no-telemetry
-./build/vision_debug_node --config config --aruco-only
-./build/vision_debug_node --config config --line-only
-./build/vision_debug_node --config config --disable-line
-./build/vision_debug_node --config config --disable-aruco
-./build/vision_debug_node --config config --line-only --line-mode auto
+rpicam-hello --version
+rpicam-hello --list-cameras
+rpicam-still -t 1000 --nopreview -o test_data/images/imx519_smoke.jpg
+rpicam-vid -t 5000 --nopreview --codec mjpeg --width 960 --height 720 --framerate 12 -o /tmp/imx519_test.mjpeg
+```
+
+The current IMX519 setup uses the V4L2 focus motor path
+`camera.focus_absolute`/`camera.focus_device`; `--lens-position` may be ignored
+if libcamera reports no AF algorithm for the module.
+
+## Vision Debug
+
+Start `uav_gcs_vision_debug` on the laptop first, then run:
+
+```bash
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark
-./build/vision_debug_node --config config --line-only --line-mode dark_on_light
-./build/vision_debug_node --config config --line-only --line-threshold 160
-./build/vision_debug_node --config config --line-only --line-roi-top 0.08 --line-lookahead 0.55
-./build/vision_debug_node --config config --aruco-only --camera-quality 90 --lens-position 1.0
+./build/vision_debug_node --config config --line-only --line-mode dark_on_light --video --fps 12
 ```
 
-GCS raw camera/overlay visual tuning examples:
+Onboard sends raw camera JPEG only when `--video` is enabled. Marker boxes,
+line contours, intersection labels, and grid-map text are drawn by GCS from
+telemetry metadata.
 
-```bash
-./build/vision_debug_node --config config --video
-./build/vision_debug_node --config config --video --fps 12
-./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
-./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video --gcs-ip <laptop-ip>
-./build/vision_debug_node --config config --aruco-only --video --camera-quality 90 --lens-position 1.0
-```
+Current vision path:
 
-### Gazebo SITL Target Commands
+- ArUco marker detection with stabilizer/hold support.
+- Shared `LineMaskBuilder` for `white_fill`, `dark_fill`, and local-contrast
+  strategies.
+- Line detector chooses ranked contours, then measures tracking X from an
+  anchor/lookahead projection band rather than the whole contour centroid.
+- Marker-like square occlusion masks reduce false line candidates around
+  ArUco markers when bright-line modes are active.
+- Intersection detector/classifier reports `straight`, `L`, `T`, and `+`
+  branch evidence.
+- `IntersectionDecisionEngine` keeps a short evidence window, emits
+  `node_record`/`turn_ready` decisions, and guards weak `T -> +` upgrades.
 
-These are the current repeatable commands for the Windows GCS + WSL
-Gazebo/SITL test loop. They keep the Raspberry Pi defaults untouched and opt
-into the Gazebo camera through `--target sitl` or `--vision gazebo`.
+Line mode guide:
 
-Windows GCS:
+- `light_on_dark`: bright/white line on darker floor.
+- `dark_on_light`: black/dark line on bright floor or Gazebo grid arena.
+- `auto`: evaluate both polarities and pick the best line-shaped candidate.
+
+## Gazebo SITL
+
+Run Windows GCS:
 
 ```powershell
 cd astroquad\uav-gcs
 .\build\uav_gcs_vision_debug.exe --config config
 ```
 
-#### Line-Tracing Test World
-
-WSL Gazebo/SITL launcher:
+### Line-Tracing World
 
 ```bash
 bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh
-```
 
-WSL vision-only GCS smoke:
-
-```bash
 WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
-
 cd ~/astroquad/uav-onboard
-./build/vision_debug_node \
-  --config config \
-  --target sitl \
-  --vision gazebo \
-  --line-mode dark_on_light \
-  --video \
-  --gcs-ip "$WINDOWS_GCS_IP"
+./build/line_follow_node --config config --target sitl --vision gazebo \
+  --line-mode dark_on_light --video --gcs-ip "$WINDOWS_GCS_IP"
 ```
 
-WSL marker fixture smoke:
+### Grid Arena World
 
-```bash
-cd ~/astroquad/uav-onboard
-./build/vision_debug_node \
-  --config config \
-  --target sitl \
-  --vision gazebo \
-  --gazebo-topic /world/astroquad_marker_center_fixture/model/astroquad_static_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
-  --aruco-only \
-  --video \
-  --gcs-ip "$WINDOWS_GCS_IP"
-```
+The grid arena is the current full-mission SITL course:
 
-WSL vision-driven flight smoke:
+- 3m x 3m vertiport box at the origin.
+- Vertiport ArUco marker ID 23.
+- 5 x 8 grid cells, 3m cell size, black lines on white ground.
+- Four 50cm ArUco markers on white pads:
+  ID 1 at `(11.5, 3.0)`, ID 2 at `(17.5, 9.0)`,
+  ID 3 at `(23.5, 6.0)`, ID 4 at `(26.5, 12.0)`.
 
-```bash
-cd ~/astroquad/uav-onboard
-./build/line_follow_node \
-  --config config \
-  --target sitl \
-  --vision gazebo \
-  --line-mode dark_on_light \
-  --video \
-  --gcs-ip "$WINDOWS_GCS_IP"
-```
-
-`line_follow_node --video` owns the Gazebo camera, vision processing, GCS
-telemetry, and GCS video stream for the flight run. Do not run
-`vision_debug_node` at the same time during flight; use it only for vision-only
-smoke tests without `line_follow_node`.
-
-Gazebo downward-camera zoom is set in
-`sim/gazebo/models/iris_with_downward_camera/model.sdf` at
-`<horizontal_fov>`. Larger values zoom out and smaller values zoom in. Restart
-Gazebo with `bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh` after changing this SDF; a C++ rebuild is not
-needed for FOV-only edits.
-
-#### Grid Arena Test World
-
-The grid arena is the final mission test environment: a 5×8 grid (3m cell size,
-15m × 24m total) with a 3m × 3m vertiport at the origin, black grid lines, and
-4 ArUco markers (IDs 1–4) at fixed pseudo-random intersections.
-
-WSL Gazebo/SITL launcher:
+Launcher:
 
 ```bash
 bash ~/astroquad/uav-onboard/scripts/grid_arena_test.sh
 ```
 
-The grid_arena_test_world loads independently of the line_tracing_test_world.
-Both worlds are on the same SITL infrastructure but with different Gazebo topic
-namespaces. The onboard config's default `gazebo_topic` points to the line
-tracing world; when running against the grid arena, you **must override
-`--gazebo-topic`** on the onboard command line.
-
-Vision-only smoke test (grid arena camera feed, no flight):
+Current grid mission command:
 
 ```bash
 WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
 
 cd ~/astroquad/uav-onboard
-./build/vision_debug_node \
+./build/grid_mission_node \
   --config config \
   --target sitl \
   --vision gazebo \
-  --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
+  --world grid \
   --line-mode dark_on_light \
-  --count 30 \
-  --no-telemetry \
-  --no-video
-```
-
-Vision + telemetry with GCS video:
-
-```bash
-WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
-
-cd ~/astroquad/uav-onboard
-./build/vision_debug_node \
-  --config config \
-  --target sitl \
-  --vision gazebo \
-  --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
-  --line-mode dark_on_light \
+  --marker-count 4 \
   --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
 
-Line-follow mission staging (grid arena, not final mission):
+`--world grid` selects `config/runtime.sitl.grid.toml`, including the grid
+arena Gazebo camera topic. CLI `--gazebo-topic` still overrides it.
 
-```bash
-cd ~/astroquad/uav-onboard
-./build/line_follow_node \
-  --config config \
-  --target sitl \
-  --vision gazebo \
-  --gazebo-topic /world/grid_arena_test_world/model/iris_with_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
-  --line-mode dark_on_light \
-  --video \
-  --gcs-ip "$WINDOWS_GCS_IP"
+Grid mission state flow:
+
+```text
+IDLE
+  -> ARM_TAKEOFF
+  -> MARKER_LOCK_YAW
+  -> ENTRY_FORWARD
+  -> ENTRY_CENTER_ORIGIN
+  -> SNAKE_LAUNCH_ALIGN
+  -> SNAKE_FORWARD
+  -> SNAKE_RECORD_NODE
+  -> SNAKE_STOP_AT_CENTER
+  -> SNAKE_TURN_90
+  -> SNAKE_ADVANCE_ONE_CELL
+  -> SNAKE_TURN_90_AGAIN
+  -> SNAKE_COMPLETE
+  -> LAND
+  -> DONE
 ```
 
-**Note**: The line_follow_node above is a line-tracing MVP, not the full grid
-snake mission. The grid arena world is ready for testing the complete mission
-state machine once it is implemented.
+Any active state can enter `EMERGENCY_LAND` on heartbeat loss, mission timeout,
+altitude ceiling, max-intersection, hop-distance, entry timeout, or abort.
 
-### Pixhawk1 Real-Hardware Bench Commands
+Current snake strategy:
 
-These commands are for the Raspberry Pi 4 connected to the real Pixhawk1 over
-USB serial. They are intended for bench bring-up before any real line-follow
-flight. Keep propellers removed for all motor checks.
+- Take off over the vertiport.
+- Hold the vertiport marker centered while yawing right by `+90 deg`.
+- Fly yaw-frozen `EntryForward`; the new grid arena has no line from the
+  vertiport to the first grid intersection.
+- After the first L/T/+ is seen, enter `EntryCenterOrigin` and center that
+  intersection before publishing local `(0,0)`.
+- Between nodes, use LOCAL_NED distance from the last committed node as the
+  hop reference.
+- Run line following only in a short mid-cell align window
+  (`hop_align_start_m` to `hop_align_end_m`); otherwise fly forward with yaw
+  locked.
+- At nodes, dwell briefly so branch evidence settles. Marker IDs are committed
+  only after the sliding marker window sees the same non-vertiport ID often
+  enough without mixed IDs.
+- At boundaries, `SnakePlanner` latches the first valid turn direction and
+  alternates left/right strictly. If the expected alternation branch is absent,
+  the snake mission completes and lands rather than backtracking.
 
-No-arm MAVLink/MTF-01 telemetry probe:
+The current grid mission lands after `--marker-count` grid markers are found or
+the snake completes. Marker-number reverse revisit, official coordinate
+conversion, and return-to-start are still future work.
+
+## Pixhawk1 Bench And Line-Follow
+
+No-arm local-estimate probe:
 
 ```bash
-cd /home/astroquad/astroquad/uav-onboard
-
 ./build/mavlink_probe --config config --target pixhawk1 \
   --duration-ms 12000 --strict-local-estimate
 ```
 
-This should print a Pixhawk heartbeat, mode/armed state, local position,
-rangefinder/distance sensor, optical flow quality, and EKF flags. It only sends
-GCS heartbeat and stream requests; it does not arm, change mode, take off, or
-send velocity commands.
-
-No-arm RC input gate:
+No-arm RC gate:
 
 ```bash
-cd /home/astroquad/astroquad/uav-onboard
-
 ./build/mavlink_probe --config config --target pixhawk1 \
   --duration-ms 30000 --strict-rc
 ```
 
-This must pass before any real `--allow-arm-takeoff` mission. The Pixhawk1
-runtime profile requires fresh MAVLink `RC_CHANNELS` with `chancount > 0`; if
-RC is not visible, `line_follow_node` exits before `GUIDED`, arm, takeoff, or
-velocity commands.
-
-No-arm `line_follow_node` serial smoke:
+No-arm line-follow serial smoke:
 
 ```bash
-cd /home/astroquad/astroquad/uav-onboard
-
 ./build/line_follow_node --config config --target pixhawk1 \
   --mavlink-smoke --smoke-duration-ms 5000 --no-telemetry
 ```
 
-This validates that the mission executable can select the Pixhawk serial
-transport from config. In smoke mode it does not arm, change mode, take off, or
-send velocity commands. It also prints the latest observed RC channel count and
-RSSI when those messages are available.
-
-Pixhawk parameter compare:
+Props-removed motor command check:
 
 ```bash
-cd /home/astroquad/astroquad/uav-onboard
-
-./build/mavlink_probe --config config --target pixhawk1 \
-  --duration-ms 12000 --param-file config/pixhawk1_usb.params
-```
-
-Apply the tracked Pixhawk parameter file only after the no-arm probe succeeds:
-
-```bash
-cd /home/astroquad/astroquad/uav-onboard
-
-./build/mavlink_probe --config config --target pixhawk1 \
-  --duration-ms 12000 \
-  --param-file config/pixhawk1_usb.params \
-  --apply-params --i-understand-this-writes-pixhawk-params
-```
-
-Low-throttle motor command check:
-
-```bash
-cd /home/astroquad/astroquad/uav-onboard
-
 ./build/mavlink_motor_test --config config --target pixhawk1 \
   --motor 1 --percent 5 --seconds 1 --props-removed
 ```
 
-Expected result: motor 1 spins briefly at low throttle and the tool prints
-`COMMAND_ACK result=0`. Repeat with `--motor 2`, `--motor 3`, and `--motor 4`
-to check each motor output. If the command is accepted but a motor does not
-spin, check the safety switch, ESC power, MAIN OUT signal wiring, ESC
-calibration, motor order, and motor PWM parameters before increasing throttle.
-
-Do not run the real serial mission path with `--allow-arm-takeoff` until
-`--strict-rc`, RC takeover, battery/failsafe behavior, motor order, prop
-direction, and a short manual hover are verified. The software RC gate is a
-fallback, not a substitute for flight-controller and operator safety checks.
-
-Existing real-hardware vision debug path:
+Real line-follow arming requires explicit acknowledgement:
 
 ```bash
-./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
-./build/vision_debug_node --config config --line-only --line-mode dark_on_light --video
-```
-
-First real line-follow mission command, only after every no-arm and props-off
-gate above passes:
-
-```bash
-./build/line_follow_node --config config --target pixhawk1 \
-  --vision rpicam --line-mode light_on_dark --video --allow-arm-takeoff
-
 ./build/line_follow_node --config config --target pixhawk1 \
   --vision rpicam --line-mode dark_on_light --video --allow-arm-takeoff
 ```
 
-Deterministic Gazebo vision fixtures can also be run without ArduPilot SITL:
+Do not run real serial mission paths until RC takeover, battery telemetry,
+MTF-01 optical-flow/range local estimate, motor order, prop direction, and a
+manual hover have been verified. `grid_mission_node --target pixhawk1` is not
+armed for real grid mission flight yet; use `--no-arm` only for smoke.
 
-```bash
-GZ_SIM_SYSTEM_PLUGIN_PATH="$HOME/ardupilot_gazebo/build:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}" \
-GZ_SIM_RESOURCE_PATH="$HOME/ardupilot_gazebo/models:$HOME/ardupilot_gazebo/worlds:$PWD/sim/gazebo/models:$PWD/sim/gazebo/worlds:${GZ_SIM_RESOURCE_PATH:-}" \
-  gz sim -s -v2 -r sim/gazebo/worlds/astroquad_marker_center_fixture.sdf
-
-./build/vision_debug_node --config config --target sitl --vision gazebo \
-  --gazebo-topic /world/astroquad_marker_center_fixture/model/astroquad_static_downward_camera/link/downward_camera_link/sensor/downward_camera/image \
-  --count 5 --no-telemetry --no-video
-```
-
-If the GCS camera window says `waiting for video stream...`, check the onboard
-startup line. `video: off` means the run is telemetry-only and the GCS log will
-show `video_sent=0`, `chunks_last=0`, and `last_bytes=0`. Add `--video` for
-visual debugging.
-
-Debug video send FPS is independent from camera capture FPS. With no CLI
-override, opt-in GCS video uses `debug_video.send_fps = 5`. Use `--fps 12` for
-debug sessions where the GCS view should track the 12 FPS vision loop more
-closely. Passing `--fps` enables debug video unless `--no-video` is also given,
-which is treated as an option conflict.
-
-Line mode guidance:
-
-- `light_on_dark`: default for the current outdoor practice grid. Use when the
-  track line is brighter than the floor.
-- `auto`: tests both bright-line and dark-line masks and chooses the
-  best line-shaped candidate.
-- `dark_on_light`: use when the track line is darker than the floor.
-- `--line-threshold 0`: use automatic Otsu thresholding. A positive value uses
-  that fixed grayscale threshold for global threshold masks. With the default
-  `white_fill` mask, `line.white_v_min`, `line.white_s_max`, and fill morphology
-  are the primary tuning values.
-- `--line-roi-top`: image ratio to ignore at the top. The default `0.08`
-  keeps most of the upper frame visible; raise it only if the camera sees
-  horizon or non-floor clutter.
-- `--line-lookahead`: vertical image ratio for the green tracking point. The
-  default `0.55` remains the telemetry lookahead reference. The current GCS
-  overlay renders the red line-center point at the camera-center Y row and
-  draws only the horizontal lateral error from the image center.
-
-The line contour sent to GCS is the simplified connected contour selected by
-the detector. The tracking X is calculated from a narrow anchor/lookahead band
-inside that contour rather than from the whole contour centroid, so broad floor
-blobs and cross-shaped contours are less likely to pull the control point away
-from the actual line center. GCS intentionally displays that X as a red point on
-the camera-center Y row with a green horizontal offset line for later lateral
-control tuning.
-
-Intersection classification is sent separately from the line tracking point.
-The GCS overlay now keeps only compact cyan intersection type text and yellow
-present-branch rays for the upper/current approach region, while the log shows
-raw/stabilized type, branch scores, hold state, and classifier latency.
-`straight` is reported as a valid type but does not set
-`intersection_detected`, because it is not a turn/branching intersection.
-
-`vision.intersection_decision` is a mission/debug layer above the stabilized
-classifier. It uses a short branch-evidence window to accept topology, keeps
-`T -> +` false upgrades guarded by `high_confidence_score`, records local grid
-node events, and reports `front_available`, `turn_candidate`, `center_y_norm`,
-`approach_phase`, and `overshoot_risk`. These fields are telemetry only; they
-do not command the flight controller.
-
-## Line-Follow MVP Direction
-
-The near-term flight MVP is intentionally smaller than the full grid mission:
-
-```text
-MTF-01 bring-up -> auto takeoff -> short straight line follow -> safe landing
-```
-
-The reduced mission state machine is:
-
-```text
-IDLE -> TAKEOFF -> LINE_FOLLOW -> LAND -> COMPLETE
-any state -> ABORT
-```
-
-Full snake exploration, marker revisit, and official coordinate conversion are
-outside this MVP. They should remain in the long-term mission design, but they
-should not be required before the first short real-aircraft line-follow test.
-
-The first line-follow program may be a temporary `mission_node` or
-`line_follow_node` target. It should still reuse the shared vision library and
-should not duplicate `vision_debug_node` detector code. Once stable, the same
-runtime should become part of `uav_onboard`.
-
-Latency and stability defaults are configured in `config/vision.toml`:
-
-- `camera.sensor_model = "imx519"`: Pi 4 + IMX519-78 is the current default
-  camera target.
-- `camera.width = 960`, `camera.height = 720`, `camera.fps = 12`: output stays
-  small enough for Pi 4 decode, detector, and optional UDP video throughput.
-- `camera.mode = "2328:1748:10:P"`: forces the wider IMX519 sensor mode before
-  scaling to the configured output size. Without this, 960x720 can select a
-  tighter cropped sensor path; using 1640x1232 directly is measurably too slow
-  for the current onboard vision loop.
-- `camera.jpeg_quality = 45`: MJPEG compression is intentionally moderate
-  because the competition marker is large enough for detection at the planned
-  2m altitude, and lower JPEG size reduces decode and optional UDP video cost.
-- `camera.focus_absolute = 1984`, `camera.focus_device = "/dev/v4l-subdev1"`:
-  current IMX519 focus path. This bypasses rpicam `--lens-position`, which is
-  ignored on the current Pi image because libcamera has no AF algorithm for
-  this module.
-- `camera.exposure = "sport"`: initial setting to reduce motion blur.
-- `line.process_width = 480`: line detection keeps more high-altitude line
-  pixels than the previous 320px setting while still running on a resized ROI.
-- `line.mask_strategy = "white_fill"`: detects wide bright/white line structures
-  as filled blobs using low-saturation/high-value masking, then closes/dilates
-  the mask so broad tape or paper is not reduced to thin edge strips.
-- `line.white_v_min = 145`, `line.white_s_max = 90`: default HSV gates for the
-  current white-line practice captures.
-- `line.fill_close_kernel = 11`, `line.fill_dilate_kernel = 3`: white-fill
-  morphology defaults used to connect broad line regions before contour
-  selection.
-- `line.lookahead_band_ratio = 0.06`: the tracking point is measured from a
-  short horizontal band around the configured lookahead Y coordinate.
-- `line.morph_open_kernel = 1`, `line.morph_close_kernel = 7`: local-contrast
-  masks are closed more aggressively than they are opened so a bright line does
-  not split into two edge contours.
-- `line.line_run_merge_gap_px = 16`: nearby projection runs are merged when
-  measuring the tracking line width.
-- `line.max_candidates = 8`: only the largest ranked contours are scored.
-- `line.filter_enabled = true`: raw line offset/angle spikes are masked with
-  EMA smoothing, short hold, and multi-frame reacquire logic.
-- `line.filter_max_offset_velocity_ratio = 0.08`: accepted measurements are
-  still rate-limited so one noisy frame cannot move the green point too far.
-- `line.filter_max_angle_jump_deg = 90.0`: angle-only jumps are treated
-  loosely because cross/grid contours can make `fitLine` angle noisy while the
-  tracking offset remains stable.
-- `line.intersection_threshold = 0.8`: minimum branch ray score used by the
-  intersection classifier to decide whether a front/right/back/left branch is
-  present.
-- `intersection_decision.cruise_window_frames = 6`: short evidence window used
-  to accept `L`/`T`/`+` node events without stopping for seconds at every node.
-- `intersection_decision.min_branch_score = 0.72`: lower decision-layer branch
-  evidence threshold; `intersection_decision.high_confidence_score = 0.85`
-  prevents weak fourth-branch evidence from upgrading `T` to `+`.
-- `intersection_decision.record_node_once_frames = 18`: lockout to avoid
-  recording the same node repeatedly while the vehicle is still over it.
-- `intersection_decision.turn_zone_y_min/max` and `late_zone_y`: image-space
-  gating for turn readiness and overshoot risk telemetry.
-- `debug_video.enabled = false`: GCS MJPEG streaming is disabled by default so
-  normal onboard runs send metadata only.
-- `debug_video.send_fps = 5`, `debug_video.chunk_pacing_us = 150`: when debug
-  video is enabled for visual tuning, it is decimated and paced separately from
-  the detector frame loop so GCS observation does not compete with mission work.
-- The GCS vision log shows read/decode/ArUco/line/intersection/JSON/send/video timings,
-  capture/processing FPS, video chunk/skip/failure counters, Pi board/OS/load/
-  memory/throttling/Wi-Fi state, camera focus/exposure config, contour counts,
-  queue drops, raw-vs-filtered line state, and raw-vs-stabilized intersection
-  state.
-
-For image-file detector smoke tests:
+## Offline Vision Tools
 
 ```bash
 ./build/aruco_detector_tester --config config --image test_data/images/marker.jpg
-./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg
 ./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode auto
-./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mask local_contrast --process-width 480 --band 0.06
-./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mask white_fill --white-v-min 95 --white-s-max 130 --fill-close 17 --output test_data/logs/line_sample
-./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --local-threshold 10 --morph-open 1 --morph-close 7 --merge-gap 16
-./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mode light_on_dark --threshold 160 --roi-top 0.08 --lookahead 0.55
+./build/line_detector_tuner --config config --image test_data/images/line_sample.jpg --mask white_fill --output test_data/logs/line_sample
 ./build/grid_image_smoke --config config --image test_data/images/grid_sample.png --output test_data/logs/grid_smoke --scenario sample
 ```
 
-When `--output <dir>` is passed, `line_detector_tuner` writes `mask_0.png`,
-`line_overlay.png`, and `summary.txt` so tuning runs can be reviewed without
-changing the input image.
-
-`grid_image_smoke` writes `sections.csv`, `snake_full_field.csv`,
-`snake_from_entry.csv`, `snake_from_entry_grid_log/*.txt`, and annotated crop
-PNGs. The snake smoke path detects the grid entry side/row/column, rotates each
-crop into the current camera heading before detection, and renders the same
-incremental ASCII grid shape that GCS receives from `GridMapTracker`. This
-matches the flight assumption that the drone yaws at turns and then continues
-moving forward. Edge nodes use centered padded crops so image-boundary clipping
-does not move the node away from the camera-frame center.
-
-Expected GCS result:
-
-- ArUco markers are overlaid by GCS as marker boxes, center points, direction
-  arrows, and labels.
-- Detected line contour/border is overlaid by GCS in magenta.
-- The current line center is overlaid by GCS as a red point fixed on the
-  camera-center Y row, with the lateral error shown as a green horizontal line.
-- Detected intersection type is overlaid compactly in cyan, with present branch
-  rays in yellow for the upper/current approach region.
-- The GCS vision log appends `[grid-map]` ASCII output as local grid nodes are
-  visited during snake exploration.
-- If the opt-in onboard JPEG stream is enabled, it remains raw camera video with
-  no drawn overlay.
+`grid_image_smoke` writes CSVs, annotated crops, and incremental ASCII grid logs
+that match the GCS local-grid assumption: the drone yaws at turns and then keeps
+moving forward in camera frame.
 
 ## Telemetry Bring-Up
 
-Start `uav-gcs` on the laptop first, then run:
+Start `uav_gcs` on the laptop first:
 
 ```bash
 ./build/uav_onboard --config config --count 10
+./build/uav_onboard --config config --gcs-ip 127.0.0.1 --count 10
 ```
 
-By default, telemetry is sent to the IPv4 local broadcast address:
+The default GCS IP is broadcast:
 
 ```toml
 [gcs]
@@ -711,26 +303,4 @@ ip = "255.255.255.255"
 telemetry_port = 14550
 ```
 
-This avoids editing the onboard config whenever the laptop IP changes. Some
-guest Wi-Fi networks block local broadcast; if GCS receives nothing there, use
-the laptop's explicit IPv4 address with `--gcs-ip` or in `network.toml`.
-
-For a quick local loopback test, override the destination:
-
-```bash
-./build/uav_onboard --config config --gcs-ip 127.0.0.1 --count 10
-```
-
-Use `--count 0` or omit `--count` to send telemetry until interrupted.
-
-## Bring-Up Order
-
-1. On the laptop, build and start `uav-gcs` telemetry receiver.
-2. On the Raspberry Pi, run `bash scripts/setup_rpi_dependencies.sh`.
-3. On the Raspberry Pi, build `uav-onboard`.
-4. On the Raspberry Pi, validate the camera with `rpicam-hello`, `rpicam-still`,
-   and an MJPEG `rpicam-vid` smoke test.
-5. On the laptop, start `uav_gcs_video`.
-6. On the Raspberry Pi, run `video_streamer` and confirm it prints
-   `discovered GCS video receiver at <ip>:5600`.
-7. On the Raspberry Pi, run `uav_onboard` and confirm telemetry appears in GCS.
+Some networks block local broadcast; use `--gcs-ip <laptop-ip>` when needed.
