@@ -120,7 +120,10 @@ struct GridMissionConfig {
     double hop_max_distance_m = 3.5;
     // Approach-distance gate before the next intersection commit is honoured.
     // Prevents the last node's residual lookahead from immediately retriggering.
-    double hop_intersection_min_distance_m = 1.0;
+    // Cycle 22: bumped 1.0 -> 2.0 to suppress premature SnakeAdvanceOneCell
+    // arrivals caused by the previous boundary T still sitting in the wide
+    // downward camera's back-half right after a 90° column-transition turn.
+    double hop_intersection_min_distance_m = 2.0;
     double snake_launch_align_timeout_s = 3.0;
     int    snake_launch_align_stable_frames = 2;
     double snake_launch_line_min_confidence = 0.35;
