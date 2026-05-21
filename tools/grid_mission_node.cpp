@@ -310,6 +310,9 @@ void loadConfigs(const Options& opt, Configs& cfg)
                 gm["snake_record_dwell_s"].value_or(g.snake_record_dwell_s);
             g.snake_boundary_record_dwell_s =
                 gm["snake_boundary_record_dwell_s"].value_or(g.snake_boundary_record_dwell_s);
+            g.snake_passthrough_regular_nodes =
+                gm["snake_passthrough_regular_nodes"].value_or(
+                    g.snake_passthrough_regular_nodes);
             g.snake_post_record_grace_s =
                 gm["snake_post_record_grace_s"].value_or(g.snake_post_record_grace_s);
             g.snake_post_turn_blind_s =
@@ -513,6 +516,7 @@ void logState(const omission::GridMissionOutput& out,
               << " bm=" << bm_buf
               << " mkstable=" << mission.stableMarkerCandidateCount()
               << " regids=" << regids
+              << (out.reason.empty() ? "" : (" reason=" + out.reason))
               << (out.last_safety_event.empty() ? "" : (" safety=" + out.last_safety_event))
               << "\n";
 }

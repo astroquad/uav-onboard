@@ -66,6 +66,10 @@ snake_complete_hover_s = 2.0
 # longer dwell so branch classification can settle before turning.
 snake_record_dwell_s = 0.25
 snake_boundary_record_dwell_s = 0.5
+# If false, every non-marker node uses the dwell path again. If true, ordinary
+# middle-of-column nodes commit their coordinate and keep flying unless a
+# non-vertiport ArUco hint is visible/recent.
+snake_passthrough_regular_nodes = true
 # Cycle 10: after a NodeRecord, the boundary watchdog in SnakeForward is
 # disabled for this many seconds so the just-recorded node's residual
 # T/L branches don't immediately re-trigger as a boundary.

@@ -318,6 +318,27 @@ int main()
     assert(out.line_detected);
     assert(std::abs(out.line_center_error_norm) > 0.01);
 
+    auto pass_node_vis = makeVision();
+    auto pass_node_decision = makeIntersectionDecision(pass_node_vis, 0.0f, 0.55f);
+    pass_node_decision.event_ready = true;
+    pass_node_decision.node_recorded = true;
+    onboard::mission::GridNodeEvent pass_event;
+    pass_event.valid = true;
+    pass_event.local_coord = {0, -1};
+    pass_event.arrival_heading = onboard::mission::GridHeading::North;
+    pass_event.topology = onboard::vision::IntersectionType::L;
+    pass_event.camera_branch_mask = 0x03;
+    pass_event.grid_branch_mask = 0x03;
+    auto pass_node_in = makeInput(2.0, pass_node_vis, pass_node_decision);
+    pass_node_in.local_y_m = -0.2;
+    pass_node_in.node_event = pass_event;
+    out = mission.update(pass_node_in);
+    assert(out.state == onboard::mission::GridState::SnakeForward);
+    assert(out.intent == onboard::control::GridControlIntent::ForwardBlind);
+    assert(out.commit_tracker_advance);
+    assert(out.reason == "passthrough_node");
+    tracker.commitAdvance(pass_event);
+
     auto marker_node_vis = makeVision();
     addMarker(marker_node_vis, 1, 0.4f, 0.4f);
     auto marker_node_decision = makeStraightDecision(marker_node_vis);
@@ -325,13 +346,13 @@ int main()
     marker_node_decision.node_recorded = true;
     onboard::mission::GridNodeEvent node_event;
     node_event.valid = true;
-    node_event.local_coord = {0, -1};
+    node_event.local_coord = {0, -2};
     node_event.arrival_heading = onboard::mission::GridHeading::North;
     node_event.topology = onboard::vision::IntersectionType::Straight;
     node_event.camera_branch_mask = 0x05;
     node_event.grid_branch_mask = 0x05;
     auto marker_node_in = makeInput(4.0, marker_node_vis, marker_node_decision);
-    marker_node_in.local_y_m = -0.2;
+    marker_node_in.local_y_m = -0.4;
     marker_node_in.node_event = node_event;
     out = mission.update(marker_node_in);
     assert(out.state == onboard::mission::GridState::SnakeRecordNode);

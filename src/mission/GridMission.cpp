@@ -410,6 +410,48 @@ bool GridMission::markerHoverComplete(const GridMissionOutput& out, double now_s
     return (elapsed_s >= min_s && centered) || elapsed_s >= max_s;
 }
 
+bool GridMission::hasPendingGridMarkerHint(const GridMissionInput& in) const
+{
+    const int vertiport_id = effectiveVertiportMarkerId();
+    auto pending_grid_marker = [&](int id) {
+        if (id < 0 || id == vertiport_id) return false;
+        return !registry_ || !registry_->hasId(id);
+    };
+
+    if (in.vision) {
+        for (const auto& marker : in.vision->markers) {
+            if (pending_grid_marker(marker.id)) {
+                return true;
+            }
+        }
+    }
+    for (int id : marker_window_.ids) {
+        if (pending_grid_marker(id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool GridMission::shouldPassThroughRegularNode(const GridMissionInput& in) const
+{
+    if (!config_.snake_passthrough_regular_nodes) return false;
+    if (!in.node_event.valid) return false;
+    if (!isGridNodeType(in.node_event.topology) &&
+        !isGridNodeType(in.intersection_decision.accepted_type)) {
+        return false;
+    }
+    if (hasPendingGridMarkerHint(in)) return false;
+    if (in.intersection_decision.required_turn || in.intersection_decision.turn_candidate) {
+        return false;
+    }
+    if (!forwardBranchPresent(in.intersection_decision)) return false;
+    if (in.node_event.camera_branch_mask == 0 || in.node_event.grid_branch_mask == 0) {
+        return false;
+    }
+    return true;
+}
+
 double GridMission::intersectionCenterXNorm(const GridMissionInput& in) const
 {
     if (!in.vision || in.vision->width <= 0) return 0.0;
@@ -1008,6 +1050,13 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
             in.node_event.camera_branch_mask == 0) {
             transition(GridState::SnakeRecordNode, in.now_s, "record_boundary");
             last_node_record_s_ = in.now_s;
+            return;
+        }
+        if (shouldPassThroughRegularNode(in)) {
+            last_node_record_s_ = in.now_s;
+            armHopStart(in);
+            out.intent = control::GridControlIntent::ForwardBlind;
+            out.reason = "passthrough_node";
             return;
         }
         transition(GridState::SnakeRecordNode, in.now_s, "record_node");

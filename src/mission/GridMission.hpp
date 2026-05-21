@@ -154,6 +154,7 @@ struct GridMissionConfig {
     // stabilise. Boundary/turn candidate nodes keep a longer dwell below.
     double snake_record_dwell_s = 0.25;
     double snake_boundary_record_dwell_s = 0.5;
+    bool   snake_passthrough_regular_nodes = true;
 
     // Cycle 10: after a NodeRecord, ignore boundary watchdog for this many
     // seconds so the last node's branches don't immediately re-trigger.
@@ -341,6 +342,8 @@ private:
     void clearMarkerHover();
     bool updateMarkerHoverCenterGate(const GridMissionOutput& out);
     bool markerHoverComplete(const GridMissionOutput& out, double now_s);
+    bool hasPendingGridMarkerHint(const GridMissionInput& in) const;
+    bool shouldPassThroughRegularNode(const GridMissionInput& in) const;
     bool isEntryIntersectionCandidate(const GridMissionInput& in) const;
     bool isIntersectionCenteredForEntry(const GridMissionInput& in) const;
     double intersectionCenterXNorm(const GridMissionInput& in) const;
