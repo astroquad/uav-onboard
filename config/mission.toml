@@ -54,7 +54,7 @@ snake_stop_velocity_threshold_mps = 0.05
 # Cycle 13: bumped 8.0 -> 15.0 to accommodate post-turn blind + hop traversal.
 snake_advance_timeout_s = 15.0
 # Main snake forward speed while yaw is locked and lateral line-centering is active.
-forward_speed_blind_mps = 0.50
+forward_speed_blind_mps = 0.60
 # Cycle 13: was hard-coded 0.18 in GridControlMapperConfig; raised to 0.30.
 forward_speed_advance_mps = 0.30
 max_intersections = 50
