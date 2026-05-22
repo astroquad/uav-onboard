@@ -74,6 +74,15 @@ const char* gridStateName(GridState state)
     case GridState::RevisitTurn90:        return "REVISIT_TURN_90";
     case GridState::RevisitMarkerHover:   return "REVISIT_MARKER_HOVER";
     case GridState::RevisitComplete:      return "REVISIT_COMPLETE";
+    case GridState::ReturnHomeInit:       return "RETURN_HOME_INIT";
+    case GridState::ReturnHomeForward:    return "RETURN_HOME_FORWARD";
+    case GridState::ReturnHomeStopAtTurn: return "RETURN_HOME_STOP_AT_TURN";
+    case GridState::ReturnHomeTurn90:     return "RETURN_HOME_TURN_90";
+    case GridState::ReturnHomeAlignOrigin:return "RETURN_HOME_ALIGN_ORIGIN";
+    case GridState::ReturnHomeFaceSouth:  return "RETURN_HOME_FACE_SOUTH";
+    case GridState::ReturnVertiportForward:return "RETURN_VERTIPORT_FORWARD";
+    case GridState::ReturnVertiportMarkerHover:return "RETURN_VERTIPORT_MARKER_HOVER";
+    case GridState::MissionComplete:      return "MISSION_COMPLETE";
     case GridState::Land:                 return "LAND";
     case GridState::EmergencyLand:        return "EMERGENCY_LAND";
     case GridState::Done:                 return "DONE";
@@ -140,6 +149,7 @@ void GridMission::reset()
     last_recorded_marker_id_ = -1;
     completion_hover_marker_id_ = -1;
     resetRevisitPlan();
+    resetReturnHomePlan();
     grid_map_finalized_ = false;
     if (registry_) registry_->reset();
     if (tracker_) tracker_->resetLocalOrigin();
@@ -313,7 +323,8 @@ void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutp
     const bool snake_state =
         (state_ == GridState::SnakeForward ||
          state_ == GridState::SnakeAdvanceOneCell ||
-         state_ == GridState::RevisitForward);
+         state_ == GridState::RevisitForward ||
+         state_ == GridState::ReturnHomeForward);
 
     if (launch_state) {
         if (!forwardBranchPresent(in.intersection_decision) && !last_node_front_open_) {
@@ -580,6 +591,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     // Universal failsafe (skip for Idle/Done)
     if (state_ != GridState::Idle &&
         state_ != GridState::Done &&
+        state_ != GridState::MissionComplete &&
         state_ != GridState::EmergencyLand) {
         std::string fs_reason;
         if (isHardFailsafe(input, fs_reason)) {
@@ -650,6 +662,15 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     case GridState::RevisitTurn90:        handleRevisitTurn90(input, out); break;
     case GridState::RevisitMarkerHover:   handleRevisitMarkerHover(input, out); break;
     case GridState::RevisitComplete:      handleRevisitComplete(input, out); break;
+    case GridState::ReturnHomeInit:       handleReturnHomeInit(input, out); break;
+    case GridState::ReturnHomeForward:    handleReturnHomeForward(input, out); break;
+    case GridState::ReturnHomeStopAtTurn: handleReturnHomeStopAtTurn(input, out); break;
+    case GridState::ReturnHomeTurn90:     handleReturnHomeTurn90(input, out); break;
+    case GridState::ReturnHomeAlignOrigin:handleReturnHomeAlignOrigin(input, out); break;
+    case GridState::ReturnHomeFaceSouth:  handleReturnHomeFaceSouth(input, out); break;
+    case GridState::ReturnVertiportForward:handleReturnVertiportForward(input, out); break;
+    case GridState::ReturnVertiportMarkerHover:handleReturnVertiportMarkerHover(input, out); break;
+    case GridState::MissionComplete:      handleMissionComplete(input, out); break;
     case GridState::Land:                 handleLand(input, out); break;
     case GridState::EmergencyLand:        handleEmergencyLand(input, out); break;
     case GridState::Done:
@@ -682,7 +703,8 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     // The displacement is projected onto the current grid heading because the
     // drone only moves forward in the grid frame (lateral motion is corrective
     // and bounded by the line controller).
-    if (last_node_local_x_.has_value() && last_node_local_y_.has_value() &&
+    if (grid_pose_visible_ &&
+        last_node_local_x_.has_value() && last_node_local_y_.has_value() &&
         input.local_x_m.has_value() && input.local_y_m.has_value() && tracker_) {
         const double dx = *input.local_x_m - *last_node_local_x_;
         const double dy = *input.local_y_m - *last_node_local_y_;
@@ -749,10 +771,57 @@ bool GridMission::isRevisitState() const
     }
 }
 
+bool GridMission::isReturnState() const
+{
+    switch (state_) {
+    case GridState::ReturnHomeInit:
+    case GridState::ReturnHomeForward:
+    case GridState::ReturnHomeStopAtTurn:
+    case GridState::ReturnHomeTurn90:
+    case GridState::ReturnHomeAlignOrigin:
+    case GridState::ReturnHomeFaceSouth:
+    case GridState::ReturnVertiportForward:
+    case GridState::ReturnVertiportMarkerHover:
+        return true;
+    default:
+        return false;
+    }
+}
+
+const char* GridMission::returnPhase() const
+{
+    switch (state_) {
+    case GridState::ReturnHomeInit:
+    case GridState::ReturnHomeForward:
+    case GridState::ReturnHomeStopAtTurn:
+    case GridState::ReturnHomeTurn90:
+        return "grid_home";
+    case GridState::ReturnHomeAlignOrigin:
+        return "origin_align";
+    case GridState::ReturnHomeFaceSouth:
+        return "face_south";
+    case GridState::ReturnVertiportForward:
+        return "vertiport_forward";
+    case GridState::ReturnVertiportMarkerHover:
+        return "vertiport_hover";
+    default:
+        return "none";
+    }
+}
+
 void GridMission::populateRevisitTelemetry(GridMissionOutput& out) const
 {
     out.revisit_active = isRevisitState();
+    out.return_active = isReturnState();
+    out.return_phase = returnPhase();
     out.grid_map_finalized = grid_map_finalized_;
+    out.grid_pose_visible = grid_pose_visible_;
+    out.vertiport_return_active =
+        state_ == GridState::ReturnVertiportForward ||
+        state_ == GridState::ReturnVertiportMarkerHover;
+    out.vertiport_acquired = vertiport_acquired_;
+    out.landing_success = landing_success_;
+    out.mission_complete = mission_complete_;
     out.revisit_order = revisitOrderName(config_.revisit_order);
     out.revisit_target_id = revisit_current_marker_id_;
     int remaining = 0;
@@ -760,6 +829,22 @@ void GridMission::populateRevisitTelemetry(GridMissionOutput& out) const
         remaining = static_cast<int>(revisit_legs_.size() - revisit_leg_index_);
     }
     out.revisit_remaining = remaining;
+}
+
+void GridMission::resetReturnHomePlan()
+{
+    return_home_leg_ = {};
+    return_segment_index_ = 0;
+    return_cells_remaining_in_segment_ = 0;
+    return_current_coord_ = {};
+    return_current_heading_ = GridHeading::Unknown;
+    return_desired_heading_ = GridHeading::Unknown;
+    return_turn_step_heading_ = GridHeading::Unknown;
+    return_home_route_ready_ = false;
+    grid_pose_visible_ = true;
+    vertiport_acquired_ = false;
+    landing_success_ = false;
+    mission_complete_ = false;
 }
 
 void GridMission::resetRevisitPlan()
@@ -945,6 +1030,128 @@ bool GridMission::finishRevisitSegmentOrLeg(const GridMissionInput& in,
     }
     armHopStart(in);
     transition(GridState::RevisitForward, in.now_s, "revisit_continue");
+    return true;
+}
+
+bool GridMission::buildReturnHomePlan()
+{
+    if (!tracker_) {
+        return false;
+    }
+    return_current_coord_ = tracker_->currentCoord();
+    return_current_heading_ = tracker_->currentHeading();
+    if (return_current_heading_ == GridHeading::Unknown) {
+        return_current_heading_ = revisit_current_heading_ != GridHeading::Unknown
+            ? revisit_current_heading_
+            : GridHeading::North;
+    }
+    if (revisit_yaw_reference_heading_ == GridHeading::Unknown) {
+        revisit_yaw_reference_heading_ = return_current_heading_;
+        revisit_yaw_reference_rad_ = yaw_align_target_rad_;
+    }
+
+    return_home_leg_ = revisit_planner_.buildLeg(
+        return_current_coord_, return_current_heading_, GridCoord{0, 0}, -1);
+    return_segment_index_ = 0;
+    return_cells_remaining_in_segment_ = 0;
+    return_desired_heading_ = GridHeading::Unknown;
+    return_turn_step_heading_ = GridHeading::Unknown;
+    return_home_route_ready_ = true;
+    grid_pose_visible_ = true;
+    return true;
+}
+
+GridHeading GridMission::currentReturnSegmentHeading() const
+{
+    if (return_segment_index_ >= return_home_leg_.segments.size()) {
+        return GridHeading::Unknown;
+    }
+    return return_home_leg_.segments[return_segment_index_].heading;
+}
+
+bool GridMission::startCurrentReturnLeg(const GridMissionInput& in,
+                                        GridMissionOutput& out)
+{
+    (void)out;
+    if (!return_home_route_ready_ && !buildReturnHomePlan()) {
+        last_safety_event_ = "return_home_plan_failed";
+        transition(GridState::EmergencyLand, in.now_s, "return_home_plan_failed");
+        return false;
+    }
+
+    if (return_home_leg_.segments.empty()) {
+        entry_center_stable_count_ = 0;
+        transition(GridState::ReturnHomeAlignOrigin, in.now_s, "return_at_origin");
+        return true;
+    }
+
+    if (return_segment_index_ >= return_home_leg_.segments.size()) {
+        return_segment_index_ = 0;
+    }
+    return_cells_remaining_in_segment_ =
+        return_home_leg_.segments[return_segment_index_].cells;
+    return_desired_heading_ =
+        return_home_leg_.segments[return_segment_index_].heading;
+    if (return_current_heading_ != return_desired_heading_) {
+        snake_stop_stable_count_ = 0;
+        snake_stop_settle_entry_s_ = -1.0;
+        transition(GridState::ReturnHomeStopAtTurn, in.now_s, "return_turn_needed");
+        return true;
+    }
+
+    armHopStart(in);
+    transition(GridState::ReturnHomeForward, in.now_s, "return_forward");
+    return true;
+}
+
+bool GridMission::advanceReturnNode(const GridMissionInput& in)
+{
+    const GridHeading heading = currentReturnSegmentHeading();
+    if (!tracker_ || heading == GridHeading::Unknown ||
+        return_cells_remaining_in_segment_ <= 0) {
+        return false;
+    }
+    return_current_coord_ = tracker_->advance(return_current_coord_, heading);
+    return_current_heading_ = heading;
+    tracker_->setCurrentPose(return_current_coord_, return_current_heading_);
+    --return_cells_remaining_in_segment_;
+    last_node_record_s_ = in.now_s;
+    if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
+        last_node_local_x_ = *in.local_x_m;
+        last_node_local_y_ = *in.local_y_m;
+    }
+    return true;
+}
+
+bool GridMission::finishReturnSegmentOrLeg(const GridMissionInput& in,
+                                           GridMissionOutput& out)
+{
+    (void)out;
+    if (return_cells_remaining_in_segment_ > 0) {
+        armHopStart(in);
+        transition(GridState::ReturnHomeForward, in.now_s, "return_continue");
+        return true;
+    }
+
+    ++return_segment_index_;
+    if (return_segment_index_ >= return_home_leg_.segments.size()) {
+        entry_center_stable_count_ = 0;
+        transition(GridState::ReturnHomeAlignOrigin, in.now_s, "return_origin_reached");
+        return true;
+    }
+
+    return_cells_remaining_in_segment_ =
+        return_home_leg_.segments[return_segment_index_].cells;
+    return_desired_heading_ =
+        return_home_leg_.segments[return_segment_index_].heading;
+    if (return_current_heading_ != return_desired_heading_) {
+        snake_stop_stable_count_ = 0;
+        snake_stop_settle_entry_s_ = -1.0;
+        transition(GridState::ReturnHomeStopAtTurn, in.now_s, "return_turn_needed");
+        return true;
+    }
+    armHopStart(in);
+    transition(GridState::ReturnHomeForward, in.now_s, "return_continue");
     return true;
 }
 
@@ -1764,12 +1971,7 @@ void GridMission::handleSnakeComplete(const GridMissionInput& in, GridMissionOut
     }
 
     if (in.now_s - state_entry_s_ > config_.snake_complete_hover_s) {
-        if (config_.revisit_order != RevisitOrder::None &&
-            registry_ && registry_->gridMarkerCount() > 0) {
-            transition(GridState::RevisitInit, in.now_s, "snake_done_revisit");
-        } else {
-            transition(GridState::Land, in.now_s, "snake_done");
-        }
+        transition(GridState::RevisitInit, in.now_s, "snake_done_revisit");
     }
 }
 
@@ -1947,7 +2149,312 @@ void GridMission::handleRevisitComplete(const GridMissionInput& in,
     out.target_altitude_m = config_.cruise_altitude_m;
     out.target_yaw_rad = yawForHeading(
         tracker_ ? tracker_->currentHeading() : revisit_current_heading_);
-    transition(GridState::Land, in.now_s, "revisit_done");
+    transition(GridState::ReturnHomeInit, in.now_s, "revisit_done");
+}
+
+void GridMission::handleReturnHomeInit(const GridMissionInput& in,
+                                       GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::HoldPosition;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(
+        tracker_ ? tracker_->currentHeading() : return_current_heading_);
+    out.advance_phase = false;
+    grid_map_finalized_ = true;
+    grid_pose_visible_ = true;
+
+    if (!return_home_route_ready_ && !buildReturnHomePlan()) {
+        last_safety_event_ = "return_home_plan_failed";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "return_home_plan_failed");
+        return;
+    }
+    startCurrentReturnLeg(in, out);
+}
+
+void GridMission::handleReturnHomeForward(const GridMissionInput& in,
+                                          GridMissionOutput& out)
+{
+    if (!hop_start_local_x_.has_value()) {
+        armHopStart(in);
+    }
+    out.intent = control::GridControlIntent::ForwardBlind;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(currentReturnSegmentHeading());
+    out.advance_phase = false;
+
+    const double distance = hopDistance(in);
+    const bool post_turn_blind = in.now_s < snake_post_turn_blind_until_s_;
+    if (!post_turn_blind &&
+        distance >= config_.hop_intersection_min_distance_m &&
+        nodeJustRecorded(in.intersection_decision)) {
+        advanceReturnNode(in);
+        out.reason = "return_node";
+        finishReturnSegmentOrLeg(in, out);
+        return;
+    }
+
+    if (distance > config_.hop_max_distance_m ||
+        in.now_s - state_entry_s_ > config_.snake_advance_timeout_s) {
+        last_safety_event_ = "return_hop_timeout";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "return_hop_timeout");
+    }
+}
+
+void GridMission::handleReturnHomeStopAtTurn(const GridMissionInput& in,
+                                             GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::StopAndCenter;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(return_current_heading_);
+
+    const double vmag = in.local_velocity_xy_mps.value_or(1.0);
+    if (vmag <= config_.snake_stop_velocity_threshold_mps) {
+        ++snake_stop_stable_count_;
+    } else {
+        snake_stop_stable_count_ = 0;
+    }
+    if (snake_stop_stable_count_ < config_.snake_stop_velocity_consecutive_frames) {
+        return;
+    }
+    if (snake_stop_settle_entry_s_ < 0.0) {
+        snake_stop_settle_entry_s_ = in.now_s;
+    }
+    if (in.now_s - snake_stop_settle_entry_s_ < config_.snake_boundary_settle_s) {
+        return;
+    }
+
+    snake_stop_settle_entry_s_ = -1.0;
+    return_desired_heading_ = currentReturnSegmentHeading();
+    if (return_desired_heading_ == GridHeading::Unknown ||
+        return_current_heading_ == return_desired_heading_) {
+        armHopStart(in);
+        transition(GridState::ReturnHomeForward, in.now_s, "return_no_turn");
+        return;
+    }
+    return_turn_step_heading_ =
+        nextTurnStepHeading(return_current_heading_, return_desired_heading_);
+    yaw_target_rad_ = yawForHeading(return_turn_step_heading_);
+    snake_yaw_stable_count_ = 0;
+    transition(GridState::ReturnHomeTurn90, in.now_s, "return_stopped");
+}
+
+void GridMission::handleReturnHomeTurn90(const GridMissionInput& in,
+                                         GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::YawTurn;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yaw_target_rad_;
+    if (!in.attitude_yaw_rad.has_value()) {
+        return;
+    }
+
+    const double err = std::abs(wrap(yaw_target_rad_ - *in.attitude_yaw_rad));
+    if (err <= config_.snake_yaw_target_tolerance_rad) {
+        ++snake_yaw_stable_count_;
+    } else {
+        snake_yaw_stable_count_ = 0;
+    }
+    if (snake_yaw_stable_count_ < config_.snake_yaw_stable_frames) {
+        return;
+    }
+
+    return_current_heading_ = return_turn_step_heading_;
+    if (tracker_) {
+        tracker_->setCurrentPose(return_current_coord_, return_current_heading_);
+    }
+    last_turn_complete_s_ = in.now_s;
+    snake_yaw_stable_count_ = 0;
+
+    if (return_current_heading_ != return_desired_heading_) {
+        return_turn_step_heading_ =
+            nextTurnStepHeading(return_current_heading_, return_desired_heading_);
+        yaw_target_rad_ = yawForHeading(return_turn_step_heading_);
+        transition(GridState::ReturnHomeTurn90, in.now_s, "return_turn_step");
+        return;
+    }
+
+    snake_post_turn_blind_until_s_ = in.now_s + config_.snake_post_turn_blind_s;
+    armHopStart(in);
+    transition(GridState::ReturnHomeForward, in.now_s, "return_turn_done");
+}
+
+void GridMission::handleReturnHomeAlignOrigin(const GridMissionInput& in,
+                                              GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::IntersectionCenter;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(return_current_heading_);
+    out.advance_phase = false;
+
+    const bool centered = isIntersectionCenteredForEntry(in);
+    const bool velocity_ok =
+        !in.local_velocity_xy_mps.has_value() ||
+        *in.local_velocity_xy_mps <= config_.entry_center_velocity_threshold_mps;
+    if (centered && velocity_ok) {
+        ++entry_center_stable_count_;
+    } else {
+        entry_center_stable_count_ = 0;
+    }
+
+    if (entry_center_stable_count_ >= config_.entry_center_stable_frames) {
+        return_current_coord_ = GridCoord{0, 0};
+        if (tracker_) {
+            tracker_->setCurrentPose(return_current_coord_, return_current_heading_);
+        }
+        return_turn_step_heading_ = GridHeading::Unknown;
+        snake_yaw_stable_count_ = 0;
+        transition(GridState::ReturnHomeFaceSouth, in.now_s, "return_origin_centered");
+        return;
+    }
+
+    if (in.now_s - state_entry_s_ > config_.entry_center_timeout_s) {
+        last_safety_event_ = "return_origin_center_timeout";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "return_origin_center_timeout");
+    }
+}
+
+void GridMission::handleReturnHomeFaceSouth(const GridMissionInput& in,
+                                            GridMissionOutput& out)
+{
+    const GridHeading target_heading = GridHeading::South;
+    out.intent = control::GridControlIntent::YawTurn;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(target_heading);
+    out.advance_phase = false;
+
+    auto leaveGrid = [&]() {
+        return_current_coord_ = GridCoord{0, 0};
+        return_current_heading_ = target_heading;
+        if (tracker_) {
+            tracker_->setCurrentPose(return_current_coord_, return_current_heading_);
+        }
+        grid_pose_visible_ = false;
+        vertiport_acquired_ = false;
+        clearMarkerHover();
+        armHopStart(in);
+        transition(GridState::ReturnVertiportForward, in.now_s, "return_face_south_done");
+    };
+
+    if (return_current_heading_ == GridHeading::Unknown ||
+        return_current_heading_ == target_heading) {
+        leaveGrid();
+        return;
+    }
+
+    if (return_turn_step_heading_ == GridHeading::Unknown ||
+        return_turn_step_heading_ == return_current_heading_) {
+        return_turn_step_heading_ =
+            nextTurnStepHeading(return_current_heading_, target_heading);
+        yaw_target_rad_ = yawForHeading(return_turn_step_heading_);
+        snake_yaw_stable_count_ = 0;
+    }
+    out.target_yaw_rad = yaw_target_rad_;
+
+    if (!in.attitude_yaw_rad.has_value()) {
+        return;
+    }
+    const double err = std::abs(wrap(yaw_target_rad_ - *in.attitude_yaw_rad));
+    if (err <= config_.snake_yaw_target_tolerance_rad) {
+        ++snake_yaw_stable_count_;
+    } else {
+        snake_yaw_stable_count_ = 0;
+    }
+    if (snake_yaw_stable_count_ < config_.snake_yaw_stable_frames) {
+        return;
+    }
+
+    return_current_heading_ = return_turn_step_heading_;
+    if (tracker_) {
+        tracker_->setCurrentPose(return_current_coord_, return_current_heading_);
+    }
+    snake_yaw_stable_count_ = 0;
+    if (return_current_heading_ == target_heading) {
+        leaveGrid();
+        return;
+    }
+
+    return_turn_step_heading_ =
+        nextTurnStepHeading(return_current_heading_, target_heading);
+    yaw_target_rad_ = yawForHeading(return_turn_step_heading_);
+    transition(GridState::ReturnHomeFaceSouth, in.now_s, "return_face_south_step");
+}
+
+void GridMission::handleReturnVertiportForward(const GridMissionInput& in,
+                                               GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::ForwardBlind;
+    out.forward_speed_override_mps = config_.entry_forward_speed_mps;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(GridHeading::South);
+    out.vertiport_verified = active_vertiport_marker_id_ >= 0;
+    out.line_detected = false;
+    out.line_center_error_norm = 0.0;
+    out.line_angle_error_rad = 0.0;
+    out.line_confidence = 0.0;
+    out.advance_phase = false;
+
+    const int vertiport_id = active_vertiport_marker_id_;
+    if (vertiport_id < 0) {
+        last_safety_event_ = "return_vertiport_id_missing";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "return_vertiport_id_missing");
+        return;
+    }
+
+    if (findMarker(in.vision, vertiport_id).has_value()) {
+        vertiport_acquired_ = true;
+        clearMarkerHover();
+        beginMarkerHover(vertiport_id, in.now_s);
+        transition(GridState::ReturnVertiportMarkerHover,
+                   in.now_s,
+                   "return_vertiport_seen");
+        return;
+    }
+
+    if (in.now_s - state_entry_s_ > config_.entry_forward_timeout_s) {
+        last_safety_event_ = "return_vertiport_timeout";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "return_vertiport_timeout");
+    }
+}
+
+void GridMission::handleReturnVertiportMarkerHover(const GridMissionInput& in,
+                                                   GridMissionOutput& out)
+{
+    const int vertiport_id = active_vertiport_marker_id_;
+    out.intent = control::GridControlIntent::MarkerHover;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(GridHeading::South);
+    out.vertiport_verified = vertiport_id >= 0;
+    out.advance_phase = false;
+
+    if (vertiport_id < 0) {
+        last_safety_event_ = "return_vertiport_id_missing";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "return_vertiport_id_missing");
+        return;
+    }
+
+    beginMarkerHover(vertiport_id, in.now_s);
+    populateMarkerInputs(in, vertiport_id, out);
+    if (out.marker_detected) {
+        vertiport_acquired_ = true;
+    }
+
+    if (out.marker_detected && markerHoverComplete(out, in.now_s)) {
+        clearMarkerHover();
+        transition(GridState::Land, in.now_s, "return_vertiport_done");
+        return;
+    }
+
+    if (in.now_s - state_entry_s_ > config_.entry_forward_timeout_s) {
+        last_safety_event_ = "return_vertiport_hover_timeout";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "return_vertiport_hover_timeout");
+    }
 }
 
 void GridMission::synthesizeRemainingColumnNodes()
@@ -2018,8 +2525,10 @@ void GridMission::handleLand(const GridMissionInput& in, GridMissionOutput& out)
     out.intent = control::GridControlIntent::Land;
     out.request_land_mode = true;
     if (!in.armed) {
+        landing_success_ = true;
+        mission_complete_ = true;
         out.mission_finished = true;
-        transition(GridState::Done, in.now_s, "disarmed");
+        transition(GridState::MissionComplete, in.now_s, "disarmed");
     }
 }
 
@@ -2030,6 +2539,18 @@ void GridMission::handleEmergencyLand(const GridMissionInput& in, GridMissionOut
     out.mission_aborted = true;
     if (!in.armed) {
         transition(GridState::Done, in.now_s, "disarmed");
+    }
+}
+
+void GridMission::handleMissionComplete(const GridMissionInput& in,
+                                        GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::Idle;
+    out.mission_finished = true;
+    landing_success_ = true;
+    mission_complete_ = true;
+    if (in.now_s - state_entry_s_ > 0.5) {
+        transition(GridState::Done, in.now_s, "mission_complete_published");
     }
 }
 

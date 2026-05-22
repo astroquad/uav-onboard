@@ -199,7 +199,14 @@ struct MissionTelemetry {
     int markers_expected = 0;
     bool snake_complete = false;
     bool revisit_active = false;
+    bool return_active = false;
+    std::string return_phase = "none";
     bool grid_map_finalized = false;
+    bool grid_pose_visible = true;
+    bool vertiport_return_active = false;
+    bool vertiport_acquired = false;
+    bool landing_success = false;
+    bool mission_complete = false;
     std::string revisit_order = "none";
     int revisit_target_id = -1;
     int revisit_remaining = 0;

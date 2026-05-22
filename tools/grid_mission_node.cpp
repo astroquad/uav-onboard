@@ -111,7 +111,7 @@ void printUsage()
         << "  --vertiport-marker-id <id>   Override vertiport ArUco ID (default: 23)\n"
         << "  --max-intersections <n>      Safety cap on recorded nodes\n"
         << "  --snake-initial-turn <auto|left|right>\n"
-        << "  --revisit-order <asc|desc|none>\n"
+        << "  --revisit-order <asc|desc>     Marker revisit order (default: desc)\n"
         << "  --video                      Enable GCS MJPEG streaming\n"
         << "  --no-video                   Disable GCS MJPEG streaming\n"
         << "  --no-telemetry               Disable GCS telemetry sending\n"
@@ -324,7 +324,7 @@ void loadConfigs(const Options& opt, Configs& cfg)
                     g.revisit_order = *parsed;
                 } else {
                     std::cerr << "[config] invalid revisit_order: "
-                              << *revisit_order << "\n";
+                              << *revisit_order << " (expected asc or desc)\n";
                 }
             }
             g.snake_post_record_grace_s =
@@ -391,7 +391,7 @@ void loadConfigs(const Options& opt, Configs& cfg)
     if (!opt.revisit_order.empty()) {
         const auto parsed = omission::parseRevisitOrder(opt.revisit_order);
         if (!parsed.has_value()) {
-            std::cerr << "error: --revisit-order must be asc, desc, or none\n";
+            std::cerr << "error: --revisit-order must be asc or desc\n";
             std::exit(2);
         }
         cfg.mission.revisit_order = *parsed;
@@ -695,7 +695,8 @@ int main(int argc, char** argv)
             cur_state == omission::GridState::SnakeTurn90 ||
             cur_state == omission::GridState::SnakeAdvanceOneCell ||
             cur_state == omission::GridState::SnakeTurn90Again ||
-            cur_state == omission::GridState::RevisitForward;
+            cur_state == omission::GridState::RevisitForward ||
+            cur_state == omission::GridState::ReturnHomeForward;
         omission::GridNodeEvent node_event;
         if (tracker_enabled) {
             node_event = tracker.update(idec, frame.frame_id, frame.timestamp_ms);
@@ -812,7 +813,8 @@ int main(int argc, char** argv)
                 : last_committed_event;
             // Cycle 13: forward drone fractional position so the GCS can
             // render the heading arrow at a sub-cell position between commits.
-            pin.drone_position_valid = mout.drone_position_valid;
+            pin.drone_position_valid =
+                mout.grid_pose_visible && mout.drone_position_valid;
             pin.drone_cell_progress = mout.drone_cell_progress;
             pin.drone_grid_offset_x = mout.drone_grid_offset_x;
             pin.drone_grid_offset_y = mout.drone_grid_offset_y;
@@ -829,7 +831,9 @@ int main(int argc, char** argv)
             pin.mission.grid.y = mout.current_coord.y;
             pin.mission.grid.heading = omission::gridHeadingName(mout.current_heading);
             pin.mission.grid.snake_dir = omission::snakeTurnDirName(mout.snake_dir);
-            pin.mission.grid.valid = mout.current_heading != omission::GridHeading::Unknown;
+            pin.mission.grid.valid =
+                mout.grid_pose_visible &&
+                mout.current_heading != omission::GridHeading::Unknown;
             pin.mission.vertiport.verified = mout.vertiport_verified;
             // Cycle 24: report the marker id MarkerLockYaw actually latched
             // (which may differ from cfg default if the dynamic-id path
@@ -844,10 +848,26 @@ int main(int argc, char** argv)
                 mout.state == omission::GridState::RevisitTurn90 ||
                 mout.state == omission::GridState::RevisitMarkerHover ||
                 mout.state == omission::GridState::RevisitComplete ||
+                mout.state == omission::GridState::ReturnHomeInit ||
+                mout.state == omission::GridState::ReturnHomeForward ||
+                mout.state == omission::GridState::ReturnHomeStopAtTurn ||
+                mout.state == omission::GridState::ReturnHomeTurn90 ||
+                mout.state == omission::GridState::ReturnHomeAlignOrigin ||
+                mout.state == omission::GridState::ReturnHomeFaceSouth ||
+                mout.state == omission::GridState::ReturnVertiportForward ||
+                mout.state == omission::GridState::ReturnVertiportMarkerHover ||
+                mout.state == omission::GridState::MissionComplete ||
                 mout.state == omission::GridState::Land ||
                 mout.state == omission::GridState::Done;
             pin.mission.revisit_active = mout.revisit_active;
+            pin.mission.return_active = mout.return_active;
+            pin.mission.return_phase = mout.return_phase;
             pin.mission.grid_map_finalized = mout.grid_map_finalized;
+            pin.mission.grid_pose_visible = mout.grid_pose_visible;
+            pin.mission.vertiport_return_active = mout.vertiport_return_active;
+            pin.mission.vertiport_acquired = mout.vertiport_acquired;
+            pin.mission.landing_success = mout.landing_success;
+            pin.mission.mission_complete = mout.mission_complete;
             pin.mission.revisit_order = mout.revisit_order;
             pin.mission.revisit_target_id = mout.revisit_target_id;
             pin.mission.revisit_remaining = mout.revisit_remaining;

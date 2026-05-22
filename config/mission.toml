@@ -73,8 +73,8 @@ snake_boundary_record_dwell_s = 0.5
 # non-vertiport ArUco hint is visible/recent.
 snake_passthrough_regular_nodes = true
 # Marker revisit after snake completion. Override per run with
-# --revisit-order asc|desc|none.
-revisit_order = "none"
+# --revisit-order asc|desc. Omit the CLI flag for descending order.
+revisit_order = "desc"
 revisit_passthrough_regular_nodes = true
 # Cycle 10: after a NodeRecord, the boundary watchdog in SnakeForward is
 # disabled for this many seconds so the just-recorded node's residual

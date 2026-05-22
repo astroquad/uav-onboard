@@ -32,6 +32,11 @@ struct RevisitLeg {
 
 class MarkerRevisitPlanner {
 public:
+    RevisitLeg buildLeg(GridCoord start_coord,
+                        GridHeading start_heading,
+                        GridCoord target,
+                        int marker_id = -1) const;
+
     std::vector<RevisitLeg> buildPlan(GridCoord start_coord,
                                       GridHeading start_heading,
                                       std::vector<MarkerRevisitTarget> targets,

@@ -177,8 +177,17 @@ cd ~/astroquad/uav-onboard
   --world grid \
   --line-mode dark_on_light \
   --marker-count 4 \
-  --revisit-order desc\
+  --revisit-order desc \
   --video \
+  --gcs-ip "$WINDOWS_GCS_IP"
+```
+
+Descending marker revisit order is the default, so `--revisit-order desc` can
+be omitted. Use this only when you want ascending order:
+
+```bash
+./build/grid_mission_node --config config --target sitl --vision gazebo --world grid \
+  --line-mode dark_on_light --marker-count 4 --revisit-order asc --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
 
@@ -201,8 +210,11 @@ IDLE
   -> SNAKE_ADVANCE_ONE_CELL
   -> SNAKE_TURN_90_AGAIN
   -> SNAKE_COMPLETE
-  -> REVISIT_INIT / REVISIT_FORWARD / REVISIT_MARKER_HOVER (optional)
+  -> REVISIT_INIT / REVISIT_FORWARD / REVISIT_MARKER_HOVER
+  -> RETURN_HOME_INIT / RETURN_HOME_FORWARD / RETURN_HOME_ALIGN_ORIGIN
+  -> RETURN_VERTIPORT_FORWARD / RETURN_VERTIPORT_MARKER_HOVER
   -> LAND
+  -> MISSION_COMPLETE
   -> DONE
 ```
 
@@ -219,9 +231,8 @@ Current snake strategy:
   intersection before publishing local `(0,0)`.
 - Between nodes, use LOCAL_NED distance from the last committed node as the
   hop reference.
-- Run line following only in a short mid-cell align window
-  (`hop_align_start_m` to `hop_align_end_m`); otherwise fly forward with yaw
-  locked.
+- Fly forward with yaw locked while borrowing only lateral line-centering when
+  a confident straight corridor is visible.
 - At nodes, dwell briefly so branch evidence settles. Marker IDs are committed
   only after the sliding marker window sees the same non-vertiport ID often
   enough without mixed IDs.
@@ -229,10 +240,11 @@ Current snake strategy:
   alternates left/right strictly. If the expected alternation branch is absent,
   the snake mission completes and lands rather than backtracking.
 
-The current grid mission can revisit found grid markers after snake completion
-with `--revisit-order asc` or `--revisit-order desc`. Use `--revisit-order none`
-to keep the older behaviour and land after the snake completes. Official
-coordinate conversion and return-to-start are still future work.
+The current grid mission always revisits found grid markers after snake
+completion. Omit `--revisit-order` for descending order, or pass
+`--revisit-order asc` for ascending order. After revisit it returns to `(0,0)`,
+faces grid south, flies back toward the latched vertiport marker, centers on
+that marker, lands, and publishes mission completion telemetry.
 
 ## Pixhawk1 Bench And Line-Follow
 

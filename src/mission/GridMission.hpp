@@ -51,6 +51,15 @@ enum class GridState {
     RevisitTurn90,
     RevisitMarkerHover,
     RevisitComplete,
+    ReturnHomeInit,
+    ReturnHomeForward,
+    ReturnHomeStopAtTurn,
+    ReturnHomeTurn90,
+    ReturnHomeAlignOrigin,
+    ReturnHomeFaceSouth,
+    ReturnVertiportForward,
+    ReturnVertiportMarkerHover,
+    MissionComplete,
     Land,
     EmergencyLand,
     Done,
@@ -163,7 +172,7 @@ struct GridMissionConfig {
     double snake_boundary_record_dwell_s = 0.5;
     bool   snake_passthrough_regular_nodes = true;
     bool   revisit_passthrough_regular_nodes = true;
-    RevisitOrder revisit_order = RevisitOrder::None;
+    RevisitOrder revisit_order = RevisitOrder::Desc;
 
     // Cycle 10: after a NodeRecord, ignore boundary watchdog for this many
     // seconds so the last node's branches don't immediately re-trigger.
@@ -287,7 +296,14 @@ struct GridMissionOutput {
     bool vertiport_verified = false;
     int  intersections_recorded = 0;
     bool revisit_active = false;
+    bool return_active = false;
+    std::string return_phase = "none";
     bool grid_map_finalized = false;
+    bool grid_pose_visible = true;
+    bool vertiport_return_active = false;
+    bool vertiport_acquired = false;
+    bool landing_success = false;
+    bool mission_complete = false;
     std::string revisit_order = "none";
     int revisit_target_id = -1;
     int revisit_remaining = 0;
@@ -345,8 +361,17 @@ private:
     void handleRevisitTurn90(const GridMissionInput& in, GridMissionOutput& out);
     void handleRevisitMarkerHover(const GridMissionInput& in, GridMissionOutput& out);
     void handleRevisitComplete(const GridMissionInput& in, GridMissionOutput& out);
+    void handleReturnHomeInit(const GridMissionInput& in, GridMissionOutput& out);
+    void handleReturnHomeForward(const GridMissionInput& in, GridMissionOutput& out);
+    void handleReturnHomeStopAtTurn(const GridMissionInput& in, GridMissionOutput& out);
+    void handleReturnHomeTurn90(const GridMissionInput& in, GridMissionOutput& out);
+    void handleReturnHomeAlignOrigin(const GridMissionInput& in, GridMissionOutput& out);
+    void handleReturnHomeFaceSouth(const GridMissionInput& in, GridMissionOutput& out);
+    void handleReturnVertiportForward(const GridMissionInput& in, GridMissionOutput& out);
+    void handleReturnVertiportMarkerHover(const GridMissionInput& in, GridMissionOutput& out);
     void handleLand(const GridMissionInput& in, GridMissionOutput& out);
     void handleEmergencyLand(const GridMissionInput& in, GridMissionOutput& out);
+    void handleMissionComplete(const GridMissionInput& in, GridMissionOutput& out);
 
     // Hop-to-hop helper: distance from the latched hop_start_* anchor.
     double hopDistance(const GridMissionInput& in) const;
@@ -368,6 +393,8 @@ private:
     bool isIntersectionCenteredForEntry(const GridMissionInput& in) const;
     double intersectionCenterXNorm(const GridMissionInput& in) const;
     bool isRevisitState() const;
+    bool isReturnState() const;
+    const char* returnPhase() const;
     void populateRevisitTelemetry(GridMissionOutput& out) const;
     void resetRevisitPlan();
     bool buildRevisitPlan();
@@ -375,6 +402,12 @@ private:
     bool advanceRevisitNode(const GridMissionInput& in);
     bool finishRevisitSegmentOrLeg(const GridMissionInput& in, GridMissionOutput& out);
     GridHeading currentRevisitSegmentHeading() const;
+    void resetReturnHomePlan();
+    bool buildReturnHomePlan();
+    bool startCurrentReturnLeg(const GridMissionInput& in, GridMissionOutput& out);
+    bool advanceReturnNode(const GridMissionInput& in);
+    bool finishReturnSegmentOrLeg(const GridMissionInput& in, GridMissionOutput& out);
+    GridHeading currentReturnSegmentHeading() const;
     GridHeading nextTurnStepHeading(GridHeading from, GridHeading to) const;
     double yawForHeading(GridHeading heading) const;
     void latchGridOrigin(const GridMissionInput& in, GridMissionOutput& out);
@@ -499,6 +532,19 @@ private:
     int revisit_current_marker_id_ = -1;
     bool revisit_route_ready_ = false;
     bool grid_map_finalized_ = false;
+
+    RevisitLeg return_home_leg_;
+    std::size_t return_segment_index_ = 0;
+    int return_cells_remaining_in_segment_ = 0;
+    GridCoord return_current_coord_;
+    GridHeading return_current_heading_ = GridHeading::Unknown;
+    GridHeading return_desired_heading_ = GridHeading::Unknown;
+    GridHeading return_turn_step_heading_ = GridHeading::Unknown;
+    bool return_home_route_ready_ = false;
+    bool grid_pose_visible_ = true;
+    bool vertiport_acquired_ = false;
+    bool landing_success_ = false;
+    bool mission_complete_ = false;
 };
 
 } // namespace onboard::mission

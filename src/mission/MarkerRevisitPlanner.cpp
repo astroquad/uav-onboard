@@ -127,24 +127,33 @@ std::vector<RevisitLeg> MarkerRevisitPlanner::buildPlan(
     GridCoord current = start_coord;
     GridHeading heading = start_heading;
     for (const auto& target : targets) {
-        const auto x_first = scoreCandidate(
-            heading, buildCandidate(current, target.coord, true));
-        const auto y_first = scoreCandidate(
-            heading, buildCandidate(current, target.coord, false));
-        const auto& chosen = betterCandidate(y_first, x_first) ? y_first : x_first;
-
-        RevisitLeg leg;
-        leg.marker_id = target.id;
-        leg.target = target.coord;
-        leg.segments = chosen.segments;
+        RevisitLeg leg = buildLeg(current, heading, target.coord, target.id);
         legs.push_back(leg);
 
         current = target.coord;
-        if (!chosen.segments.empty()) {
-            heading = chosen.segments.back().heading;
+        if (!leg.segments.empty()) {
+            heading = leg.segments.back().heading;
         }
     }
     return legs;
+}
+
+RevisitLeg MarkerRevisitPlanner::buildLeg(GridCoord start_coord,
+                                          GridHeading start_heading,
+                                          GridCoord target,
+                                          int marker_id) const
+{
+    const auto x_first = scoreCandidate(
+        start_heading, buildCandidate(start_coord, target, true));
+    const auto y_first = scoreCandidate(
+        start_heading, buildCandidate(start_coord, target, false));
+    const auto& chosen = betterCandidate(y_first, x_first) ? y_first : x_first;
+
+    RevisitLeg leg;
+    leg.marker_id = marker_id;
+    leg.target = target;
+    leg.segments = chosen.segments;
+    return leg;
 }
 
 const char* revisitOrderName(RevisitOrder order)
@@ -159,9 +168,6 @@ const char* revisitOrderName(RevisitOrder order)
 
 std::optional<RevisitOrder> parseRevisitOrder(const std::string& value)
 {
-    if (value == "none" || value == "off" || value == "false") {
-        return RevisitOrder::None;
-    }
     if (value == "asc" || value == "ascending") {
         return RevisitOrder::Asc;
     }
