@@ -96,9 +96,9 @@ The current IMX519 setup uses the V4L2 focus motor path
 `camera.focus_absolute`/`camera.focus_device`; `--lens-position` may be ignored
 if libcamera reports no AF algorithm for the module.
 
-## Vision Debug
+## Astroquad GCS
 
-Start `uav_gcs_vision_debug` on the laptop first, then run:
+Start `astroquad-gcs` on the laptop first, then run:
 
 ```bash
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark
@@ -138,7 +138,7 @@ Run Windows GCS:
 
 ```powershell
 cd astroquad\uav-gcs
-.\build\uav_gcs_vision_debug.exe --config config
+.\build\astroquad-gcs.exe --config config
 ```
 
 ### Line-Tracing World

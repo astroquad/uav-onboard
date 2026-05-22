@@ -109,7 +109,7 @@ echo "    Astroquad onboard -> Windows GCS telemetry: UDP <Windows GCS IP>:14550
 echo "    Astroquad onboard -> Windows GCS MJPEG video: UDP <Windows GCS IP>:5600"
 echo
 echo "Windows GCS 실행:"
-echo "    PowerShell: .\\build\\uav_gcs_vision_debug.exe --config config"
+echo "    PowerShell: .\\build\\astroquad-gcs.exe --config config"
 echo
 echo "WSL에서 Windows GCS IP 후보:"
 if [[ -n "$WINDOWS_GCS_IP" ]]; then

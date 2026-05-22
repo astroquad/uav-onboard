@@ -399,9 +399,9 @@ receive a `CMD_ACK` telemetry response when implemented.
 | `mavlink_probe` | onboard | No-arm MAVLink/local-estimate/parameter probe. |
 | `mavlink_motor_test` | onboard | Props-removed low-throttle motor command check. |
 | `video_streamer` | onboard | Raw MJPEG transport smoke tool. |
-| `uav_gcs` | GCS | Basic telemetry receiver; final GCS composition root target. |
+| `astroquad-gcs` | GCS | Current GCS UI with telemetry/video/log windows and GCS-side overlays. |
+| `uav_gcs` | GCS | Basic telemetry receiver / development probe. |
 | `uav_gcs_video` | GCS | Raw MJPEG video viewer. |
-| `uav_gcs_vision_debug` | GCS | Vision telemetry/video/log window and GCS-side overlays. |
 
 ## 10. Change Log
 
