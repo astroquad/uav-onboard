@@ -322,7 +322,7 @@ moving forward in camera frame.
 
 ## Telemetry Bring-Up
 
-Start `uav_gcs` on the laptop first:
+Start `uav-gcs-telem` on the laptop first:
 
 ```bash
 ./build/uav_onboard --config config --count 10
