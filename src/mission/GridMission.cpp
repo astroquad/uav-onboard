@@ -1883,10 +1883,9 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
 
         // Cycle 25: register marker at the column-transition cell so markers
         // placed on second-turn cells are not silently missed. The
-        // all_markers check stays out of this path on purpose — it only
-        // fires from handleSnakeRecordNode (N/S heading) so the synthesize
-        // pass that closes the column never runs on a mid-transition E/W
-        // heading.
+        // all_markers check intentionally waits until SnakeTurn90Again has
+        // completed; the synthesize pass that closes the current column only
+        // supports N/S headings, not this mid-transition E/W connector.
         const int hover_id = tryRegisterCurrentCellMarker(in.node_event.local_coord, in);
 
         const double connector_yaw_target_rad = yaw_target_rad_;
@@ -1950,6 +1949,23 @@ void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMission
                 in.now_s + config_.snake_post_turn_blind_s;
             yaw_align_target_rad_ = yaw_target_rad_;
             snake_launch_align_stable_count_ = 0;
+
+            // Cycle 28: if the final marker was discovered on the second
+            // turn-cell, finish the required second 90-degree turn first so the
+            // tracker is back on a N/S column heading. Only then synthesize the
+            // remaining column nodes and enter SnakeComplete. Completing earlier
+            // from SnakeAdvanceOneCell would run column closure while the drone
+            // was still on the E/W connector heading.
+            const bool all_markers_found = registry_ &&
+                registry_->gridMarkerCount() >=
+                    static_cast<std::size_t>(config_.markers_expected);
+            if (all_markers_found) {
+                completion_hover_marker_id_ = -1;  // turn-cell marker already hovered before turn2
+                synthesizeRemainingColumnNodes();
+                transition(GridState::SnakeComplete, in.now_s, "all_markers_after_turn");
+                return;
+            }
+
             transition(GridState::SnakeLaunchAlign, in.now_s, "turn2_done");
         }
     }
