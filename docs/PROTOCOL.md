@@ -309,7 +309,7 @@ Reserved richer shape:
 | `vision.line.*` | Filtered line-tracking result. `tracking_point_px.x` is the lateral control reference. |
 | `vision.line.contour_px` | Simplified selected contour. Intersections may appear as cross-shaped contours. |
 | `vision.intersection.*` | Stabilized per-frame topology from the line mask. `straight` is valid but not a turn node. |
-| `vision.intersection_decision.*` | Sliding-window decision layer over intersection classification. It emits node/turn readiness hints, not Pixhawk commands. |
+| `vision.intersection_decision.*` | Sliding-window decision layer over intersection classification. It emits node/turn readiness hints, not autopilot commands. |
 | `vision.grid_node` | Latest committed grid node event. In `grid_mission_node`, this is intentionally resent every frame. |
 | `vision.grid_node.local_coord` | Local exploration coordinates only; official competition origin conversion is not implemented. |
 | `vision.drone_position` | Fractional progress from the last committed node, derived from short-window local estimate displacement. |
@@ -362,15 +362,15 @@ IP and port.
 
 Primary control mode is ArduPilot `GUIDED` with MAVLink
 `SET_POSITION_TARGET_LOCAL_NED` body-frame velocity setpoints. SITL uses UDP
-MAVLink; real Pixhawk1 bench/line-follow support uses serial or USB serial
-through `SerialMavlinkTransport`.
+MAVLink; real ArduPilot serial mission support uses serial or USB serial through
+`SerialMavlinkTransport`.
 
 Current boundaries:
 
-- `line_follow_node` supports SITL UDP and guarded real Pixhawk1 serial paths.
+- `line_follow_node` supports SITL UDP and guarded real ArduPilot serial paths.
 - `mavlink_probe` and `mavlink_motor_test` are no-arm/props-removed bench tools.
-- `grid_mission_node` is current SITL grid mission staging. `--target pixhawk1`
-  is limited to `--no-arm` smoke; real grid mission arm/takeoff is not enabled.
+- `grid_mission_node` supports SITL UDP and guarded real ArduPilot serial paths;
+  real arm/takeoff requires `--allow-arm-takeoff`.
 - Command channel fields for GCS-originated mission control remain planned.
 
 ## 8. Command Channel
@@ -394,9 +394,9 @@ receive a `CMD_ACK` telemetry response when implemented.
 |---|---|---|
 | `uav_onboard` | onboard | Basic telemetry bring-up sender; final onboard composition root target. |
 | `vision_debug_node` | onboard | Camera/vision telemetry and optional raw MJPEG debug video. |
-| `line_follow_node` | onboard | Short line-follow mission staging for SITL and guarded Pixhawk1 tests. |
-| `grid_mission_node` | onboard | Current grid arena snake-mission SITL staging executable. |
-| `mavlink_probe` | onboard | No-arm Pixhawk/MAVLink/local-estimate/parameter probe. |
+| `line_follow_node` | onboard | Short line-follow mission staging for SITL and guarded ArduPilot serial tests. |
+| `grid_mission_node` | onboard | Current grid arena snake-mission SITL and guarded serial staging executable. |
+| `mavlink_probe` | onboard | No-arm MAVLink/local-estimate/parameter probe. |
 | `mavlink_motor_test` | onboard | Props-removed low-throttle motor command check. |
 | `video_streamer` | onboard | Raw MJPEG transport smoke tool. |
 | `uav_gcs` | GCS | Basic telemetry receiver; final GCS composition root target. |

@@ -160,7 +160,7 @@ struct GridMissionConfig {
     // Failsafe
     int    max_intersections = 50;
     double mission_timeout_s = 600.0;
-    double pixhawk_heartbeat_timeout_s = 2.0;
+    double autopilot_heartbeat_timeout_s = 2.0;
     double altitude_ceiling_m = 3.5;
     double snake_complete_hover_s = 2.0;
 

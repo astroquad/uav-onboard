@@ -13,7 +13,7 @@ enum class SafetyAction {
 
 struct SafetyConfig {
     int line_lost_ms = 2000;
-    int pixhawk_heartbeat_lost_ms = 2000;
+    int autopilot_heartbeat_lost_ms = 2000;
     int mission_timeout_ms = 300000;
     bool rc_required = false;
     bool assume_rc_present = true;

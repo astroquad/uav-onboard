@@ -69,7 +69,7 @@ void printUsage()
         << "Options:\n"
         << "  --config <dir>       Config directory, default config\n"
         << "  --gcs-ip <ip>        Override GCS destination IP\n"
-        << "  --target <name>      Runtime profile, e.g. sitl or pixhawk1\n"
+        << "  --target <name>      Runtime profile, e.g. sitl or ardupilot_serial\n"
         << "  --vision <source>    rpicam, gazebo, or fake; default rpicam\n"
         << "  --gazebo-topic <t>   Override Gazebo camera image topic\n"
         << "  --port <n>           Override video destination UDP port\n"
@@ -376,19 +376,20 @@ int main(int argc, char** argv)
     auto network_config = onboard::common::loadNetworkConfig(options.config_dir);
     auto vision_config = onboard::common::loadVisionConfig(options.config_dir);
     std::string vision_source = "rpicam";
+    const std::string target = options.target;
 
     if (!options.gcs_ip_override.empty()) {
         network_config.gcs_ip = options.gcs_ip_override;
     }
-    if (options.target == "sitl") {
+    if (target == "sitl") {
         vision_source = "gazebo";
-    } else if (options.target == "pixhawk1") {
+    } else if (target == "ardupilot_serial") {
         vision_source = "rpicam";
-    } else if (!options.target.empty()) {
+    } else if (!target.empty()) {
         std::cerr << "unknown --target: " << options.target << "\n";
         return 2;
     }
-    applyRuntimeOverlay(vision_config, vision_source, options.config_dir, options.target);
+    applyRuntimeOverlay(vision_config, vision_source, options.config_dir, target);
     if (!options.vision_source.empty()) {
         vision_source = options.vision_source;
     }

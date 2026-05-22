@@ -135,7 +135,7 @@ Notes:
   present, or fetches MAVLink c_library_v2 into the build tree.
 - For offline Raspberry Pi builds, provide MAVLink headers explicitly:
     cmake -S . -B build -DMAVLINK_INCLUDE_DIR=/path/to/include
-- For Pixhawk serial access, make sure the runtime user can open the serial
+- For ArduPilot serial access, make sure the runtime user can open the serial
   device, for example:
     sudo usermod -aG dialout "$USER"
     # then log out and back in, or reboot

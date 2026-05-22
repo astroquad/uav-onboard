@@ -116,14 +116,15 @@ void printUsage()
         << "Usage: mavlink_probe [options]\n\n"
         << "Options:\n"
         << "  --config <dir>              Config directory\n"
-        << "  --target <sitl|pixhawk1>    Runtime target profile\n"
+        << "  --target <sitl|ardupilot_serial>\n"
+        << "                              Runtime target profile\n"
         << "  --autopilot <uri>           udp://0.0.0.0:14550 or serial:///dev/ttyACM0:115200\n"
         << "  --duration-ms <n>           Probe duration after heartbeat, default 10000\n"
         << "  --heartbeat-timeout-ms <n>  Heartbeat timeout, default 30000\n"
         << "  --dump-params               Request and print full parameter list\n"
         << "  --param-file <path>         Compare/apply parameter file entries\n"
-        << "  --apply-params              Apply parameter file entries to Pixhawk\n"
-        << "  --i-understand-this-writes-pixhawk-params\n"
+        << "  --apply-params              Apply parameter file entries to the autopilot\n"
+        << "  --i-understand-this-writes-autopilot-params\n"
         << "                              Required with --apply-params\n"
         << "  --strict-local-estimate     Fail if local/range/flow telemetry is missing\n"
         << "  --strict-rc                 Fail if RC_CHANNELS are missing\n"
@@ -170,7 +171,7 @@ Options parseOptions(int argc, char** argv)
             options.param_file = argv[++i];
         } else if (arg == "--apply-params") {
             options.apply_params = true;
-        } else if (arg == "--i-understand-this-writes-pixhawk-params") {
+        } else if (arg == "--i-understand-this-writes-autopilot-params") {
             options.allow_param_write = true;
         } else if (arg == "--strict-local-estimate") {
             options.strict_local_estimate = true;
@@ -225,6 +226,7 @@ void applyAutopilotUri(EndpointConfig& endpoint, const std::string& uri)
 EndpointConfig loadEndpointConfig(const Options& options)
 {
     EndpointConfig endpoint;
+    const std::string target = options.target;
 
     try {
         const auto table = toml::parse_file(joinConfigPath(options.config_dir, "autopilot.toml"));
@@ -241,20 +243,20 @@ EndpointConfig loadEndpointConfig(const Options& options)
     } catch (const toml::parse_error&) {
     }
 
-    if (options.target == "sitl") {
+    if (target == "sitl") {
         endpoint.kind = TransportKind::Udp;
         endpoint.label = "sitl";
-    } else if (options.target == "pixhawk1") {
+    } else if (target == "ardupilot_serial") {
         endpoint.kind = TransportKind::Serial;
-        endpoint.label = "pixhawk1";
-    } else if (!options.target.empty()) {
+        endpoint.label = "ardupilot_serial";
+    } else if (!target.empty()) {
         throw std::runtime_error("unknown --target: " + options.target);
     }
 
-    if (!options.target.empty()) {
+    if (!target.empty()) {
         try {
             const auto table = toml::parse_file(
-                joinConfigPath(options.config_dir, "runtime." + options.target + ".toml"));
+                joinConfigPath(options.config_dir, "runtime." + target + ".toml"));
             if (const auto transport = table["transport"]) {
                 const std::string kind = transport["kind"].value_or(std::string(""));
                 if (kind == "serial") {
@@ -926,7 +928,7 @@ int main(int argc, char** argv)
         const Options options = parseOptions(argc, argv);
         if (options.apply_params && !options.allow_param_write) {
             throw std::runtime_error(
-                "--apply-params requires --i-understand-this-writes-pixhawk-params");
+                "--apply-params requires --i-understand-this-writes-autopilot-params");
         }
 
         const EndpointConfig endpoint = loadEndpointConfig(options);

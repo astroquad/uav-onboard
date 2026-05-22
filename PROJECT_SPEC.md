@@ -17,15 +17,16 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 
 - `uav_onboard`: basic telemetry bring-up sender. 최종 composition root 목표.
 - `vision_debug_node`: 현재 안정적인 camera/vision/GCS debug runtime.
-- `line_follow_node`: SITL 및 guarded Pixhawk1 line-follow staging.
-- `grid_mission_node`: 현재 grid arena full-snake SITL staging.
+- `line_follow_node`: SITL 및 guarded ArduPilot serial line-follow staging.
+- `grid_mission_node`: 현재 grid arena full-snake SITL 및 guarded ArduPilot
+  serial staging.
 
 ## 2. 책임 범위
 
 | 구분 | 내용 |
 |---|---|
 | 담당 | Pi camera frame 획득, ArUco/line/intersection detection, local grid-node 판단, mission state machine, grid/snake policy, control intent mapping, MAVLink adapter, safety, telemetry/debug video |
-| 미담당 | 자세 안정화와 모터 제어는 ArduPilot/Pixhawk 담당, GCS UI/overlay/log window는 `uav-gcs` 담당 |
+| 미담당 | 자세 안정화와 모터 제어는 ArduPilot flight controller 담당, GCS UI/overlay/log window는 `uav-gcs` 담당 |
 
 역할 분리:
 
@@ -58,7 +59,7 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 | Safety monitor | 부분 구현 | `src/safety/SafetyMonitor.*`, mission-local failsafe |
 | GCS telemetry/video publisher | 구현됨 | `src/app/VisionDebugPublisher.*` |
 | Gazebo line/grid worlds | 구현됨 | `sim/gazebo/`, `scripts/line_tracing_test.sh`, `scripts/grid_arena_test.sh` |
-| Pixhawk bench tools | 구현됨 | `tools/mavlink_probe.cpp`, `tools/mavlink_motor_test.cpp` |
+| ArduPilot serial bench tools | 구현됨 | `tools/mavlink_probe.cpp`, `tools/mavlink_motor_test.cpp` |
 | GCS command receiver | 미구현 | planned |
 | Marker reverse revisit / return home | 미구현 | planned |
 | Official coordinate conversion | 미구현 | planned |
@@ -68,13 +69,13 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 
 | 모델/장치 | 연결 위치 | 역할 |
 |---|---|---|
-| Pixhawk1 | 기체 중앙 | 비행 제어기. 자세 안정화, 모터 출력, 센서 융합, 모드 관리 |
-| MicoAir MTF-01 Optical Flow & Range Sensor | Pixhawk TELEM2 또는 SERIAL4/5 | GPS 없이 수평 이동 추정 + 바닥 거리 측정 |
-| Raspberry Pi 4 | Pixhawk USB 또는 TELEM1 | OpenCV 비전, mission, MAVLink command sender |
+| ArduPilot-compatible flight controller | 기체 중앙 | 비행 제어기. 자세 안정화, 모터 출력, 센서 융합, 모드 관리 |
+| MicoAir MTF-01 Optical Flow & Range Sensor | FC TELEM/SERIAL 포트 | GPS 없이 수평 이동 추정 + 바닥 거리 측정 |
+| Raspberry Pi 4 | FC USB 또는 TELEM/SERIAL 포트 | OpenCV 비전, mission, MAVLink command sender |
 | IMX519 Camera | Raspberry Pi CSI | 하향 영상 입력 |
-| Power Module | Pixhawk POWER | 전압/전류 측정 |
-| RC Receiver | Pixhawk RC IN 또는 운용 중인 RC 경로 | 수동 takeover, 비상 개입 |
-| ESC/Motor/PDB | Pixhawk MAIN OUT + 전원분배 | 실제 모터 구동 |
+| Power Module | FC POWER | 전압/전류 측정 |
+| RC Receiver | FC RC IN 또는 운용 중인 RC 경로 | 수동 takeover, 비상 개입 |
+| ESC/Motor/PDB | FC MAIN OUT + 전원분배 | 실제 모터 구동 |
 
 | 항목 | 현재 기준 |
 |---|---|
@@ -149,7 +150,7 @@ Library targets:
 - weak fourth branch가 `T`를 `+`로 끌어올리지 못하도록
   `high_confidence_score` gate를 둔다.
 - `turn_ready`, `overshoot_risk`, `too_late_to_turn`은 mission/debug 판단이며
-  직접 Pixhawk command가 아니다.
+  직접 autopilot command가 아니다.
 
 ### Marker
 
@@ -232,10 +233,11 @@ Primary:
 
 Real hardware boundary:
 
-- `line_follow_node --target pixhawk1` has guarded serial support.
+- `line_follow_node --target ardupilot_serial` has guarded serial support.
 - `mavlink_probe` and `mavlink_motor_test` are the required bench tools.
-- `grid_mission_node --target pixhawk1` is not a real arm/takeoff grid mission
-  path yet; use `--no-arm` for smoke only.
+- `grid_mission_node --target ardupilot_serial --allow-arm-takeoff` has
+  guarded serial support and uses the same RC/local-estimate preflight gates as
+  the line-follow real path.
 
 ## 9. Protocol
 
@@ -325,9 +327,9 @@ uav-onboard/
 │  ├─ autopilot.toml
 │  ├─ mission.toml
 │  ├─ network.toml
-│  ├─ pixhawk1_usb.expected.toml
-│  ├─ pixhawk1_usb.params
-│  ├─ runtime.pixhawk1.toml
+│  ├─ ardupilot_serial_usb.expected.toml
+│  ├─ ardupilot_serial_usb.params
+│  ├─ runtime.ardupilot_serial.toml
 │  ├─ runtime.sitl.grid.toml
 │  ├─ runtime.sitl.toml
 │  ├─ safety.toml
@@ -361,7 +363,7 @@ Key tools:
 | `tools/vision_debug_node.cpp` | camera/vision/GCS debug runtime |
 | `tools/line_follow_node.cpp` | line-follow staging mission |
 | `tools/grid_mission_node.cpp` | current grid arena staging mission |
-| `tools/mavlink_probe.cpp` | no-arm Pixhawk/MAVLink bench probe |
+| `tools/mavlink_probe.cpp` | no-arm MAVLink/autopilot bench probe |
 | `tools/mavlink_motor_test.cpp` | props-removed motor command check |
 | `tools/grid_image_smoke.cpp` | deterministic image-grid smoke |
 | `tools/marker_grid_replay.cpp` | marker/grid replay helper |
@@ -400,10 +402,10 @@ Grid mission SITL:
   --video --gcs-ip <windows-gcs-ip>
 ```
 
-Pixhawk bench:
+ArduPilot serial bench:
 
 ```bash
-./build/mavlink_probe --config config --target pixhawk1 \
+./build/mavlink_probe --config config --target ardupilot_serial \
   --duration-ms 12000 --strict-local-estimate
 ```
 
@@ -414,7 +416,7 @@ Pixhawk bench:
 | 1 | `grid_mission_node` SITL snake 안정화 | 현재 full-grid 알고리즘의 중심 |
 | 2 | GCS mission/grid telemetry 보강 | console-only state를 GCS에도 구조화 |
 | 3 | Grid mission unit/integration tests 확대 | Entry/origin/hop/turn/marker commit 회귀 방지 |
-| 4 | Real Pixhawk grid mission no-arm smoke 확정 | serial/vision/control path 분리 검증 |
+| 4 | Real ArduPilot serial grid mission guarded flight 검증 | serial/vision/control path 통합 검증 |
 | 5 | Full mission composition을 `uav_onboard`로 수렴 | 최종 실행 파일 정리 |
 | 6 | Marker reverse revisit / return home policy | 대회 최종 미션 완성 |
 | 7 | GCS command channel 연동 | START/ABORT/EMERGENCY LAND/backend 선택 |
@@ -424,6 +426,6 @@ Pixhawk bench:
 
 - GCS가 자율주행 판단을 대신하지 않는다.
 - Gazebo ground-truth pose를 mission 입력으로 쓰지 않는다.
-- `grid_mission_node --target pixhawk1 --allow-arm-takeoff`를 열지 않는다.
+- 실기체에서 RC/local-estimate preflight gate 없이 arm/takeoff하지 않는다.
 - Debug video frame loss를 mission failure로 보지 않는다.
 - Marker reverse revisit/return-home을 구현된 기능처럼 문서화하지 않는다.

@@ -109,7 +109,8 @@ void printUsage()
         << "Usage: line_follow_node [options]\n\n"
         << "Options:\n"
         << "  --config <dir>              Config directory\n"
-        << "  --target <sitl|pixhawk1>    Runtime target profile\n"
+        << "  --target <sitl|ardupilot_serial>\n"
+        << "                              Runtime target profile\n"
         << "  --autopilot <uri>           Override endpoint, e.g. udp://0.0.0.0:14550\n"
         << "                              or serial:///dev/serial0:115200\n"
         << "  --vision <fake|gazebo|rpicam>\n"
@@ -125,8 +126,8 @@ void printUsage()
         << "  --no-telemetry              Disable GCS telemetry streaming\n"
         << "  --vision-smoke-count <n>    Read/process n vision frames and exit before MAVLink\n"
         << "  --mavlink-smoke             Heartbeat/stream smoke only; no mode/arm/takeoff\n"
-        << "  --no-arm                    Real Pixhawk safety mode; no mode/arm/takeoff\n"
-        << "  --dry-run                   Real Pixhawk safety mode; no command-producing mission\n"
+        << "  --no-arm                    Real serial safety mode; no mode/arm/takeoff\n"
+        << "  --dry-run                   Real serial safety mode; no command-producing mission\n"
         << "  --allow-arm-takeoff         Explicitly allow real serial arm/takeoff path\n"
         << "  --unsafe-assume-rc-present  Bypass MAVLink RC gate for real-flight debugging\n"
         << "  --profile-vision            Log per-stage vision latency in control log\n"
@@ -253,7 +254,7 @@ void applyAutopilotUri(RuntimeConfig& config, const std::string& uri)
         }
         const auto colon = rest.rfind(':');
         config.endpoint.kind = TransportKind::Serial;
-        config.endpoint.label = "pixhawk1";
+        config.endpoint.label = "ardupilot_serial";
         if (colon == std::string::npos) {
             config.endpoint.serial_device = rest;
             return;
@@ -309,8 +310,9 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
         if (const auto timeouts = safety["timeouts"]) {
             config.safety.line_lost_ms =
                 timeouts["line_lost_ms"].value_or(config.safety.line_lost_ms);
-            config.safety.pixhawk_heartbeat_lost_ms =
-                timeouts["pixhawk_heartbeat_lost_ms"].value_or(config.safety.pixhawk_heartbeat_lost_ms);
+            config.safety.autopilot_heartbeat_lost_ms =
+                timeouts["autopilot_heartbeat_lost_ms"].value_or(
+                    config.safety.autopilot_heartbeat_lost_ms);
             config.safety.mission_timeout_ms =
                 timeouts["mission_timeout_ms"].value_or(config.safety.mission_timeout_ms);
         }
@@ -450,6 +452,7 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
 RuntimeConfig loadRuntimeConfig(const Options& options)
 {
     RuntimeConfig config;
+    const std::string target = options.target;
     config.network = onboard::common::loadNetworkConfig(options.config_dir);
     config.vision = onboard::common::loadVisionConfig(options.config_dir);
 
@@ -594,8 +597,9 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
         if (const auto timeouts = table["timeouts"]) {
             config.safety.line_lost_ms =
                 timeouts["line_lost_ms"].value_or(config.safety.line_lost_ms);
-            config.safety.pixhawk_heartbeat_lost_ms =
-                timeouts["pixhawk_heartbeat_lost_ms"].value_or(config.safety.pixhawk_heartbeat_lost_ms);
+            config.safety.autopilot_heartbeat_lost_ms =
+                timeouts["autopilot_heartbeat_lost_ms"].value_or(
+                    config.safety.autopilot_heartbeat_lost_ms);
             config.safety.mission_timeout_ms =
                 timeouts["mission_timeout_ms"].value_or(config.safety.mission_timeout_ms);
         }
@@ -610,23 +614,23 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
     } catch (const toml::parse_error&) {
     }
 
-    if (options.target == "sitl") {
+    if (target == "sitl") {
         config.endpoint.kind = TransportKind::Udp;
         config.endpoint.label = "sitl";
         config.vision_source = "fake";
-    } else if (options.target == "pixhawk1") {
+    } else if (target == "ardupilot_serial") {
         config.endpoint.kind = TransportKind::Serial;
-        config.endpoint.label = "pixhawk1";
+        config.endpoint.label = "ardupilot_serial";
         config.vision_source = "rpicam";
-    } else if (!options.target.empty()) {
+    } else if (!target.empty()) {
         throw std::runtime_error("unknown --target: " + options.target);
     }
 
-    if (options.target.empty()) {
+    if (target.empty()) {
         config.vision_source = "fake";
     }
 
-    applyRuntimeOverlay(config, options.config_dir, options.target);
+    applyRuntimeOverlay(config, options.config_dir, target);
 
     if (!options.vision.empty()) {
         config.vision_source = options.vision;
@@ -914,11 +918,11 @@ bool opticalFlowReady(
 //     publishes LOCAL_POSITION_NED fused from the simulated GPS+IMU. There is
 //     no MTF-01; opticalFlowReady() returns false. We therefore only enforce
 //     waitLocalHoldEstimateReady() / opticalFlowReady() when the transport is
-//     real serial (target=pixhawk1). Setpoints go out as either body-frame
+//     real serial (target=ardupilot_serial). Setpoints go out as either body-frame
 //     velocities (line follow) or position-anchored velocities (hover/land).
-//   * Real Pixhawk1 (target=pixhawk1, vision=rpicam): EKF3 fuses MTF-01
+//   * Real serial target (target=ardupilot_serial, vision=rpicam): EKF3 fuses MTF-01
 //     OPTICAL_FLOW + range finder + IMU into LOCAL_POSITION_NED. Drift is
-//     higher than the SITL GPS path, so this file's pixhawk1 config uses
+//     higher than the SITL GPS path, so the ardupilot_serial config uses
 //     smaller gains, stronger EMA smoothing, and a lower max forward speed.
 //     localHoldEstimateReady() additionally requires optical_flow_quality and
 //     the EKF relative-aiding bits before we permit GUIDED arm/takeoff.
@@ -1349,7 +1353,7 @@ int main(int argc, char** argv)
             std::cerr << "target " << config.endpoint.label
                       << " selected real serial endpoint " << config.endpoint.serial_device
                       << ':' << config.endpoint.serial_baudrate << "\n"
-                      << "refusing to run the automatic arm/takeoff mission on real Pixhawk without "
+                      << "refusing to run the automatic arm/takeoff mission on a real serial target without "
                       << "--mavlink-smoke, --no-arm, --dry-run, or --allow-arm-takeoff\n";
             return 2;
         }

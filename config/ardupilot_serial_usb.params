@@ -1,14 +1,14 @@
-# Astroquad Pixhawk1 + MTF-01 USB bench parameter target.
+# Astroquad ArduPilot serial + MTF-01 USB bench parameter target.
 #
 # Apply only after a no-arm mavlink_probe run confirms heartbeat and the
-# operator is ready to change Pixhawk parameters:
+# operator is ready to change autopilot parameters:
 #
-#   ./build/mavlink_probe --config config --target pixhawk1 \
-#     --param-file config/pixhawk1_usb.params
+#   ./build/mavlink_probe --config config --target ardupilot_serial \
+#     --param-file config/ardupilot_serial_usb.params
 #
-#   ./build/mavlink_probe --config config --target pixhawk1 \
-#     --param-file config/pixhawk1_usb.params \
-#     --apply-params --i-understand-this-writes-pixhawk-params
+#   ./build/mavlink_probe --config config --target ardupilot_serial \
+#     --param-file config/ardupilot_serial_usb.params \
+#     --apply-params --i-understand-this-writes-autopilot-params
 #
 # This file intentionally avoids motor, arming, and battery-monitor changes.
 # Battery monitor and final arming checks must be set after confirming the
@@ -39,8 +39,9 @@ EK3_SRC1_POSZ = 1
 EK3_SRC1_VELZ = 0
 EK3_SRC1_YAW = 1
 
-# BETAFPV Nano 2400 RX / ExpressLRS on Pixhawk1 TELEM2.
-# SERIAL2 is TELEM2 on Pixhawk1. 23 = RC input.
+# BETAFPV Nano 2400 RX / ExpressLRS on the tested TELEM2/SERIAL2 port.
+# Confirm SERIALn/TELEM mapping on your flight controller before applying.
+# 23 = RC input.
 # RC_PROTOCOLS=512 restricts detection to CRSF for ELRS.
 # RC_OPTIONS preserves the previously observed bits 5 and 8 from 288, then
 # adds bit 13 for ELRS CRSF 420K baud compatibility.

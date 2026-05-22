@@ -17,7 +17,7 @@ using Clock = std::chrono::steady_clock;
 
 struct Options {
     std::string config_dir = "config";
-    std::string target = "pixhawk1";
+    std::string target = "ardupilot_serial";
     std::string device = "/dev/ttyACM0";
     int baudrate = 115200;
     int motor = 1;
@@ -47,7 +47,7 @@ void printUsage()
         << "Run only with propellers removed and the vehicle physically clear.\n\n"
         << "Options:\n"
         << "  --config <dir>              Config directory\n"
-        << "  --target <pixhawk1>         Runtime target profile, default pixhawk1\n"
+        << "  --target <ardupilot_serial> Runtime target profile, default ardupilot_serial\n"
         << "  --device <path>             Serial device override\n"
         << "  --baudrate <n>              Serial baudrate, default 115200\n"
         << "  --motor <n>                 Motor instance, 1-based, default 1\n"

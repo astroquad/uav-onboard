@@ -22,15 +22,15 @@ SafetyDecision SafetyMonitor::update(const SafetyInput& input)
     }
 
     if (!input.heartbeat_seen) {
-        return {SafetyAction::Abort, "pixhawk heartbeat not seen"};
+        return {SafetyAction::Abort, "autopilot heartbeat not seen"};
     }
 
     const auto heartbeat_age_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             input.now - input.last_heartbeat_time)
             .count();
-    if (heartbeat_age_ms > config_.pixhawk_heartbeat_lost_ms) {
-        return {SafetyAction::Abort, "pixhawk heartbeat lost"};
+    if (heartbeat_age_ms > config_.autopilot_heartbeat_lost_ms) {
+        return {SafetyAction::Abort, "autopilot heartbeat lost"};
     }
 
     if (input.mode_known && !input.mode_guided) {

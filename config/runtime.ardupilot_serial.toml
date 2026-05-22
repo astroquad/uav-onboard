@@ -1,5 +1,5 @@
 [runtime]
-target = "pixhawk1"
+target = "ardupilot_serial"
 vision = "rpicam"
 
 [transport]
@@ -11,7 +11,7 @@ baudrate = 115200
 
 [safety.timeouts]
 line_lost_ms = 5000
-pixhawk_heartbeat_lost_ms = 2000
+autopilot_heartbeat_lost_ms = 2000
 mission_timeout_ms = 300000
 
 [safety.rc]

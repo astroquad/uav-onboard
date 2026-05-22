@@ -9,7 +9,7 @@ listen_port = 14550
 
 [safety.timeouts]
 line_lost_ms = 2000
-pixhawk_heartbeat_lost_ms = 3000
+autopilot_heartbeat_lost_ms = 3000
 mission_timeout_ms = 300000
 
 [safety.rc]

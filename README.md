@@ -2,13 +2,15 @@
 
 Onboard software for the Astroquad indoor/grid UAV search mission.
 
-Current target hardware is Raspberry Pi 4 + IMX519 CSI camera + Pixhawk1.
+Current target hardware is Raspberry Pi 4 + IMX519 CSI camera + an
+ArduPilot-compatible serial flight controller.
 The codebase now has three practical runtime layers:
 
 - `vision_debug_node`: camera/vision/GCS telemetry bring-up.
 - `line_follow_node`: short line-follow mission staging for SITL and guarded
-  real Pixhawk1 tests.
-- `grid_mission_node`: current grid-arena snake mission staging for SITL.
+  real ArduPilot serial tests.
+- `grid_mission_node`: current grid-arena snake mission staging for SITL and
+  guarded ArduPilot serial tests.
 
 The final product target is still `uav_onboard`, but today that executable is a
 basic telemetry bring-up sender. Mission development should keep sharing the
@@ -17,7 +19,7 @@ between executables.
 
 ## Layout
 
-- `config/`: network, vision, mission, safety, runtime, Pixhawk parameter files
+- `config/`: network, vision, mission, safety, runtime, ArduPilot parameter files
 - `src/`: reusable onboard libraries
 - `tools/`: staging executables and smoke tools
 - `tests/`: CTest targets
@@ -32,9 +34,9 @@ between executables.
 |---|---|
 | `uav_onboard` | Basic telemetry sender; final composition root target. |
 | `vision_debug_node` | Camera source + ArUco/line/intersection processing + GCS telemetry + optional MJPEG video. |
-| `line_follow_node` | Auto takeoff, short line follow, marker hover/landing staging. Supports SITL UDP and guarded Pixhawk1 serial paths. |
-| `grid_mission_node` | Current full grid-arena snake mission staging. SITL is the active arm/takeoff target. |
-| `mavlink_probe` | No-arm Pixhawk heartbeat/local estimate/RC/battery/parameter probe. |
+| `line_follow_node` | Auto takeoff, short line follow, marker hover/landing staging. Supports SITL UDP and guarded ArduPilot serial paths. |
+| `grid_mission_node` | Current full grid-arena snake mission staging. Supports SITL UDP and guarded ArduPilot serial paths. |
+| `mavlink_probe` | No-arm MAVLink heartbeat/local estimate/RC/battery/parameter probe. |
 | `mavlink_motor_test` | Props-removed low-throttle motor command check. |
 | `video_streamer` | Raw MJPEG transport smoke tool. |
 | `line_detector_tuner`, `aruco_detector_tester`, `grid_image_smoke`, `marker_grid_replay` | Offline vision/regression tools. |
@@ -246,47 +248,58 @@ completion. Omit `--revisit-order` for descending order, or pass
 faces grid south, flies back toward the latched vertiport marker, centers on
 that marker, lands, and publishes mission completion telemetry.
 
-## Pixhawk1 Bench And Line-Follow
+## ArduPilot Serial Bench And Missions
 
 No-arm local-estimate probe:
 
 ```bash
-./build/mavlink_probe --config config --target pixhawk1 \
+./build/mavlink_probe --config config --target ardupilot_serial \
   --duration-ms 12000 --strict-local-estimate
 ```
 
 No-arm RC gate:
 
 ```bash
-./build/mavlink_probe --config config --target pixhawk1 \
+./build/mavlink_probe --config config --target ardupilot_serial \
   --duration-ms 30000 --strict-rc
 ```
 
 No-arm line-follow serial smoke:
 
 ```bash
-./build/line_follow_node --config config --target pixhawk1 \
+./build/line_follow_node --config config --target ardupilot_serial \
   --mavlink-smoke --smoke-duration-ms 5000 --no-telemetry
 ```
 
 Props-removed motor command check:
 
 ```bash
-./build/mavlink_motor_test --config config --target pixhawk1 \
+./build/mavlink_motor_test --config config --target ardupilot_serial \
   --motor 1 --percent 5 --seconds 1 --props-removed
 ```
 
 Real line-follow arming requires explicit acknowledgement:
 
 ```bash
-./build/line_follow_node --config config --target pixhawk1 \
+./build/line_follow_node --config config --target ardupilot_serial \
   --vision rpicam --line-mode dark_on_light --video --allow-arm-takeoff
+```
+
+Real grid-mission arming also requires explicit acknowledgement. The
+`ardupilot_serial` defaults to `runtime.ardupilot_serial.toml` and `rpicam`; override the
+serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:
+
+```bash
+./build/grid_mission_node --config config --target ardupilot_serial \
+  --line-mode dark_on_light --marker-count 4 --revisit-order asc \
+  --video --allow-arm-takeoff
 ```
 
 Do not run real serial mission paths until RC takeover, battery telemetry,
 MTF-01 optical-flow/range local estimate, motor order, prop direction, and a
-manual hover have been verified. `grid_mission_node --target pixhawk1` is not
-armed for real grid mission flight yet; use `--no-arm` only for smoke.
+manual hover have been verified. Both real mission nodes require a fresh
+MAVLink RC signal and optical-flow local estimate before arm/takeoff; use
+`--unsafe-assume-rc-present` only for deliberate RC-gate debugging.
 
 ## Offline Vision Tools
 

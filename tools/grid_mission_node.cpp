@@ -8,11 +8,12 @@
 // Algorithm rules (see development-log plan §0):
 //   - Never use Gazebo ground-truth pose. Only MAVLink LOCAL_POSITION_NED,
 //     ATTITUDE, rangefinder, vision events, and time are allowed inputs.
-//   - LOCAL_POSITION_NED is an EKF estimate (same on SITL and real Pixhawk),
+//   - LOCAL_POSITION_NED is an EKF estimate (same on SITL and real ArduPilot serial),
 //     so it is OK as a distance/hover source within short windows.
 
 #include "app/VisionDebugPublisher.hpp"
 #include "autopilot/AutopilotMavlinkAdapter.hpp"
+#include "autopilot/SerialMavlinkTransport.hpp"
 #include "autopilot/UdpMavlinkTransport.hpp"
 
 #include <mavlink/v2.0/ardupilotmega/mavlink.h>
@@ -26,6 +27,7 @@
 #include "mission/IntersectionDecision.hpp"
 #include "mission/MarkerRegistry.hpp"
 #include "mission/SnakePlanner.hpp"
+#include "safety/SafetyMonitor.hpp"
 #include "vision/FakeFrameSource.hpp"
 #include "vision/GazeboCameraSource.hpp"
 #include "vision/RpicamFrameSource.hpp"
@@ -56,11 +58,27 @@ namespace ocontrol = onboard::control;
 namespace ovision = onboard::vision;
 namespace oautopilot = onboard::autopilot;
 namespace ocommon = onboard::common;
+namespace osafety = onboard::safety;
+
+enum class TransportKind {
+    Udp,
+    Serial,
+};
+
+struct EndpointConfig {
+    TransportKind kind = TransportKind::Udp;
+    std::string label = "sitl";
+    std::string listen_host = "0.0.0.0";
+    std::uint16_t listen_port = 14550;
+    std::string serial_device = "/dev/serial0";
+    int serial_baudrate = 115200;
+};
 
 struct Options {
     std::string config_dir = "config";
     std::string target = "sitl";
-    std::string vision = "gazebo";
+    std::string autopilot_uri;
+    std::string vision;
     std::string world = "grid";
     std::string line_mode_override = "dark_on_light";
     std::string gcs_ip_override;
@@ -75,6 +93,7 @@ struct Options {
     bool send_telemetry = true;
     bool allow_arm_takeoff = false;
     bool no_arm = false;
+    bool unsafe_assume_rc_present = false;
 };
 
 std::atomic_bool g_shutdown_requested {false};
@@ -101,9 +120,12 @@ void printUsage()
         << "\n"
         << "Options:\n"
         << "  --config <dir>               Config directory (default: config)\n"
-        << "  --target <sitl|pixhawk1>     Runtime target (default: sitl)\n"
+        << "  --target <sitl|ardupilot_serial>\n"
+        << "                               Runtime target (default: sitl)\n"
+        << "  --autopilot <uri>            Override endpoint, e.g. udp://0.0.0.0:14550\n"
+        << "                               or serial:///dev/serial0:115200\n"
         << "  --vision <fake|gazebo|rpicam>\n"
-        << "                               Vision source (default: gazebo)\n"
+        << "                               Vision source (default: target runtime profile)\n"
         << "  --world <grid|line>          Gazebo world profile (default: grid)\n"
         << "  --line-mode <mode>           light_on_dark | dark_on_light | auto\n"
         << "  --gcs-ip <ip>                Override GCS destination IP\n"
@@ -115,8 +137,9 @@ void printUsage()
         << "  --video                      Enable GCS MJPEG streaming\n"
         << "  --no-video                   Disable GCS MJPEG streaming\n"
         << "  --no-telemetry               Disable GCS telemetry sending\n"
-        << "  --allow-arm-takeoff          Permit real arm+takeoff on Pixhawk1 target\n"
+        << "  --allow-arm-takeoff          Permit real serial arm+takeoff\n"
         << "  --no-arm                     Skip arm/takeoff (vision/state-machine smoke)\n"
+        << "  --unsafe-assume-rc-present   Bypass MAVLink RC gate for real-flight debugging\n"
         << "  -h, --help                   Show this help\n";
 }
 
@@ -134,6 +157,7 @@ Options parseOptions(int argc, char** argv)
         };
         if (a == "--config") o.config_dir = next("--config");
         else if (a == "--target") o.target = next("--target");
+        else if (a == "--autopilot") o.autopilot_uri = next("--autopilot");
         else if (a == "--vision") o.vision = next("--vision");
         else if (a == "--world") o.world = next("--world");
         else if (a == "--line-mode") o.line_mode_override = next("--line-mode");
@@ -149,6 +173,7 @@ Options parseOptions(int argc, char** argv)
         else if (a == "--no-telemetry") o.send_telemetry = false;
         else if (a == "--allow-arm-takeoff") o.allow_arm_takeoff = true;
         else if (a == "--no-arm") o.no_arm = true;
+        else if (a == "--unsafe-assume-rc-present") o.unsafe_assume_rc_present = true;
         else if (a == "-h" || a == "--help") { printUsage(); std::exit(0); }
         else {
             std::cerr << "unknown option: " << a << "\n";
@@ -160,6 +185,8 @@ Options parseOptions(int argc, char** argv)
 }
 
 struct Configs {
+    EndpointConfig endpoint;
+    oautopilot::MavlinkIds mavlink;
     ocommon::NetworkConfig network;
     ocommon::VisionConfig vision;
     omission::GridMissionConfig mission;
@@ -167,10 +194,191 @@ struct Configs {
     ocontrol::GridControlMapperConfig mapper;
     omission::AltitudePolicyConfig altitude;
     omission::SnakePlannerConfig snake;
-    std::string udp_listen_host = "0.0.0.0";
-    std::uint16_t udp_listen_port = 14550;
+    osafety::SafetyConfig safety;
+    std::string vision_source = "gazebo";
     int setpoint_rate_hz = 20;
 };
+
+std::uint16_t parsePort(const std::string& value, std::uint16_t fallback)
+{
+    const int parsed = parseInt(value, fallback);
+    if (parsed <= 0 || parsed > 65535) {
+        return fallback;
+    }
+    return static_cast<std::uint16_t>(parsed);
+}
+
+void applyAutopilotUri(Configs& cfg, const std::string& uri)
+{
+    if (uri.rfind("udp://", 0) == 0) {
+        const std::string rest = uri.substr(6);
+        const auto colon = rest.rfind(':');
+        cfg.endpoint.kind = TransportKind::Udp;
+        cfg.endpoint.label = "sitl";
+        if (colon == std::string::npos) {
+            cfg.endpoint.listen_port = parsePort(rest, cfg.endpoint.listen_port);
+            return;
+        }
+        cfg.endpoint.listen_host = rest.substr(0, colon);
+        cfg.endpoint.listen_port =
+            parsePort(rest.substr(colon + 1), cfg.endpoint.listen_port);
+        return;
+    }
+
+    if (uri.rfind("serial://", 0) == 0) {
+        std::string rest = uri.substr(9);
+        while (!rest.empty() && rest.front() == '/') {
+            if (rest.rfind("/dev/", 0) == 0) {
+                break;
+            }
+            rest.erase(rest.begin());
+        }
+        const auto colon = rest.rfind(':');
+        cfg.endpoint.kind = TransportKind::Serial;
+        cfg.endpoint.label = "ardupilot_serial";
+        if (colon == std::string::npos) {
+            cfg.endpoint.serial_device = rest;
+            return;
+        }
+        cfg.endpoint.serial_device = rest.substr(0, colon);
+        cfg.endpoint.serial_baudrate =
+            parseInt(rest.substr(colon + 1), cfg.endpoint.serial_baudrate);
+        return;
+    }
+
+    throw std::runtime_error("unsupported --autopilot URI: " + uri);
+}
+
+void applyTransportConfig(const toml::node_view<toml::node> transport, Configs& cfg)
+{
+    if (!transport) return;
+    const std::string kind = transport["kind"].value_or(std::string(""));
+    if (kind == "udp") {
+        cfg.endpoint.kind = TransportKind::Udp;
+    } else if (kind == "serial") {
+        cfg.endpoint.kind = TransportKind::Serial;
+    }
+    cfg.endpoint.listen_host =
+        transport["listen_host"].value_or(cfg.endpoint.listen_host);
+    cfg.endpoint.listen_port = static_cast<std::uint16_t>(
+        transport["listen_port"].value_or(static_cast<int>(cfg.endpoint.listen_port)));
+}
+
+void applySerialConfig(const toml::node_view<toml::node> serial, Configs& cfg)
+{
+    if (!serial) return;
+    cfg.endpoint.serial_device =
+        serial["device"].value_or(cfg.endpoint.serial_device);
+    cfg.endpoint.serial_baudrate =
+        serial["baudrate"].value_or(cfg.endpoint.serial_baudrate);
+}
+
+void applyMavlinkConfig(const toml::node_view<toml::node> mavlink, Configs& cfg)
+{
+    if (!mavlink) return;
+    cfg.mavlink.system_id = static_cast<std::uint8_t>(
+        mavlink["system_id"].value_or(static_cast<int>(cfg.mavlink.system_id)));
+    cfg.mavlink.component_id = static_cast<std::uint8_t>(
+        mavlink["component_id"].value_or(static_cast<int>(cfg.mavlink.component_id)));
+    cfg.mavlink.target_system = static_cast<std::uint8_t>(
+        mavlink["target_system"].value_or(static_cast<int>(cfg.mavlink.target_system)));
+    cfg.mavlink.target_component = static_cast<std::uint8_t>(
+        mavlink["target_component"].value_or(static_cast<int>(cfg.mavlink.target_component)));
+    cfg.setpoint_rate_hz =
+        mavlink["setpoint_rate_hz"].value_or(cfg.setpoint_rate_hz);
+}
+
+void applySafetyTimeouts(const toml::node_view<toml::node> timeouts, Configs& cfg)
+{
+    if (!timeouts) return;
+    cfg.safety.line_lost_ms =
+        timeouts["line_lost_ms"].value_or(cfg.safety.line_lost_ms);
+    cfg.safety.autopilot_heartbeat_lost_ms =
+        timeouts["autopilot_heartbeat_lost_ms"].value_or(
+            cfg.safety.autopilot_heartbeat_lost_ms);
+    cfg.safety.mission_timeout_ms =
+        timeouts["mission_timeout_ms"].value_or(cfg.safety.mission_timeout_ms);
+    cfg.mission.autopilot_heartbeat_timeout_s =
+        static_cast<double>(cfg.safety.autopilot_heartbeat_lost_ms) / 1000.0;
+    cfg.mission.mission_timeout_s =
+        static_cast<double>(cfg.safety.mission_timeout_ms) / 1000.0;
+}
+
+void applySafetyRc(const toml::node_view<toml::node> rc, Configs& cfg)
+{
+    if (!rc) return;
+    cfg.safety.rc_required =
+        rc["rc_required"].value_or(cfg.safety.rc_required);
+    cfg.safety.assume_rc_present =
+        rc["assume_rc_present"].value_or(cfg.safety.assume_rc_present);
+    cfg.safety.rc_lost_ms =
+        rc["rc_lost_ms"].value_or(cfg.safety.rc_lost_ms);
+}
+
+void applyDebugVideoConfig(const toml::node_view<toml::node> debug_video, Configs& cfg)
+{
+    if (!debug_video) return;
+    cfg.vision.debug_video.enabled =
+        debug_video["enabled"].value_or(cfg.vision.debug_video.enabled);
+    cfg.vision.debug_video.send_fps =
+        debug_video["send_fps"].value_or(cfg.vision.debug_video.send_fps);
+    cfg.vision.debug_video.jpeg_quality =
+        debug_video["jpeg_quality"].value_or(cfg.vision.debug_video.jpeg_quality);
+    cfg.vision.debug_video.chunk_pacing_us =
+        debug_video["chunk_pacing_us"].value_or(cfg.vision.debug_video.chunk_pacing_us);
+    cfg.vision.debug_video.send_width =
+        debug_video["send_width"].value_or(cfg.vision.debug_video.send_width);
+    cfg.vision.debug_video.send_height =
+        debug_video["send_height"].value_or(cfg.vision.debug_video.send_height);
+}
+
+void applyLineControllerConfig(const toml::node_view<toml::node> line_controller, Configs& cfg)
+{
+    if (!line_controller) return;
+    cfg.controller.offset_kp =
+        line_controller["offset_kp"].value_or(cfg.controller.offset_kp);
+    cfg.controller.angle_yaw_kp =
+        line_controller["angle_yaw_kp"].value_or(cfg.controller.angle_yaw_kp);
+    cfg.controller.offset_yaw_kp =
+        line_controller["offset_yaw_kp"].value_or(cfg.controller.offset_yaw_kp);
+    cfg.controller.max_lateral_mps =
+        line_controller["max_lateral_mps"].value_or(cfg.controller.max_lateral_mps);
+    cfg.controller.max_yaw_rate_rad_s =
+        line_controller["max_yaw_rate_rad_s"].value_or(cfg.controller.max_yaw_rate_rad_s);
+    cfg.controller.min_confidence =
+        line_controller["min_confidence"].value_or(cfg.controller.min_confidence);
+    cfg.controller.offset_deadband_norm =
+        line_controller["offset_deadband_norm"].value_or(cfg.controller.offset_deadband_norm);
+    const double angle_deadband_deg =
+        line_controller["angle_deadband_deg"].value_or(
+            cfg.controller.angle_deadband_rad * 180.0 / M_PI);
+    cfg.controller.angle_deadband_rad = angle_deadband_deg * M_PI / 180.0;
+    cfg.controller.invert_lateral =
+        line_controller["invert_lateral"].value_or(cfg.controller.invert_lateral);
+    cfg.controller.invert_yaw =
+        line_controller["invert_yaw"].value_or(cfg.controller.invert_yaw);
+    cfg.controller.output_ema_alpha =
+        line_controller["output_ema_alpha"].value_or(cfg.controller.output_ema_alpha);
+    cfg.controller.max_lateral_rate_mps =
+        line_controller["max_lateral_rate_mps"].value_or(cfg.controller.max_lateral_rate_mps);
+    cfg.controller.max_yaw_rate_change_rad_s =
+        line_controller["max_yaw_rate_change_rad_s"].value_or(
+            cfg.controller.max_yaw_rate_change_rad_s);
+    cfg.controller.forward_confidence_scale =
+        line_controller["forward_confidence_scale"].value_or(
+            cfg.controller.forward_confidence_scale);
+}
+
+void applyAltitudeHoldConfig(const toml::node_view<toml::node> altitude_hold, Configs& cfg)
+{
+    if (!altitude_hold) return;
+    cfg.controller.altitude_kp =
+        altitude_hold["kp"].value_or(cfg.controller.altitude_kp);
+    cfg.controller.max_vz_down_mps =
+        altitude_hold["max_vz_mps"].value_or(cfg.controller.max_vz_down_mps);
+    cfg.controller.altitude_deadband_m =
+        altitude_hold["deadband_m"].value_or(cfg.controller.altitude_deadband_m);
+}
 
 void applyMarkerHoverConfig(const toml::node_view<toml::node> marker_hover,
                             Configs& cfg)
@@ -240,11 +448,13 @@ void applyMarkerHoverConfigFile(const std::string& path, Configs& cfg)
 
 void loadConfigs(const Options& opt, Configs& cfg)
 {
+    const std::string target = opt.target;
+
     // Network (shared with line-follow path)
-    cfg.network = ocommon::loadNetworkConfig(joinPath(opt.config_dir, "network.toml"));
+    cfg.network = ocommon::loadNetworkConfig(opt.config_dir);
 
     // Vision
-    cfg.vision = ocommon::loadVisionConfig(joinPath(opt.config_dir, "vision.toml"));
+    cfg.vision = ocommon::loadVisionConfig(opt.config_dir);
     if (!opt.line_mode_override.empty()) {
         cfg.vision.line.mode = opt.line_mode_override;
     }
@@ -253,6 +463,35 @@ void loadConfigs(const Options& opt, Configs& cfg)
     }
     if (!opt.gcs_ip_override.empty()) {
         cfg.network.gcs_ip = opt.gcs_ip_override;
+    }
+
+    try {
+        auto ap = toml::parse_file(joinPath(opt.config_dir, "autopilot.toml"));
+        applyTransportConfig(ap["transport"], cfg);
+        applySerialConfig(ap["serial"], cfg);
+        applyMavlinkConfig(ap["mavlink"], cfg);
+    } catch (const toml::parse_error& e) {
+        std::cerr << "[config] autopilot.toml parse warning: " << e.what() << "\n";
+    }
+
+    if (target == "sitl") {
+        cfg.endpoint.kind = TransportKind::Udp;
+        cfg.endpoint.label = "sitl";
+        cfg.vision_source = "gazebo";
+    } else if (target == "ardupilot_serial") {
+        cfg.endpoint.kind = TransportKind::Serial;
+        cfg.endpoint.label = "ardupilot_serial";
+        cfg.vision_source = "rpicam";
+    } else {
+        throw std::runtime_error("unknown --target: " + opt.target);
+    }
+
+    try {
+        auto s = toml::parse_file(joinPath(opt.config_dir, "safety.toml"));
+        applySafetyTimeouts(s["timeouts"], cfg);
+        applySafetyRc(s["rc"], cfg);
+    } catch (const toml::parse_error& e) {
+        std::cerr << "[config] safety.toml parse warning: " << e.what() << "\n";
     }
 
     // Mission config from mission.toml [grid_mission]
@@ -401,28 +640,6 @@ void loadConfigs(const Options& opt, Configs& cfg)
     cfg.altitude.vertiport_altitude_m = cfg.mission.vertiport_altitude_m;
     cfg.altitude.cruise_altitude_m = cfg.mission.cruise_altitude_m;
 
-    // Load runtime profile (UDP transport for SITL)
-    const std::string runtime_file = (opt.target == "sitl")
-        ? joinPath(opt.config_dir, opt.world == "grid"
-            ? "runtime.sitl.grid.toml"
-            : "runtime.sitl.toml")
-        : joinPath(opt.config_dir, "autopilot.toml");
-    try {
-        auto rt = toml::parse_file(runtime_file);
-        auto tr = rt["transport"];
-        if (tr) {
-            cfg.udp_listen_host = tr["listen_host"].value_or(std::string{cfg.udp_listen_host});
-            cfg.udp_listen_port = static_cast<std::uint16_t>(
-                tr["listen_port"].value_or(static_cast<int>(cfg.udp_listen_port)));
-        }
-        auto src = rt["vision"]["source"];
-        if (src && opt.gazebo_topic_override.empty()) {
-            cfg.vision.source.gazebo_topic = src["gazebo_topic"].value_or(std::string{cfg.vision.source.gazebo_topic});
-        }
-    } catch (const toml::parse_error& e) {
-        std::cerr << "[config] runtime profile parse warning (" << runtime_file << "): " << e.what() << "\n";
-    }
-
     // Reasonable controller defaults for grid mission (lower yaw rate to settle in turns)
     cfg.controller.forward_mps = 0.25;
     cfg.controller.offset_kp = 0.35;
@@ -434,11 +651,62 @@ void loadConfigs(const Options& opt, Configs& cfg)
     cfg.controller.altitude_kp = 0.4;
     cfg.controller.max_vz_down_mps = 0.35;
 
-    // Marker hover settings live in mission/runtime profiles and affect both
-    // the controller gains and the grid mission's early-exit centering gate.
-    // Apply them after grid defaults so they are not overwritten.
+    // Marker hover settings from mission.toml apply before runtime overrides.
     applyMarkerHoverConfigFile(joinPath(opt.config_dir, "mission.toml"), cfg);
-    applyMarkerHoverConfigFile(runtime_file, cfg);
+
+    // Load target runtime profile. SITL keeps the existing grid/line split;
+    // ardupilot_serial uses the real serial+rpicam profile.
+    const std::string runtime_file = (target == "sitl")
+        ? joinPath(opt.config_dir, opt.world == "grid"
+            ? "runtime.sitl.grid.toml"
+            : "runtime.sitl.toml")
+        : joinPath(opt.config_dir, "runtime.ardupilot_serial.toml");
+    try {
+        auto rt = toml::parse_file(runtime_file);
+        if (const auto runtime = rt["runtime"]) {
+            cfg.vision_source = runtime["vision"].value_or(cfg.vision_source);
+        }
+        applyTransportConfig(rt["transport"], cfg);
+        applySerialConfig(rt["serial"], cfg);
+        applyMavlinkConfig(rt["mavlink"], cfg);
+        applySafetyTimeouts(rt["safety"]["timeouts"], cfg);
+        applySafetyRc(rt["safety"]["rc"], cfg);
+        applyDebugVideoConfig(rt["debug_video"], cfg);
+        applyLineControllerConfig(rt["line_controller"], cfg);
+        applyAltitudeHoldConfig(rt["altitude_hold"], cfg);
+        applyMarkerHoverConfig(rt["marker_hover"], cfg);
+        const auto src = rt["vision"]["source"];
+        if (src && opt.gazebo_topic_override.empty()) {
+            cfg.vision.source.gazebo_topic = src["gazebo_topic"].value_or(std::string{cfg.vision.source.gazebo_topic});
+            cfg.vision.source.read_timeout_ms =
+                src["read_timeout_ms"].value_or(cfg.vision.source.read_timeout_ms);
+        }
+    } catch (const toml::parse_error& e) {
+        std::cerr << "[config] runtime profile parse warning (" << runtime_file << "): " << e.what() << "\n";
+    }
+
+    if (!opt.vision.empty()) {
+        cfg.vision_source = opt.vision;
+    }
+    if (cfg.vision_source != "fake" &&
+        cfg.vision_source != "gazebo" &&
+        cfg.vision_source != "rpicam") {
+        throw std::runtime_error("unknown --vision: " + cfg.vision_source);
+    }
+
+    if (!opt.gazebo_topic_override.empty()) {
+        cfg.vision.source.gazebo_topic = opt.gazebo_topic_override;
+    }
+    if (!opt.autopilot_uri.empty()) {
+        applyAutopilotUri(cfg, opt.autopilot_uri);
+    }
+    if (!opt.gcs_ip_override.empty()) {
+        cfg.network.gcs_ip = opt.gcs_ip_override;
+    }
+    if (opt.unsafe_assume_rc_present) {
+        cfg.safety.assume_rc_present = true;
+        cfg.safety.rc_required = false;
+    }
 }
 
 std::unique_ptr<ovision::FrameSource> createFrameSource(const std::string& kind)
@@ -469,6 +737,181 @@ const char* intersectionTypeNameShort(onboard::vision::IntersectionType t)
     case onboard::vision::IntersectionType::Cross:    return "+";
     }
     return "?";
+}
+
+bool recent(Clock::time_point timestamp, Clock::time_point now, int max_age_ms)
+{
+    if (timestamp.time_since_epoch().count() == 0) {
+        return false;
+    }
+    const auto age_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - timestamp).count();
+    return age_ms >= 0 && age_ms <= max_age_ms;
+}
+
+bool heartbeatRecent(
+    const oautopilot::AutopilotState& state,
+    const omission::GridMissionConfig& mission,
+    Clock::time_point now)
+{
+    if (!state.heartbeat_seen) {
+        return false;
+    }
+    const int timeout_ms = std::max(
+        1,
+        static_cast<int>(mission.autopilot_heartbeat_timeout_s * 1000.0));
+    return recent(state.last_heartbeat_time, now, timeout_ms);
+}
+
+bool rcInputFresh(
+    const oautopilot::AutopilotState& state,
+    const osafety::SafetyConfig& safety,
+    Clock::time_point now)
+{
+    if (safety.assume_rc_present || !safety.rc_required) {
+        return true;
+    }
+    if (!state.rc_channel_count || *state.rc_channel_count <= 0) {
+        return false;
+    }
+    if (state.last_rc_channels_time.time_since_epoch().count() == 0) {
+        return false;
+    }
+    const auto rc_age_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - state.last_rc_channels_time)
+            .count();
+    return rc_age_ms <= safety.rc_lost_ms;
+}
+
+bool waitRcReady(
+    oautopilot::AutopilotMavlinkAdapter& autopilot,
+    const osafety::SafetyConfig& safety,
+    std::chrono::seconds timeout)
+{
+    if (safety.assume_rc_present || !safety.rc_required) {
+        std::cout << "[safety] RC gate assumed-present or optional\n";
+        return true;
+    }
+
+    std::cout << "[safety] waiting for RC input via MAVLink RC_CHANNELS...\n";
+    const auto deadline = Clock::now() + timeout;
+    while (Clock::now() < deadline) {
+        autopilot.poll(200);
+        if (rcInputFresh(autopilot.state(), safety, Clock::now())) {
+            const auto& state = autopilot.state();
+            std::cout << "[safety] RC input ready channels="
+                      << state.rc_channel_count.value_or(0)
+                      << " rssi=" << state.rc_rssi.value_or(-1) << "\n";
+            return true;
+        }
+    }
+    const auto& state = autopilot.state();
+    std::cerr << "[safety] RC gate failed: channels="
+              << state.rc_channel_count.value_or(0)
+              << " rssi=" << state.rc_rssi.value_or(-1)
+              << " required=true\n";
+    return false;
+}
+
+bool ekfRelativeAidingReady(
+    const oautopilot::AutopilotState& state,
+    Clock::time_point now)
+{
+    constexpr std::uint16_t kEkfAttitude = 1u << 0;
+    constexpr std::uint16_t kEkfVelocityHoriz = 1u << 1;
+    constexpr std::uint16_t kEkfPosHorizRel = 1u << 3;
+    constexpr std::uint16_t kEkfPredPosHorizRel = 1u << 8;
+
+    if (!state.ekf_flags || !recent(state.last_ekf_status_time, now, 1500)) {
+        return false;
+    }
+    const auto flags = *state.ekf_flags;
+    return (flags & kEkfAttitude) != 0 &&
+           (flags & kEkfVelocityHoriz) != 0 &&
+           ((flags & kEkfPosHorizRel) != 0 ||
+            (flags & kEkfPredPosHorizRel) != 0);
+}
+
+bool opticalFlowReady(
+    const oautopilot::AutopilotState& state,
+    Clock::time_point now)
+{
+    if (!state.optical_flow_quality ||
+        !recent(state.last_optical_flow_time, now, 1500)) {
+        return false;
+    }
+    return *state.optical_flow_quality >= 50;
+}
+
+bool localHoldEstimateReady(
+    const oautopilot::AutopilotState& state,
+    Clock::time_point now)
+{
+    const bool local_position_ready =
+        state.local_x_m.has_value() &&
+        state.local_y_m.has_value() &&
+        state.local_z_m.has_value() &&
+        state.local_vx_mps.has_value() &&
+        state.local_vy_mps.has_value() &&
+        state.local_vz_mps.has_value();
+    const bool range_ready =
+        state.distance_sensor_m.has_value() &&
+        *state.distance_sensor_m >= 0.03 &&
+        *state.distance_sensor_m <= 8.0;
+    return local_position_ready &&
+           range_ready &&
+           opticalFlowReady(state, now) &&
+           ekfRelativeAidingReady(state, now);
+}
+
+void printLocalEstimateStatus(const oautopilot::AutopilotState& state)
+{
+    std::cout << "[preflight] local_xy=(" << state.local_x_m.value_or(-999.0)
+              << ',' << state.local_y_m.value_or(-999.0) << ')'
+              << " z=" << state.local_z_m.value_or(-999.0)
+              << " vel_ned=(" << state.local_vx_mps.value_or(-999.0)
+              << ',' << state.local_vy_mps.value_or(-999.0)
+              << ',' << state.local_vz_mps.value_or(-999.0) << ')'
+              << " range=" << state.distance_sensor_m.value_or(-1.0)
+              << " flow_q=" << state.optical_flow_quality.value_or(-1)
+              << " flow_dist=" << state.optical_flow_ground_distance_m.value_or(-1.0)
+              << " ekf_flags=0x" << std::hex << state.ekf_flags.value_or(0)
+              << std::dec << "\n";
+}
+
+bool waitLocalHoldEstimateReady(
+    oautopilot::AutopilotMavlinkAdapter& autopilot,
+    std::chrono::seconds timeout)
+{
+    std::cout << "[preflight] waiting for local XY hold estimate: local position, range, optical flow, EKF\n";
+    const auto deadline = Clock::now() + timeout;
+    auto ready_since = Clock::time_point {};
+    auto last_log = Clock::now() - std::chrono::seconds(1);
+    while (Clock::now() < deadline) {
+        autopilot.poll(100);
+        const auto now = Clock::now();
+        const bool ready = localHoldEstimateReady(autopilot.state(), now);
+        if (ready) {
+            if (ready_since.time_since_epoch().count() == 0) {
+                ready_since = now;
+            }
+            if (now - ready_since >= std::chrono::milliseconds(1500)) {
+                printLocalEstimateStatus(autopilot.state());
+                std::cout << "[preflight] local XY hold estimate ready\n";
+                return true;
+            }
+        } else {
+            ready_since = Clock::time_point {};
+        }
+        if (now - last_log >= std::chrono::seconds(1)) {
+            printLocalEstimateStatus(autopilot.state());
+            last_log = now;
+        }
+    }
+    std::cerr << "[preflight] local XY hold estimate not ready before timeout\n";
+    printLocalEstimateStatus(autopilot.state());
+    return false;
 }
 
 void logState(const omission::GridMissionOutput& out,
@@ -555,27 +998,52 @@ int main(int argc, char** argv)
         std::cerr << "error: --marker-count is required (positive integer)\n";
         return 2;
     }
-    if (opt.target == "pixhawk1" && !opt.allow_arm_takeoff && !opt.no_arm) {
-        std::cerr << "error: pixhawk1 target requires --allow-arm-takeoff (or --no-arm for bench)\n";
+    Configs cfg;
+    try {
+        loadConfigs(opt, cfg);
+    } catch (const std::exception& e) {
+        std::cerr << "config error: " << e.what() << "\n";
         return 2;
     }
 
-    Configs cfg;
-    loadConfigs(opt, cfg);
+    const bool real_serial_target = cfg.endpoint.kind == TransportKind::Serial;
+    if (real_serial_target && !opt.allow_arm_takeoff && !opt.no_arm) {
+        std::cerr << "error: ardupilot_serial target requires --allow-arm-takeoff (or --no-arm for bench)\n";
+        return 2;
+    }
+    if (opt.unsafe_assume_rc_present) {
+        std::cerr
+            << "[safety] WARNING: --unsafe-assume-rc-present bypasses the MAVLink RC gate\n";
+    }
 
     std::cout << "[grid-mission] starting target=" << opt.target
-              << " vision=" << opt.vision
+              << " vision=" << cfg.vision_source
               << " world=" << opt.world
               << " line_mode=" << opt.line_mode_override
               << " marker_count=" << opt.marker_count
               << " vertiport_id=" << cfg.mission.vertiport_marker_id
               << " revisit_order=" << omission::revisitOrderName(cfg.mission.revisit_order)
-              << " udp=" << cfg.udp_listen_host << ":" << cfg.udp_listen_port
+              << " autopilot="
+              << (cfg.endpoint.kind == TransportKind::Serial
+                      ? cfg.endpoint.serial_device + ":" + std::to_string(cfg.endpoint.serial_baudrate)
+                      : "udp:" + std::to_string(cfg.endpoint.listen_port))
               << " gcs=" << cfg.network.gcs_ip << ":" << cfg.network.telemetry_port
+              << " rc_required=" << (cfg.safety.rc_required ? "true" : "false")
+              << " assume_rc=" << (cfg.safety.assume_rc_present ? "true" : "false")
+              << " rate_hz=" << cfg.setpoint_rate_hz
               << "\n";
+    std::cout << "[control] gains offset_kp=" << cfg.controller.offset_kp
+              << " angle_yaw_kp=" << cfg.controller.angle_yaw_kp
+              << " offset_yaw_kp=" << cfg.controller.offset_yaw_kp
+              << " max_lat=" << cfg.controller.max_lateral_mps
+              << " max_yaw=" << cfg.controller.max_yaw_rate_rad_s
+              << " ema_alpha=" << cfg.controller.output_ema_alpha
+              << " lat_rate=" << cfg.controller.max_lateral_rate_mps
+              << " yaw_rate_change=" << cfg.controller.max_yaw_rate_change_rad_s
+              << " fwd_conf_scale=" << cfg.controller.forward_confidence_scale << "\n";
 
     // Vision setup
-    auto frame_source = createFrameSource(opt.vision);
+    auto frame_source = createFrameSource(cfg.vision_source);
     ovision::FrameSourceOptions fs_opts {cfg.vision};
     if (!frame_source->open(fs_opts)) {
         std::cerr << "vision source open failed: " << frame_source->lastError() << "\n";
@@ -595,27 +1063,37 @@ int main(int argc, char** argv)
         : cfg.vision.debug_video.enabled;
     pub_opts.send_telemetry = opt.send_telemetry;
     pub_opts.note = "grid_mission";
-    pub_opts.camera_sensor_model = cfg.vision.camera.sensor_model;
+    pub_opts.camera_sensor_model =
+        cfg.vision_source == "gazebo" ? "gazebo_downward_camera" : cfg.vision.camera.sensor_model;
     if (!publisher.open(pub_opts)) {
         std::cerr << "[gcs] warning: publisher open failed: " << publisher.lastError() << "\n";
     }
 
-    // Autopilot setup (UDP only for now; pixhawk1 path requires serial — out of scope first pass)
-    if (opt.target != "sitl" && !opt.no_arm) {
-        std::cerr << "error: pixhawk1 grid mission not yet implemented in grid_mission_node (use --no-arm for vision smoke)\n";
-        return 2;
+    std::unique_ptr<oautopilot::MavlinkTransport> transport;
+    if (cfg.endpoint.kind == TransportKind::Serial) {
+        transport = std::make_unique<oautopilot::SerialMavlinkTransport>(
+            cfg.endpoint.serial_device,
+            cfg.endpoint.serial_baudrate,
+            static_cast<std::uint8_t>(MAVLINK_COMM_0),
+            cfg.endpoint.label);
+    } else {
+        transport = std::make_unique<oautopilot::UdpMavlinkTransport>(
+            cfg.endpoint.listen_port,
+            static_cast<std::uint8_t>(MAVLINK_COMM_0),
+            cfg.endpoint.label);
     }
-    auto udp_transport = std::make_unique<oautopilot::UdpMavlinkTransport>(
-        cfg.udp_listen_port,
-        static_cast<std::uint8_t>(MAVLINK_COMM_0),
-        std::string("grid_mission"));
-    oautopilot::MavlinkIds mavlink_ids; // defaults
-    oautopilot::AutopilotMavlinkAdapter autopilot(std::move(udp_transport), mavlink_ids);
+    oautopilot::AutopilotMavlinkAdapter autopilot(std::move(transport), cfg.mavlink);
 
-    std::cout << "[mavlink] waiting for heartbeat on " << cfg.udp_listen_host
-              << ":" << cfg.udp_listen_port << "...\n";
+    std::cout << "[mavlink] waiting for heartbeat on "
+              << (cfg.endpoint.kind == TransportKind::Serial
+                      ? cfg.endpoint.serial_device
+                      : cfg.endpoint.listen_host + ":" + std::to_string(cfg.endpoint.listen_port))
+              << "...\n";
     autopilot.waitHeartbeat(std::chrono::seconds(30));
-    std::cout << "[mavlink] heartbeat received.\n";
+    std::cout << "[mavlink] heartbeat received system="
+              << static_cast<int>(autopilot.state().target_system)
+              << " component=" << static_cast<int>(autopilot.state().target_component)
+              << " mode=" << autopilot.state().mode_name << "\n";
     autopilot.requestDefaultStreams();
 
     // Build mission stack
@@ -633,6 +1111,15 @@ int main(int argc, char** argv)
     ocontrol::GridControlMapper mapper(cfg.mapper, &line_controller);
 
     if (!opt.no_arm) {
+        if (!waitRcReady(autopilot, cfg.safety, std::chrono::seconds(10))) {
+            std::cerr << "[safety] refusing GUIDED/arm/takeoff until RC input is visible\n";
+            return 2;
+        }
+        if (real_serial_target &&
+            !waitLocalHoldEstimateReady(autopilot, std::chrono::seconds(15))) {
+            std::cerr << "[safety] refusing GUIDED/arm/takeoff until optical-flow local hold is ready\n";
+            return 2;
+        }
         std::cout << "[mavlink] setting GUIDED mode...\n";
         autopilot.setGuidedMode(std::chrono::seconds(10));
         std::cout << "[mavlink] arming...\n";
@@ -710,8 +1197,8 @@ int main(int argc, char** argv)
         const auto& apst = autopilot.state();
         min.armed = apst.armed;
         min.guided_mode = apst.mode_name == "GUIDED";
-        min.heartbeat_recent = apst.heartbeat_seen;
-        min.autopilot_ready = apst.heartbeat_seen;
+        min.heartbeat_recent = heartbeatRecent(apst, cfg.mission, loop_start);
+        min.autopilot_ready = min.heartbeat_recent;
         min.rangefinder_m = apst.distance_sensor_m;
         min.local_x_m = apst.local_x_m;
         min.local_y_m = apst.local_y_m;
@@ -781,13 +1268,14 @@ int main(int argc, char** argv)
         const auto sp = mapper.compute(cmin);
 
         // Land request
-        if (mout.request_land_mode) {
+        if (!opt.no_arm && mout.request_land_mode) {
             try {
                 autopilot.setLandMode(std::chrono::seconds(5));
             } catch (const std::exception& e) {
                 std::cerr << "[mavlink] setLandMode error: " << e.what() << "\n";
             }
-        } else if (mout.intent != ocontrol::GridControlIntent::Idle &&
+        } else if (!opt.no_arm &&
+                   mout.intent != ocontrol::GridControlIntent::Idle &&
                    mout.intent != ocontrol::GridControlIntent::Land) {
             oautopilot::BodyVelocityCommand cmd;
             cmd.vx_forward_mps = sp.vx_forward_mps;
