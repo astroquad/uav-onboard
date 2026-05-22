@@ -108,6 +108,9 @@ Start `uav_gcs_vision_debug` on the laptop first, then run:
 Onboard sends raw camera JPEG only when `--video` is enabled. Marker boxes,
 line contours, intersection labels, and grid-map text are drawn by GCS from
 telemetry metadata.
+`line_follow_node`, `grid_mission_node`, and `vision_debug_node` all accept
+`--fps <n>` to override raw debug-video send FPS; the publisher clamps it to
+the configured camera FPS.
 
 Current vision path:
 
@@ -294,6 +297,9 @@ serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:
   --line-mode dark_on_light --marker-count 4 --revisit-order asc \
   --video --allow-arm-takeoff
 ```
+
+Add `--fps 12` only when you intentionally want 12fps raw debug video on the
+GCS link; omitting it keeps the real serial default at 5fps.
 
 Do not run real serial mission paths until RC takeover, battery telemetry,
 MTF-01 optical-flow/range local estimate, motor order, prop direction, and a

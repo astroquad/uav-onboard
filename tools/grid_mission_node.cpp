@@ -86,8 +86,10 @@ struct Options {
     int marker_count = -1;
     int vertiport_marker_id = 23;
     int max_intersections_override = 0;
+    int debug_video_fps_override = 0;
     std::string snake_initial_turn = "auto";
     std::string revisit_order;
+    bool debug_video_fps_specified = false;
     bool send_video = false;
     bool send_video_overridden = false;
     bool send_telemetry = true;
@@ -134,6 +136,7 @@ void printUsage()
         << "  --max-intersections <n>      Safety cap on recorded nodes\n"
         << "  --snake-initial-turn <auto|left|right>\n"
         << "  --revisit-order <asc|desc>     Marker revisit order (default: desc)\n"
+        << "  --fps <n>                   Override GCS debug video send FPS\n"
         << "  --video                      Enable GCS MJPEG streaming\n"
         << "  --no-video                   Disable GCS MJPEG streaming\n"
         << "  --no-telemetry               Disable GCS telemetry sending\n"
@@ -166,6 +169,10 @@ Options parseOptions(int argc, char** argv)
         else if (a == "--marker-count") o.marker_count = parseInt(next("--marker-count"), -1);
         else if (a == "--vertiport-marker-id") o.vertiport_marker_id = parseInt(next("--vertiport-marker-id"), 23);
         else if (a == "--max-intersections") o.max_intersections_override = parseInt(next("--max-intersections"), 0);
+        else if (a == "--fps") {
+            o.debug_video_fps_override = parseInt(next("--fps"), 0);
+            o.debug_video_fps_specified = true;
+        }
         else if (a == "--snake-initial-turn") o.snake_initial_turn = next("--snake-initial-turn");
         else if (a == "--revisit-order") o.revisit_order = next("--revisit-order");
         else if (a == "--video") { o.send_video = true; o.send_video_overridden = true; }
@@ -702,6 +709,13 @@ void loadConfigs(const Options& opt, Configs& cfg)
     }
     if (!opt.gcs_ip_override.empty()) {
         cfg.network.gcs_ip = opt.gcs_ip_override;
+    }
+    if (opt.debug_video_fps_specified) {
+        if (opt.debug_video_fps_override <= 0) {
+            throw std::runtime_error("--fps must be positive");
+        }
+        cfg.vision.debug_video.send_fps = opt.debug_video_fps_override;
+        cfg.vision.debug_video.enabled = true;
     }
     if (opt.unsafe_assume_rc_present) {
         cfg.safety.assume_rc_present = true;

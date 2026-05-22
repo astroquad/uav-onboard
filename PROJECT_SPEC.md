@@ -295,6 +295,10 @@ send_fps = 5
 chunk_pacing_us = 150
 ```
 
+`vision_debug_node`, `line_follow_node`, and `grid_mission_node` expose
+`--fps <n>` as a CLI override for raw debug-video send FPS. Mission telemetry
+still follows processed frames; debug video remains best-effort.
+
 `config/mission.toml [grid_mission]` 주요값:
 
 ```toml
