@@ -69,6 +69,7 @@ struct Options {
     int vertiport_marker_id = 23;
     int max_intersections_override = 0;
     std::string snake_initial_turn = "auto";
+    std::string revisit_order;
     bool send_video = false;
     bool send_video_overridden = false;
     bool send_telemetry = true;
@@ -110,6 +111,7 @@ void printUsage()
         << "  --vertiport-marker-id <id>   Override vertiport ArUco ID (default: 23)\n"
         << "  --max-intersections <n>      Safety cap on recorded nodes\n"
         << "  --snake-initial-turn <auto|left|right>\n"
+        << "  --revisit-order <asc|desc|none>\n"
         << "  --video                      Enable GCS MJPEG streaming\n"
         << "  --no-video                   Disable GCS MJPEG streaming\n"
         << "  --no-telemetry               Disable GCS telemetry sending\n"
@@ -141,6 +143,7 @@ Options parseOptions(int argc, char** argv)
         else if (a == "--vertiport-marker-id") o.vertiport_marker_id = parseInt(next("--vertiport-marker-id"), 23);
         else if (a == "--max-intersections") o.max_intersections_override = parseInt(next("--max-intersections"), 0);
         else if (a == "--snake-initial-turn") o.snake_initial_turn = next("--snake-initial-turn");
+        else if (a == "--revisit-order") o.revisit_order = next("--revisit-order");
         else if (a == "--video") { o.send_video = true; o.send_video_overridden = true; }
         else if (a == "--no-video") { o.send_video = false; o.send_video_overridden = true; }
         else if (a == "--no-telemetry") o.send_telemetry = false;
@@ -313,6 +316,17 @@ void loadConfigs(const Options& opt, Configs& cfg)
             g.snake_passthrough_regular_nodes =
                 gm["snake_passthrough_regular_nodes"].value_or(
                     g.snake_passthrough_regular_nodes);
+            g.revisit_passthrough_regular_nodes =
+                gm["revisit_passthrough_regular_nodes"].value_or(
+                    g.revisit_passthrough_regular_nodes);
+            if (const auto revisit_order = gm["revisit_order"].value<std::string>()) {
+                if (const auto parsed = omission::parseRevisitOrder(*revisit_order)) {
+                    g.revisit_order = *parsed;
+                } else {
+                    std::cerr << "[config] invalid revisit_order: "
+                              << *revisit_order << "\n";
+                }
+            }
             g.snake_post_record_grace_s =
                 gm["snake_post_record_grace_s"].value_or(g.snake_post_record_grace_s);
             g.snake_post_turn_blind_s =
@@ -374,6 +388,14 @@ void loadConfigs(const Options& opt, Configs& cfg)
     if (opt.max_intersections_override > 0) cfg.mission.max_intersections = opt.max_intersections_override;
     if (opt.snake_initial_turn == "left")  cfg.snake.initial_turn = omission::SnakeTurnDir::Left;
     if (opt.snake_initial_turn == "right") cfg.snake.initial_turn = omission::SnakeTurnDir::Right;
+    if (!opt.revisit_order.empty()) {
+        const auto parsed = omission::parseRevisitOrder(opt.revisit_order);
+        if (!parsed.has_value()) {
+            std::cerr << "error: --revisit-order must be asc, desc, or none\n";
+            std::exit(2);
+        }
+        cfg.mission.revisit_order = *parsed;
+    }
     cfg.mission.initial_snake_turn = cfg.snake.initial_turn;
 
     cfg.altitude.vertiport_altitude_m = cfg.mission.vertiport_altitude_m;
@@ -547,6 +569,7 @@ int main(int argc, char** argv)
               << " line_mode=" << opt.line_mode_override
               << " marker_count=" << opt.marker_count
               << " vertiport_id=" << cfg.mission.vertiport_marker_id
+              << " revisit_order=" << omission::revisitOrderName(cfg.mission.revisit_order)
               << " udp=" << cfg.udp_listen_host << ":" << cfg.udp_listen_port
               << " gcs=" << cfg.network.gcs_ip << ":" << cfg.network.telemetry_port
               << "\n";
@@ -671,7 +694,8 @@ int main(int argc, char** argv)
             cur_state == omission::GridState::SnakeStopAtCenter ||
             cur_state == omission::GridState::SnakeTurn90 ||
             cur_state == omission::GridState::SnakeAdvanceOneCell ||
-            cur_state == omission::GridState::SnakeTurn90Again;
+            cur_state == omission::GridState::SnakeTurn90Again ||
+            cur_state == omission::GridState::RevisitForward;
         omission::GridNodeEvent node_event;
         if (tracker_enabled) {
             node_event = tracker.update(idec, frame.frame_id, frame.timestamp_ms);
@@ -783,7 +807,9 @@ int main(int argc, char** argv)
             // event). Peek events would leak an uncommitted "ghost" node ahead
             // of the drone into the GCS map; resending the last commit gives
             // UDP loss redundancy so GCS edges never have gaps.
-            pin.grid_node = last_committed_event;
+            pin.grid_node = mout.grid_map_finalized
+                ? omission::GridNodeEvent {}
+                : last_committed_event;
             // Cycle 13: forward drone fractional position so the GCS can
             // render the heading arrow at a sub-cell position between commits.
             pin.drone_position_valid = mout.drone_position_valid;
@@ -812,8 +838,19 @@ int main(int argc, char** argv)
             pin.mission.markers_expected = cfg.mission.markers_expected;
             pin.mission.snake_complete =
                 mout.state == omission::GridState::SnakeComplete ||
+                mout.state == omission::GridState::RevisitInit ||
+                mout.state == omission::GridState::RevisitForward ||
+                mout.state == omission::GridState::RevisitStopAtTurn ||
+                mout.state == omission::GridState::RevisitTurn90 ||
+                mout.state == omission::GridState::RevisitMarkerHover ||
+                mout.state == omission::GridState::RevisitComplete ||
                 mout.state == omission::GridState::Land ||
                 mout.state == omission::GridState::Done;
+            pin.mission.revisit_active = mout.revisit_active;
+            pin.mission.grid_map_finalized = mout.grid_map_finalized;
+            pin.mission.revisit_order = mout.revisit_order;
+            pin.mission.revisit_target_id = mout.revisit_target_id;
+            pin.mission.revisit_remaining = mout.revisit_remaining;
             pin.mission.last_safety_event = mout.last_safety_event;
             pin.mission.markers_found.clear();
             const double mission_now_s = now_s();
@@ -834,6 +871,10 @@ int main(int argc, char** argv)
                 // frame's timestamp_ms and now_s(). first_seen <= now_s.
                 e.first_seen_s = mission_now_s +
                     (m.first_seen_ms - frame.timestamp_ms) / 1000.0;
+                e.revisited = m.revisited;
+                e.revisited_s = m.revisited
+                    ? mission_now_s + (m.revisited_ms - frame.timestamp_ms) / 1000.0
+                    : 0.0;
                 pin.mission.markers_found.push_back(e);
             }
             pin.processing_latency_ms = processing_latency_ms;

@@ -182,6 +182,8 @@ struct MissionMarkerEntry {
     // Cycle 23: onboard wall-clock seconds when this marker was first
     // committed to the MarkerRegistry. Surfaced on the GCS markers panel.
     double first_seen_s = 0.0;
+    bool revisited = false;
+    double revisited_s = 0.0;
 };
 
 struct MissionTelemetry {
@@ -196,6 +198,11 @@ struct MissionTelemetry {
     std::vector<MissionMarkerEntry> markers_found;
     int markers_expected = 0;
     bool snake_complete = false;
+    bool revisit_active = false;
+    bool grid_map_finalized = false;
+    std::string revisit_order = "none";
+    int revisit_target_id = -1;
+    int revisit_remaining = 0;
     std::string last_safety_event;
 };
 

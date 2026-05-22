@@ -234,6 +234,8 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
                 {"grid_valid", m.grid_valid},
                 {"orientation_deg", m.orientation_deg},
                 {"first_seen_s", m.first_seen_s},
+                {"revisited", m.revisited},
+                {"revisited_s", m.revisited_s},
             });
         }
         message["mission"] = {
@@ -256,6 +258,11 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
             {"markers_found", markers_found},
             {"markers_expected", telemetry.mission.markers_expected},
             {"snake_complete", telemetry.mission.snake_complete},
+            {"revisit_active", telemetry.mission.revisit_active},
+            {"grid_map_finalized", telemetry.mission.grid_map_finalized},
+            {"revisit_order", telemetry.mission.revisit_order},
+            {"revisit_target_id", telemetry.mission.revisit_target_id},
+            {"revisit_remaining", telemetry.mission.revisit_remaining},
             {"last_safety_event", telemetry.mission.last_safety_event},
         };
     }

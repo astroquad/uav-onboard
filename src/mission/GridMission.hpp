@@ -4,6 +4,7 @@
 #include "mission/AltitudePolicy.hpp"
 #include "mission/GridCoordinateTracker.hpp"
 #include "mission/IntersectionDecision.hpp"
+#include "mission/MarkerRevisitPlanner.hpp"
 #include "mission/MarkerRegistry.hpp"
 #include "mission/SnakePlanner.hpp"
 #include "vision/VisionTypes.hpp"
@@ -13,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace onboard::mission {
 
@@ -43,6 +45,12 @@ enum class GridState {
     // SnakeTurn90Again for second turn).
     TurnNodeMarkerHover,
     SnakeComplete,
+    RevisitInit,
+    RevisitForward,
+    RevisitStopAtTurn,
+    RevisitTurn90,
+    RevisitMarkerHover,
+    RevisitComplete,
     Land,
     EmergencyLand,
     Done,
@@ -109,9 +117,8 @@ struct GridMissionConfig {
     double cell_size_m = 3.0;
     double snake_record_lockout_s = 3.0;
     double snake_turn_lockout_s = 3.0;
-    // Marker hover is capped by snake_marker_hover_s, but it may finish early
-    // once the marker is centered enough for a few frames. This avoids
-    // spending the whole dwell chasing pixel-perfect center.
+    // Marker hover holds for the full configured dwell while the controller
+    // keeps centering the marker under the camera.
     double snake_marker_hover_s = 3.0;
     double marker_hover_min_s = 0.8;
     double marker_hover_center_tolerance_norm = 0.10;
@@ -155,6 +162,8 @@ struct GridMissionConfig {
     double snake_record_dwell_s = 0.25;
     double snake_boundary_record_dwell_s = 0.5;
     bool   snake_passthrough_regular_nodes = true;
+    bool   revisit_passthrough_regular_nodes = true;
+    RevisitOrder revisit_order = RevisitOrder::None;
 
     // Cycle 10: after a NodeRecord, ignore boundary watchdog for this many
     // seconds so the last node's branches don't immediately re-trigger.
@@ -277,6 +286,11 @@ struct GridMissionOutput {
     SnakeTurnDir snake_dir = SnakeTurnDir::Unknown;
     bool vertiport_verified = false;
     int  intersections_recorded = 0;
+    bool revisit_active = false;
+    bool grid_map_finalized = false;
+    std::string revisit_order = "none";
+    int revisit_target_id = -1;
+    int revisit_remaining = 0;
     std::string reason;
     std::string last_safety_event;
 };
@@ -325,6 +339,12 @@ private:
     void handleSnakeTurn90Again(const GridMissionInput& in, GridMissionOutput& out);
     void handleTurnNodeMarkerHover(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeComplete(const GridMissionInput& in, GridMissionOutput& out);
+    void handleRevisitInit(const GridMissionInput& in, GridMissionOutput& out);
+    void handleRevisitForward(const GridMissionInput& in, GridMissionOutput& out);
+    void handleRevisitStopAtTurn(const GridMissionInput& in, GridMissionOutput& out);
+    void handleRevisitTurn90(const GridMissionInput& in, GridMissionOutput& out);
+    void handleRevisitMarkerHover(const GridMissionInput& in, GridMissionOutput& out);
+    void handleRevisitComplete(const GridMissionInput& in, GridMissionOutput& out);
     void handleLand(const GridMissionInput& in, GridMissionOutput& out);
     void handleEmergencyLand(const GridMissionInput& in, GridMissionOutput& out);
 
@@ -347,6 +367,16 @@ private:
     bool isEntryIntersectionCandidate(const GridMissionInput& in) const;
     bool isIntersectionCenteredForEntry(const GridMissionInput& in) const;
     double intersectionCenterXNorm(const GridMissionInput& in) const;
+    bool isRevisitState() const;
+    void populateRevisitTelemetry(GridMissionOutput& out) const;
+    void resetRevisitPlan();
+    bool buildRevisitPlan();
+    bool startCurrentRevisitLeg(const GridMissionInput& in, GridMissionOutput& out);
+    bool advanceRevisitNode(const GridMissionInput& in);
+    bool finishRevisitSegmentOrLeg(const GridMissionInput& in, GridMissionOutput& out);
+    GridHeading currentRevisitSegmentHeading() const;
+    GridHeading nextTurnStepHeading(GridHeading from, GridHeading to) const;
+    double yawForHeading(GridHeading heading) const;
     void latchGridOrigin(const GridMissionInput& in, GridMissionOutput& out);
     std::optional<onboard::vision::MarkerObservation> findMarker(
         const onboard::vision::VisionResult* vis, int id) const;
@@ -454,6 +484,21 @@ private:
     // per-id counter (`marker_candidate_count_`) so transient mis-identifications
     // within a window flush the window instead of accumulating.
     MarkerWindow marker_window_;
+
+    MarkerRevisitPlanner revisit_planner_;
+    std::vector<RevisitLeg> revisit_legs_;
+    std::size_t revisit_leg_index_ = 0;
+    std::size_t revisit_segment_index_ = 0;
+    int revisit_cells_remaining_in_segment_ = 0;
+    GridCoord revisit_current_coord_;
+    GridHeading revisit_current_heading_ = GridHeading::Unknown;
+    GridHeading revisit_desired_heading_ = GridHeading::Unknown;
+    GridHeading revisit_turn_step_heading_ = GridHeading::Unknown;
+    GridHeading revisit_yaw_reference_heading_ = GridHeading::Unknown;
+    double revisit_yaw_reference_rad_ = 0.0;
+    int revisit_current_marker_id_ = -1;
+    bool revisit_route_ready_ = false;
+    bool grid_map_finalized_ = false;
 };
 
 } // namespace onboard::mission

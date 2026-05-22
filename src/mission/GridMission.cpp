@@ -68,6 +68,12 @@ const char* gridStateName(GridState state)
     case GridState::SnakeTurn90Again:     return "SNAKE_TURN_90_AGAIN";
     case GridState::TurnNodeMarkerHover:  return "TURN_NODE_MARKER_HOVER";
     case GridState::SnakeComplete:        return "SNAKE_COMPLETE";
+    case GridState::RevisitInit:          return "REVISIT_INIT";
+    case GridState::RevisitForward:       return "REVISIT_FORWARD";
+    case GridState::RevisitStopAtTurn:    return "REVISIT_STOP_AT_TURN";
+    case GridState::RevisitTurn90:        return "REVISIT_TURN_90";
+    case GridState::RevisitMarkerHover:   return "REVISIT_MARKER_HOVER";
+    case GridState::RevisitComplete:      return "REVISIT_COMPLETE";
     case GridState::Land:                 return "LAND";
     case GridState::EmergencyLand:        return "EMERGENCY_LAND";
     case GridState::Done:                 return "DONE";
@@ -133,6 +139,8 @@ void GridMission::reset()
     marker_hover_centered_count_ = 0;
     last_recorded_marker_id_ = -1;
     completion_hover_marker_id_ = -1;
+    resetRevisitPlan();
+    grid_map_finalized_ = false;
     if (registry_) registry_->reset();
     if (tracker_) tracker_->resetLocalOrigin();
     if (altitude_) altitude_->reset();
@@ -304,7 +312,8 @@ void GridMission::populateLineInputs(const GridMissionInput& in, GridMissionOutp
     const bool launch_state = state_ == GridState::SnakeLaunchAlign;
     const bool snake_state =
         (state_ == GridState::SnakeForward ||
-         state_ == GridState::SnakeAdvanceOneCell);
+         state_ == GridState::SnakeAdvanceOneCell ||
+         state_ == GridState::RevisitForward);
 
     if (launch_state) {
         if (!forwardBranchPresent(in.intersection_decision) && !last_node_front_open_) {
@@ -404,10 +413,8 @@ bool GridMission::markerHoverComplete(const GridMissionOutput& out, double now_s
         ? marker_hover_start_s_
         : state_entry_s_;
     const double elapsed_s = now_s - start_s;
-    const double max_s = std::max(0.0, config_.snake_marker_hover_s);
-    const double min_s = std::min(std::max(0.0, config_.marker_hover_min_s), max_s);
-    const bool centered = updateMarkerHoverCenterGate(out);
-    return (elapsed_s >= min_s && centered) || elapsed_s >= max_s;
+    (void)updateMarkerHoverCenterGate(out);
+    return elapsed_s >= std::max(0.0, config_.snake_marker_hover_s);
 }
 
 bool GridMission::hasPendingGridMarkerHint(const GridMissionInput& in) const
@@ -637,6 +644,12 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     case GridState::SnakeTurn90Again:     handleSnakeTurn90Again(input, out); break;
     case GridState::TurnNodeMarkerHover:  handleTurnNodeMarkerHover(input, out); break;
     case GridState::SnakeComplete:        handleSnakeComplete(input, out); break;
+    case GridState::RevisitInit:          handleRevisitInit(input, out); break;
+    case GridState::RevisitForward:       handleRevisitForward(input, out); break;
+    case GridState::RevisitStopAtTurn:    handleRevisitStopAtTurn(input, out); break;
+    case GridState::RevisitTurn90:        handleRevisitTurn90(input, out); break;
+    case GridState::RevisitMarkerHover:   handleRevisitMarkerHover(input, out); break;
+    case GridState::RevisitComplete:      handleRevisitComplete(input, out); break;
     case GridState::Land:                 handleLand(input, out); break;
     case GridState::EmergencyLand:        handleEmergencyLand(input, out); break;
     case GridState::Done:
@@ -696,6 +709,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
         out.drone_grid_offset_x = 0.0;
         out.drone_grid_offset_y = 0.0;
     }
+    populateRevisitTelemetry(out);
     return out;
 }
 
@@ -718,6 +732,220 @@ double GridMission::hopDistance(const GridMissionInput& in) const
     const double dx = *in.local_x_m - *hop_start_local_x_;
     const double dy = *in.local_y_m - *hop_start_local_y_;
     return std::sqrt(dx * dx + dy * dy);
+}
+
+bool GridMission::isRevisitState() const
+{
+    switch (state_) {
+    case GridState::RevisitInit:
+    case GridState::RevisitForward:
+    case GridState::RevisitStopAtTurn:
+    case GridState::RevisitTurn90:
+    case GridState::RevisitMarkerHover:
+    case GridState::RevisitComplete:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void GridMission::populateRevisitTelemetry(GridMissionOutput& out) const
+{
+    out.revisit_active = isRevisitState();
+    out.grid_map_finalized = grid_map_finalized_;
+    out.revisit_order = revisitOrderName(config_.revisit_order);
+    out.revisit_target_id = revisit_current_marker_id_;
+    int remaining = 0;
+    if (revisit_route_ready_ && revisit_leg_index_ < revisit_legs_.size()) {
+        remaining = static_cast<int>(revisit_legs_.size() - revisit_leg_index_);
+    }
+    out.revisit_remaining = remaining;
+}
+
+void GridMission::resetRevisitPlan()
+{
+    revisit_legs_.clear();
+    revisit_leg_index_ = 0;
+    revisit_segment_index_ = 0;
+    revisit_cells_remaining_in_segment_ = 0;
+    revisit_current_coord_ = {};
+    revisit_current_heading_ = GridHeading::Unknown;
+    revisit_desired_heading_ = GridHeading::Unknown;
+    revisit_turn_step_heading_ = GridHeading::Unknown;
+    revisit_yaw_reference_heading_ = GridHeading::Unknown;
+    revisit_yaw_reference_rad_ = 0.0;
+    revisit_current_marker_id_ = -1;
+    revisit_route_ready_ = false;
+}
+
+bool GridMission::buildRevisitPlan()
+{
+    if (!tracker_ || !registry_ || config_.revisit_order == RevisitOrder::None) {
+        return false;
+    }
+    std::vector<MarkerRevisitTarget> targets;
+    for (const auto& record : registry_->records()) {
+        if (!record.grid_coord_valid || record.revisited) {
+            continue;
+        }
+        targets.push_back(MarkerRevisitTarget{record.aruco_id, record.grid_coord});
+    }
+    revisit_current_coord_ = tracker_->currentCoord();
+    revisit_current_heading_ = tracker_->currentHeading();
+    revisit_yaw_reference_heading_ = revisit_current_heading_;
+    revisit_yaw_reference_rad_ = yaw_align_target_rad_;
+    revisit_legs_ = revisit_planner_.buildPlan(
+        revisit_current_coord_, revisit_current_heading_, targets, config_.revisit_order);
+    revisit_leg_index_ = 0;
+    revisit_segment_index_ = 0;
+    revisit_cells_remaining_in_segment_ = 0;
+    revisit_current_marker_id_ = -1;
+    revisit_route_ready_ = true;
+    return !revisit_legs_.empty();
+}
+
+GridHeading GridMission::currentRevisitSegmentHeading() const
+{
+    if (revisit_leg_index_ >= revisit_legs_.size()) {
+        return GridHeading::Unknown;
+    }
+    const auto& leg = revisit_legs_[revisit_leg_index_];
+    if (revisit_segment_index_ >= leg.segments.size()) {
+        return GridHeading::Unknown;
+    }
+    return leg.segments[revisit_segment_index_].heading;
+}
+
+GridHeading GridMission::nextTurnStepHeading(GridHeading from, GridHeading to) const
+{
+    if (from == GridHeading::Unknown || from == to) {
+        return to;
+    }
+    if (turnRight(from) == to || turnLeft(from) != to) {
+        return turnRight(from);
+    }
+    return turnLeft(from);
+}
+
+double GridMission::yawForHeading(GridHeading heading) const
+{
+    const GridHeading reference_heading =
+        revisit_yaw_reference_heading_ != GridHeading::Unknown
+            ? revisit_yaw_reference_heading_
+            : (tracker_ ? tracker_->currentHeading() : GridHeading::Unknown);
+    const double reference_yaw =
+        revisit_yaw_reference_heading_ != GridHeading::Unknown
+            ? revisit_yaw_reference_rad_
+            : yaw_align_target_rad_;
+    auto index = [](GridHeading h) {
+        switch (h) {
+        case GridHeading::North: return 0;
+        case GridHeading::East:  return 1;
+        case GridHeading::South: return 2;
+        case GridHeading::West:  return 3;
+        case GridHeading::Unknown: return -1;
+        }
+        return -1;
+    };
+    const int ref = index(reference_heading);
+    const int dst = index(heading);
+    if (ref < 0 || dst < 0) {
+        return reference_yaw;
+    }
+    int delta = (dst - ref + 4) % 4;
+    if (delta == 3) {
+        delta = -1;
+    }
+    return wrap(reference_yaw + static_cast<double>(delta) * (M_PI / 2.0));
+}
+
+bool GridMission::startCurrentRevisitLeg(const GridMissionInput& in,
+                                         GridMissionOutput& out)
+{
+    (void)out;
+    if (revisit_leg_index_ >= revisit_legs_.size()) {
+        revisit_current_marker_id_ = -1;
+        transition(GridState::RevisitComplete, in.now_s, "revisit_done");
+        return false;
+    }
+
+    const auto& leg = revisit_legs_[revisit_leg_index_];
+    revisit_current_marker_id_ = leg.marker_id;
+    if (leg.segments.empty()) {
+        transition(GridState::RevisitMarkerHover, in.now_s, "revisit_at_marker");
+        return true;
+    }
+
+    if (revisit_segment_index_ >= leg.segments.size()) {
+        revisit_segment_index_ = 0;
+    }
+    revisit_cells_remaining_in_segment_ =
+        leg.segments[revisit_segment_index_].cells;
+    revisit_desired_heading_ = leg.segments[revisit_segment_index_].heading;
+    if (revisit_current_heading_ != revisit_desired_heading_) {
+        snake_stop_stable_count_ = 0;
+        snake_stop_settle_entry_s_ = -1.0;
+        transition(GridState::RevisitStopAtTurn, in.now_s, "revisit_turn_needed");
+        return true;
+    }
+
+    armHopStart(in);
+    transition(GridState::RevisitForward, in.now_s, "revisit_forward");
+    return true;
+}
+
+bool GridMission::advanceRevisitNode(const GridMissionInput& in)
+{
+    const GridHeading heading = currentRevisitSegmentHeading();
+    if (!tracker_ || heading == GridHeading::Unknown ||
+        revisit_cells_remaining_in_segment_ <= 0) {
+        return false;
+    }
+    revisit_current_coord_ = tracker_->advance(revisit_current_coord_, heading);
+    revisit_current_heading_ = heading;
+    tracker_->setCurrentPose(revisit_current_coord_, revisit_current_heading_);
+    --revisit_cells_remaining_in_segment_;
+    last_node_record_s_ = in.now_s;
+    if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
+        last_node_local_x_ = *in.local_x_m;
+        last_node_local_y_ = *in.local_y_m;
+    }
+    return true;
+}
+
+bool GridMission::finishRevisitSegmentOrLeg(const GridMissionInput& in,
+                                            GridMissionOutput& out)
+{
+    (void)out;
+    if (revisit_leg_index_ >= revisit_legs_.size()) {
+        transition(GridState::RevisitComplete, in.now_s, "revisit_done");
+        return true;
+    }
+    const auto& leg = revisit_legs_[revisit_leg_index_];
+    if (revisit_cells_remaining_in_segment_ > 0) {
+        armHopStart(in);
+        transition(GridState::RevisitForward, in.now_s, "revisit_continue");
+        return true;
+    }
+
+    ++revisit_segment_index_;
+    if (revisit_segment_index_ >= leg.segments.size()) {
+        transition(GridState::RevisitMarkerHover, in.now_s, "revisit_marker");
+        return true;
+    }
+
+    revisit_cells_remaining_in_segment_ =
+        leg.segments[revisit_segment_index_].cells;
+    revisit_desired_heading_ = leg.segments[revisit_segment_index_].heading;
+    if (revisit_current_heading_ != revisit_desired_heading_) {
+        snake_stop_stable_count_ = 0;
+        snake_stop_settle_entry_s_ = -1.0;
+        transition(GridState::RevisitStopAtTurn, in.now_s, "revisit_turn_needed");
+        return true;
+    }
+    armHopStart(in);
+    transition(GridState::RevisitForward, in.now_s, "revisit_continue");
+    return true;
 }
 
 // --------------------------- Per-state handlers ---------------------------
@@ -1011,9 +1239,9 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
 
         out.last_safety_event = "";
         // Cycle 26: if a new marker was registered at this boundary cell,
-        // route through TurnNodeMarkerHover for a 3-second hover before
-        // continuing to SnakeStopAtCenter — matches the marker handling
-        // SnakeRecordNode does for regular cells.
+        // route through TurnNodeMarkerHover for the full marker dwell before
+        // continuing to SnakeStopAtCenter. Plain turn nodes without markers
+        // still go straight to turn-direction settling.
         if (hover_id >= 0) {
             pending_post_hover_state_ = GridState::SnakeStopAtCenter;
             pending_post_hover_marker_id_ = hover_id;
@@ -1402,10 +1630,9 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
             yaw_target_rad_ = wrap(yaw_target_rad_ + dir * (M_PI / 2.0));
         }
         snake_yaw_stable_count_ = 0;
-        // Cycle 26: hover for 3 seconds first if this cell had a marker.
-        // pending_post_hover_state_ + the yaw_target_rad_ above are latched
-        // BEFORE the hover so when TurnNodeMarkerHover finishes it can fire
-        // the SnakeTurn90Again rotation against the correct target.
+        // Cycle 26: hover for the full marker dwell first if this cell had a
+        // marker. pending_post_hover_state_ + yaw_target_rad_ are latched
+        // before the hover so TurnNodeMarkerHover can resume the second turn.
         if (hover_id >= 0) {
             pending_post_hover_state_ = GridState::SnakeTurn90Again;
             pending_post_hover_marker_id_ = hover_id;
@@ -1537,8 +1764,190 @@ void GridMission::handleSnakeComplete(const GridMissionInput& in, GridMissionOut
     }
 
     if (in.now_s - state_entry_s_ > config_.snake_complete_hover_s) {
-        transition(GridState::Land, in.now_s, "snake_done");
+        if (config_.revisit_order != RevisitOrder::None &&
+            registry_ && registry_->gridMarkerCount() > 0) {
+            transition(GridState::RevisitInit, in.now_s, "snake_done_revisit");
+        } else {
+            transition(GridState::Land, in.now_s, "snake_done");
+        }
     }
+}
+
+void GridMission::handleRevisitInit(const GridMissionInput& in, GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::HoldPosition;
+    out.target_yaw_rad = yawForHeading(
+        tracker_ ? tracker_->currentHeading() : revisit_current_heading_);
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.advance_phase = false;
+    grid_map_finalized_ = true;
+
+    if (!revisit_route_ready_ && !buildRevisitPlan()) {
+        transition(GridState::RevisitComplete, in.now_s, "no_revisit_targets");
+        return;
+    }
+    startCurrentRevisitLeg(in, out);
+}
+
+void GridMission::handleRevisitForward(const GridMissionInput& in,
+                                       GridMissionOutput& out)
+{
+    if (!hop_start_local_x_.has_value()) {
+        armHopStart(in);
+    }
+    out.intent = control::GridControlIntent::ForwardBlind;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(currentRevisitSegmentHeading());
+    out.advance_phase = false;
+
+    const double distance = hopDistance(in);
+    const bool post_turn_blind = in.now_s < snake_post_turn_blind_until_s_;
+    if (!post_turn_blind &&
+        distance >= config_.hop_intersection_min_distance_m &&
+        nodeJustRecorded(in.intersection_decision)) {
+        advanceRevisitNode(in);
+        out.reason = "revisit_node";
+        finishRevisitSegmentOrLeg(in, out);
+        return;
+    }
+
+    if (distance > config_.hop_max_distance_m ||
+        in.now_s - state_entry_s_ > config_.snake_advance_timeout_s) {
+        last_safety_event_ = "revisit_hop_timeout";
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, "revisit_hop_timeout");
+    }
+}
+
+void GridMission::handleRevisitStopAtTurn(const GridMissionInput& in,
+                                          GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::StopAndCenter;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(revisit_current_heading_);
+
+    const double vmag = in.local_velocity_xy_mps.value_or(1.0);
+    if (vmag <= config_.snake_stop_velocity_threshold_mps) {
+        ++snake_stop_stable_count_;
+    } else {
+        snake_stop_stable_count_ = 0;
+    }
+    if (snake_stop_stable_count_ < config_.snake_stop_velocity_consecutive_frames) {
+        return;
+    }
+    if (snake_stop_settle_entry_s_ < 0.0) {
+        snake_stop_settle_entry_s_ = in.now_s;
+    }
+    if (in.now_s - snake_stop_settle_entry_s_ < config_.snake_boundary_settle_s) {
+        return;
+    }
+
+    snake_stop_settle_entry_s_ = -1.0;
+    revisit_desired_heading_ = currentRevisitSegmentHeading();
+    if (revisit_desired_heading_ == GridHeading::Unknown ||
+        revisit_current_heading_ == revisit_desired_heading_) {
+        armHopStart(in);
+        transition(GridState::RevisitForward, in.now_s, "revisit_no_turn");
+        return;
+    }
+    revisit_turn_step_heading_ =
+        nextTurnStepHeading(revisit_current_heading_, revisit_desired_heading_);
+    yaw_target_rad_ = yawForHeading(revisit_turn_step_heading_);
+    snake_yaw_stable_count_ = 0;
+    transition(GridState::RevisitTurn90, in.now_s, "revisit_stopped");
+}
+
+void GridMission::handleRevisitTurn90(const GridMissionInput& in,
+                                      GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::YawTurn;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yaw_target_rad_;
+    if (!in.attitude_yaw_rad.has_value()) {
+        return;
+    }
+
+    const double err = std::abs(wrap(yaw_target_rad_ - *in.attitude_yaw_rad));
+    if (err <= config_.snake_yaw_target_tolerance_rad) {
+        ++snake_yaw_stable_count_;
+    } else {
+        snake_yaw_stable_count_ = 0;
+    }
+    if (snake_yaw_stable_count_ < config_.snake_yaw_stable_frames) {
+        return;
+    }
+
+    revisit_current_heading_ = revisit_turn_step_heading_;
+    if (tracker_) {
+        tracker_->setCurrentPose(revisit_current_coord_, revisit_current_heading_);
+    }
+    last_turn_complete_s_ = in.now_s;
+    snake_yaw_stable_count_ = 0;
+
+    if (revisit_current_heading_ != revisit_desired_heading_) {
+        revisit_turn_step_heading_ =
+            nextTurnStepHeading(revisit_current_heading_, revisit_desired_heading_);
+        yaw_target_rad_ = yawForHeading(revisit_turn_step_heading_);
+        transition(GridState::RevisitTurn90, in.now_s, "revisit_turn_step");
+        return;
+    }
+
+    snake_post_turn_blind_until_s_ = in.now_s + config_.snake_post_turn_blind_s;
+    armHopStart(in);
+    transition(GridState::RevisitForward, in.now_s, "revisit_turn_done");
+}
+
+void GridMission::handleRevisitMarkerHover(const GridMissionInput& in,
+                                           GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::MarkerHover;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(revisit_current_heading_);
+    out.advance_phase = false;
+
+    const int focus_id = revisit_current_marker_id_;
+    if (focus_id >= 0) {
+        beginMarkerHover(focus_id, in.now_s);
+        populateMarkerInputs(in, focus_id, out);
+        if (registry_) {
+            auto obs = findMarker(in.vision, focus_id);
+            const float orientation = obs.has_value() ? obs->orientation_deg : 0.0f;
+            registry_->observe(focus_id,
+                               revisit_current_coord_,
+                               /*grid_coord_valid=*/true,
+                               orientation,
+                               in.timestamp_ms,
+                               in.frame_seq);
+        }
+    }
+
+    const bool hover_done = focus_id >= 0
+        ? markerHoverComplete(out, in.now_s)
+        : (in.now_s - state_entry_s_ >= config_.snake_marker_hover_s);
+    if (!hover_done) {
+        return;
+    }
+
+    if (registry_ && focus_id >= 0) {
+        registry_->markRevisited(focus_id, in.timestamp_ms);
+    }
+    clearMarkerHover();
+    last_recorded_marker_id_ = -1;
+    ++revisit_leg_index_;
+    revisit_segment_index_ = 0;
+    revisit_cells_remaining_in_segment_ = 0;
+    revisit_current_marker_id_ = -1;
+    transition(GridState::RevisitInit, in.now_s, "revisit_marker_done");
+}
+
+void GridMission::handleRevisitComplete(const GridMissionInput& in,
+                                        GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::HoldPosition;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.target_yaw_rad = yawForHeading(
+        tracker_ ? tracker_->currentHeading() : revisit_current_heading_);
+    transition(GridState::Land, in.now_s, "revisit_done");
 }
 
 void GridMission::synthesizeRemainingColumnNodes()

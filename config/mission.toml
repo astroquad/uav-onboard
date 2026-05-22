@@ -46,6 +46,8 @@ entry_center_max_lateral_mps = 0.12
 cell_size_m = 3.0
 snake_record_lockout_s = 3.0
 snake_turn_lockout_s = 3.0
+# Every grid marker hover, both during snake search and revisit, holds for
+# this full duration while marker-centering remains active.
 snake_marker_hover_s = 3.0
 marker_hover_min_s = 0.8
 marker_hover_center_tolerance_norm = 0.10
@@ -70,6 +72,10 @@ snake_boundary_record_dwell_s = 0.5
 # middle-of-column nodes commit their coordinate and keep flying unless a
 # non-vertiport ArUco hint is visible/recent.
 snake_passthrough_regular_nodes = true
+# Marker revisit after snake completion. Override per run with
+# --revisit-order asc|desc|none.
+revisit_order = "none"
+revisit_passthrough_regular_nodes = true
 # Cycle 10: after a NodeRecord, the boundary watchdog in SnakeForward is
 # disabled for this many seconds so the just-recorded node's residual
 # T/L branches don't immediately re-trigger as a boundary.

@@ -184,6 +184,16 @@ void GridCoordinateTracker::setHeading(GridHeading heading)
     using_default_start_heading_ = false;
 }
 
+void GridCoordinateTracker::setCurrentPose(GridCoord coord, GridHeading heading)
+{
+    has_origin_ = true;
+    current_coord_ = coord;
+    current_heading_ = heading;
+    using_default_start_heading_ = false;
+    pending_second_turn_ = false;
+    pending_turn_right_ = true;
+}
+
 void GridCoordinateTracker::resetLocalOrigin()
 {
     has_origin_ = false;

@@ -177,6 +177,7 @@ cd ~/astroquad/uav-onboard
   --world grid \
   --line-mode dark_on_light \
   --marker-count 4 \
+  --revisit-order desc\
   --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
@@ -200,6 +201,7 @@ IDLE
   -> SNAKE_ADVANCE_ONE_CELL
   -> SNAKE_TURN_90_AGAIN
   -> SNAKE_COMPLETE
+  -> REVISIT_INIT / REVISIT_FORWARD / REVISIT_MARKER_HOVER (optional)
   -> LAND
   -> DONE
 ```
@@ -227,9 +229,10 @@ Current snake strategy:
   alternates left/right strictly. If the expected alternation branch is absent,
   the snake mission completes and lands rather than backtracking.
 
-The current grid mission lands after `--marker-count` grid markers are found or
-the snake completes. Marker-number reverse revisit, official coordinate
-conversion, and return-to-start are still future work.
+The current grid mission can revisit found grid markers after snake completion
+with `--revisit-order asc` or `--revisit-order desc`. Use `--revisit-order none`
+to keep the older behaviour and land after the snake completes. Official
+coordinate conversion and return-to-start are still future work.
 
 ## Pixhawk1 Bench And Line-Follow
 

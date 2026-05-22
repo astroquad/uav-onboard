@@ -50,6 +50,29 @@ std::size_t MarkerRegistry::gridMarkerCount() const
     return count;
 }
 
+std::size_t MarkerRegistry::revisitedGridMarkerCount() const
+{
+    std::size_t count = 0;
+    for (const auto& record : records_) {
+        if (record.grid_coord_valid && record.revisited) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool MarkerRegistry::markRevisited(int aruco_id, std::int64_t timestamp_ms)
+{
+    for (auto& record : records_) {
+        if (record.aruco_id == aruco_id) {
+            record.revisited = true;
+            record.revisited_ms = timestamp_ms;
+            return true;
+        }
+    }
+    return false;
+}
+
 std::optional<MarkerRecord> MarkerRegistry::findByGrid(GridCoord coord) const
 {
     for (const auto& record : records_) {

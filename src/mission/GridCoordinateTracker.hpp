@@ -67,6 +67,7 @@ public:
 
     void notifyTurnCompleted(GridHeading new_heading);
     void setHeading(GridHeading heading);
+    void setCurrentPose(GridCoord coord, GridHeading heading);
     void resetLocalOrigin();
     void forceOrigin(GridCoord coord, GridHeading heading);
 

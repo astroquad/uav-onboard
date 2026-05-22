@@ -17,6 +17,8 @@ struct MarkerRecord {
     std::int64_t last_seen_ms = 0;
     std::uint32_t first_frame_seq = 0;
     float orientation_deg = 0.0f;
+    bool revisited = false;
+    std::int64_t revisited_ms = 0;
 };
 
 class MarkerRegistry {
@@ -35,6 +37,8 @@ public:
     bool hasId(int aruco_id) const;
     std::size_t uniqueCount() const { return seen_ids_.size(); }
     std::size_t gridMarkerCount() const;
+    std::size_t revisitedGridMarkerCount() const;
+    bool markRevisited(int aruco_id, std::int64_t timestamp_ms);
 
     // All markers that have been bound to a grid coord (i.e. excluding vertiport).
     const std::vector<MarkerRecord>& records() const { return records_; }

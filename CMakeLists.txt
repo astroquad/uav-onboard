@@ -62,6 +62,7 @@ add_library(onboard_core STATIC
     src/mission/GridMission.cpp
     src/mission/IntersectionDecision.cpp
     src/mission/LineFollowMission.cpp
+    src/mission/MarkerRevisitPlanner.cpp
     src/mission/MarkerRegistry.cpp
     src/mission/SnakePlanner.cpp
     src/network/UdpTelemetrySender.cpp
