@@ -29,6 +29,7 @@ enum class GridState {
     MarkerLockYaw,
     EntryForward,
     EntryCenterOrigin,
+    EntryOriginMarkerHover,
     SnakeForward,
     SnakeRecordNode,
     SnakeLaunchAlign,
@@ -346,6 +347,7 @@ private:
     void handleMarkerLockYaw(const GridMissionInput& in, GridMissionOutput& out);
     void handleEntryForward(const GridMissionInput& in, GridMissionOutput& out);
     void handleEntryCenterOrigin(const GridMissionInput& in, GridMissionOutput& out);
+    void handleEntryOriginMarkerHover(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeForward(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeRecordNode(const GridMissionInput& in, GridMissionOutput& out);
     void handleSnakeLaunchAlign(const GridMissionInput& in, GridMissionOutput& out);
@@ -435,7 +437,9 @@ private:
     // present at this cell), or -1 if there is no marker to hover on. The
     // caller uses the return value to decide whether to route into
     // TurnNodeMarkerHover for a 3-second hover before continuing.
-    int tryRegisterCurrentCellMarker(GridCoord coord, const GridMissionInput& in);
+    int tryRegisterCurrentCellMarker(GridCoord coord,
+                                     const GridMissionInput& in,
+                                     const char* context = "turn-cell");
     double wrap(double a) const;
 
     GridMissionConfig config_;
@@ -482,12 +486,14 @@ private:
     // or at SnakeAdvanceOneCell arrival (= SnakeTurn90Again).
     GridState pending_post_hover_state_ = GridState::Idle;
     int pending_post_hover_marker_id_ = -1;
+    double pending_post_hover_yaw_target_rad_ = 0.0;
     bool   snake_turn_first_done_ = false;
     bool   marker_hover_active_ = false;
     double marker_hover_start_s_ = -1.0;
     int    marker_hover_centered_count_ = 0;
     int    last_recorded_marker_id_ = -1;
     int    completion_hover_marker_id_ = -1;
+    int    entry_origin_marker_id_ = -1;
     bool   started_ = false;
     std::string last_safety_event_;
 

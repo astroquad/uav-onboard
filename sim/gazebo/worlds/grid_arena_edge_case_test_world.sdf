@@ -1,0 +1,258 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="grid_arena_test_world">
+    <physics name="1ms" type="ignore">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-navsat-system" name="gz::sim::systems::NavSat"/>
+
+    <scene>
+      <ambient>1.0 1.0 1.0</ambient>
+      <background>1.0 1.0 1.0</background>
+      <grid>false</grid>
+      <sky/>
+    </scene>
+
+    <spherical_coordinates>
+      <latitude_deg>-35.363262</latitude_deg>
+      <longitude_deg>149.165237</longitude_deg>
+      <elevation>584</elevation>
+      <heading_deg>0</heading_deg>
+      <surface_model>EARTH_WGS84</surface_model>
+    </spherical_coordinates>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.6 0.6 0.6 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.4 0.2 -0.9</direction>
+    </light>
+
+    <model name="astroquad_grid_edge_case_course">
+      <static>true</static>
+
+      <link name="course_link">
+        <!-- Same vertiport and styling as grid_arena_test_world, but a compact
+             3x3-node grid. Onboard grid origin (0,0) is world (5.5,0), so
+             after takeoff + right-90 yaw, the drone reaches it after leaving
+             the 3m vertiport and flying about 4m over flat ground. -->
+        <collision name="ground_collision">
+          <pose>5.0 3.0 -0.005 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>21.0 14.0 0.01</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="ground_visual">
+          <pose>5.0 3.0 -0.005 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>21.0 14.0 0.01</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0.03 0.03 0.03 1</specular>
+          </material>
+        </visual>
+
+        <collision name="vertiport_box_collision">
+          <pose>0 0 0.35 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.0 3.0 0.7</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="vertiport_box_visual">
+          <pose>0 0 0.35 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>3.0 3.0 0.7</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.25 0.25 0.25 1</ambient>
+            <diffuse>0.25 0.25 0.25 1</diffuse>
+            <specular>0.05 0.05 0.05 1</specular>
+          </material>
+        </visual>
+
+        <visual name="vertiport_top_texture">
+          <pose degrees="true">0 0 0.701 0 0 0</pose>
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>3.0 3.0</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr>
+              <metal>
+                <albedo_map>model://astroquad_grid_course/materials/textures/vertiport.png</albedo_map>
+                <roughness>1.0</roughness>
+                <metalness>0.0</metalness>
+              </metal>
+            </pbr>
+          </material>
+        </visual>
+
+        <!-- 3x3-node grid: world X intersections 5.5, 8.5, 11.5 and
+             world Y intersections 0, 3, 6. -->
+        <visual name="grid_line_y0">
+          <pose>8.5 0.0 0.006 0 0 0</pose>
+          <geometry><box><size>6.0 0.10 0.008</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          </material>
+        </visual>
+        <visual name="grid_line_y3">
+          <pose>8.5 3.0 0.006 0 0 0</pose>
+          <geometry><box><size>6.0 0.10 0.008</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          </material>
+        </visual>
+        <visual name="grid_line_y6">
+          <pose>8.5 6.0 0.006 0 0 0</pose>
+          <geometry><box><size>6.0 0.10 0.008</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          </material>
+        </visual>
+
+        <visual name="grid_line_x5_5">
+          <pose>5.5 3.0 0.006 0 0 0</pose>
+          <geometry><box><size>0.10 6.0 0.008</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          </material>
+        </visual>
+        <visual name="grid_line_x8_5">
+          <pose>8.5 3.0 0.006 0 0 0</pose>
+          <geometry><box><size>0.10 6.0 0.008</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          </material>
+        </visual>
+        <visual name="grid_line_x11_5">
+          <pose>11.5 3.0 0.006 0 0 0</pose>
+          <geometry><box><size>0.10 6.0 0.008</size></box></geometry>
+          <material>
+            <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          </material>
+        </visual>
+
+        <!-- Requested grid markers:
+             id=3 at grid (0,0)   -> world (5.5, 0)
+             id=2 at grid (0,-2)  -> world (11.5, 0)
+             id=4 at grid (-1,-2) -> world (11.5, 3)
+             id=1 at grid (-2,0)  -> world (5.5, 6) -->
+        <visual name="marker_id3_white_pad">
+          <pose>5.5 0.0 0.011 0 0 0</pose>
+          <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="marker_id3_texture">
+          <pose>5.5 0.0 0.012 0 0 0</pose>
+          <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>model://astroquad_grid_course/materials/textures/aruco_id3.png</albedo_map>
+              <roughness>1.0</roughness><metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+
+        <visual name="marker_id2_white_pad">
+          <pose>11.5 0.0 0.011 0 0 0</pose>
+          <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="marker_id2_texture">
+          <pose>11.5 0.0 0.012 0 0 0</pose>
+          <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>model://astroquad_grid_course/materials/textures/aruco_id2.png</albedo_map>
+              <roughness>1.0</roughness><metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+
+        <visual name="marker_id4_white_pad">
+          <pose>11.5 3.0 0.011 0 0 0</pose>
+          <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="marker_id4_texture">
+          <pose>11.5 3.0 0.012 0 0 0</pose>
+          <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>model://astroquad_grid_course/materials/textures/aruco_id4.png</albedo_map>
+              <roughness>1.0</roughness><metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+
+        <visual name="marker_id1_white_pad">
+          <pose>5.5 6.0 0.011 0 0 0</pose>
+          <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+          </material>
+        </visual>
+        <visual name="marker_id1_texture">
+          <pose>5.5 6.0 0.012 0 0 0</pose>
+          <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>model://astroquad_grid_course/materials/textures/aruco_id1.png</albedo_map>
+              <roughness>1.0</roughness><metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <include>
+      <uri>model://iris_with_downward_camera</uri>
+      <!-- vertiport top (z=0.7) + Iris origin offset (0.195), yaw=90 facing +Y -->
+      <pose degrees="true">0 0 0.895 0 0 90</pose>
+    </include>
+  </world>
+</sdf>

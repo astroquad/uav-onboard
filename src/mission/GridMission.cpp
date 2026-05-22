@@ -59,6 +59,7 @@ const char* gridStateName(GridState state)
     case GridState::MarkerLockYaw:        return "MARKER_LOCK_YAW";
     case GridState::EntryForward:         return "ENTRY_FORWARD";
     case GridState::EntryCenterOrigin:    return "ENTRY_CENTER_ORIGIN";
+    case GridState::EntryOriginMarkerHover:return "ENTRY_ORIGIN_MARKER_HOVER";
     case GridState::SnakeForward:         return "SNAKE_FORWARD";
     case GridState::SnakeRecordNode:      return "SNAKE_RECORD_NODE";
     case GridState::SnakeLaunchAlign:     return "SNAKE_LAUNCH_ALIGN";
@@ -142,12 +143,14 @@ void GridMission::reset()
     pending_post_turn_heading_ = GridHeading::Unknown;
     pending_post_hover_state_ = GridState::Idle;
     pending_post_hover_marker_id_ = -1;
+    pending_post_hover_yaw_target_rad_ = 0.0;
     snake_turn_first_done_ = false;
     marker_hover_active_ = false;
     marker_hover_start_s_ = -1.0;
     marker_hover_centered_count_ = 0;
     last_recorded_marker_id_ = -1;
     completion_hover_marker_id_ = -1;
+    entry_origin_marker_id_ = -1;
     resetRevisitPlan();
     resetReturnHomePlan();
     grid_map_finalized_ = false;
@@ -272,7 +275,8 @@ int GridMission::effectiveVertiportMarkerId() const
 }
 
 int GridMission::tryRegisterCurrentCellMarker(GridCoord coord,
-                                               const GridMissionInput& in)
+                                               const GridMissionInput& in,
+                                               const char* context)
 {
     if (!registry_) return -1;
     const int stable_id = marker_window_.bestStableId();
@@ -291,7 +295,7 @@ int GridMission::tryRegisterCurrentCellMarker(GridCoord coord,
     if (was_new) {
         std::cerr << "[marker-commit] id=" << stable_id
                   << " coord=(" << coord.x << "," << coord.y << ")"
-                  << " (turn-cell)\n";
+                  << " (" << (context ? context : "grid-cell") << ")\n";
     }
     return stable_id;
 }
@@ -647,6 +651,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     case GridState::MarkerLockYaw:        handleMarkerLockYaw(input, out); break;
     case GridState::EntryForward:         handleEntryForward(input, out); break;
     case GridState::EntryCenterOrigin:    handleEntryCenterOrigin(input, out); break;
+    case GridState::EntryOriginMarkerHover:handleEntryOriginMarkerHover(input, out); break;
     case GridState::SnakeForward:         handleSnakeForward(input, out); break;
     case GridState::SnakeRecordNode:      handleSnakeRecordNode(input, out); break;
     case GridState::SnakeLaunchAlign:     handleSnakeLaunchAlign(input, out); break;
@@ -1343,6 +1348,17 @@ void GridMission::handleEntryCenterOrigin(const GridMissionInput& in, GridMissio
             decision_engine_->reset();
         }
         snake_launch_align_stable_count_ = 0;
+        const int origin_marker_id =
+            tryRegisterCurrentCellMarker(GridCoord{0, 0}, in, "origin");
+        marker_window_.clear();
+        if (origin_marker_id >= 0) {
+            entry_origin_marker_id_ = origin_marker_id;
+            beginMarkerHover(origin_marker_id, in.now_s);
+            transition(GridState::EntryOriginMarkerHover,
+                       in.now_s,
+                       "origin_marker_hover");
+            return;
+        }
         transition(GridState::SnakeLaunchAlign, in.now_s, "origin_centered");
         return;
     }
@@ -1352,6 +1368,49 @@ void GridMission::handleEntryCenterOrigin(const GridMissionInput& in, GridMissio
         out.last_safety_event = last_safety_event_;
         transition(GridState::EmergencyLand, in.now_s, "entry_center_timeout");
     }
+}
+
+void GridMission::handleEntryOriginMarkerHover(const GridMissionInput& in,
+                                               GridMissionOutput& out)
+{
+    out.intent = control::GridControlIntent::MarkerHover;
+    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_altitude_m = config_.cruise_altitude_m;
+    out.vertiport_verified = true;
+    out.advance_phase = false;
+
+    const int focus_id = entry_origin_marker_id_;
+    if (focus_id >= 0) {
+        beginMarkerHover(focus_id, in.now_s);
+        populateMarkerInputs(in, focus_id, out);
+        if (registry_) {
+            auto obs = findMarker(in.vision, focus_id);
+            const float orientation = obs.has_value() ? obs->orientation_deg : 0.0f;
+            registry_->observe(focus_id,
+                               GridCoord{0, 0},
+                               /*grid_coord_valid=*/true,
+                               orientation,
+                               in.timestamp_ms,
+                               in.frame_seq);
+        }
+    }
+
+    const bool hover_done = focus_id >= 0
+        ? markerHoverComplete(out, in.now_s)
+        : (in.now_s - state_entry_s_ >= config_.snake_marker_hover_s);
+    if (!hover_done) {
+        return;
+    }
+
+    clearMarkerHover();
+    marker_window_.clear();
+    last_recorded_marker_id_ = -1;
+    entry_origin_marker_id_ = -1;
+    snake_launch_align_stable_count_ = 0;
+    if (decision_engine_) {
+        decision_engine_->reset();
+    }
+    transition(GridState::SnakeLaunchAlign, in.now_s, "origin_marker_done");
 }
 
 void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutput& out)
@@ -1452,6 +1511,7 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         if (hover_id >= 0) {
             pending_post_hover_state_ = GridState::SnakeStopAtCenter;
             pending_post_hover_marker_id_ = hover_id;
+            pending_post_hover_yaw_target_rad_ = yaw_align_target_rad_;
             last_recorded_marker_id_ = hover_id;
             transition(GridState::TurnNodeMarkerHover, in.now_s, "boundary_marker_hover");
         } else {
@@ -1829,6 +1889,8 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
         // heading.
         const int hover_id = tryRegisterCurrentCellMarker(in.node_event.local_coord, in);
 
+        const double connector_yaw_target_rad = yaw_target_rad_;
+
         // Cycle 17: second-turn target also derives from yaw_target_rad_
         // (which itself is yaw_align_target_rad_ + first dir·π/2), so the
         // new column's reference is exactly the original ± π — drift-free.
@@ -1843,6 +1905,7 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
         if (hover_id >= 0) {
             pending_post_hover_state_ = GridState::SnakeTurn90Again;
             pending_post_hover_marker_id_ = hover_id;
+            pending_post_hover_yaw_target_rad_ = connector_yaw_target_rad;
             last_recorded_marker_id_ = hover_id;
             transition(GridState::TurnNodeMarkerHover, in.now_s, "advance_marker_hover");
         } else {
@@ -1902,7 +1965,7 @@ void GridMission::handleTurnNodeMarkerHover(const GridMissionInput& in,
     // SnakeTurn90Again path) and snake_stop_stable_count_ (for the
     // SnakeStopAtCenter path) were already latched before the transition.
     out.intent = control::GridControlIntent::MarkerHover;
-    out.target_yaw_rad = yaw_align_target_rad_;
+    out.target_yaw_rad = pending_post_hover_yaw_target_rad_;
     out.target_altitude_m = config_.cruise_altitude_m;
     out.advance_phase = false;
 
@@ -1935,6 +1998,7 @@ void GridMission::handleTurnNodeMarkerHover(const GridMissionInput& in,
             : GridState::SnakeStopAtCenter;  // safe default
         pending_post_hover_state_ = GridState::Idle;
         pending_post_hover_marker_id_ = -1;
+        pending_post_hover_yaw_target_rad_ = yaw_align_target_rad_;
         clearMarkerHover();
         last_recorded_marker_id_ = -1;
         if (next == GridState::SnakeStopAtCenter) {
