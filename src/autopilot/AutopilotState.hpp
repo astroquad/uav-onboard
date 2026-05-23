@@ -30,6 +30,8 @@ struct AutopilotState {
     std::optional<int> rc_channel_count;
     std::optional<int> rc_rssi;
     std::array<std::uint16_t, 18> rc_channels_pwm {};
+    std::array<std::uint16_t, 8> servo_outputs_pwm {};
+    bool servo_outputs_seen = false;
     std::optional<double> attitude_roll_rad;
     std::optional<double> attitude_pitch_rad;
     std::optional<double> attitude_yaw_rad;

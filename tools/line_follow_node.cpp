@@ -1865,7 +1865,17 @@ bool runAltHoldRcOverrideAutoTakeoff(
                       << " rel_alt=" << ap_state.relative_altitude_m.value_or(-1.0)
                       << " local_alt=" << ap_state.local_altitude_m.value_or(-1.0)
                       << " target_reached=" << target_reached_m
-                      << " throttle=" << climb[2] << "\n";
+                      << " throttle=" << climb[2]
+                      << " rc3=" << ap_state.rc_channels_pwm[2];
+            if (ap_state.servo_outputs_seen) {
+                const auto& servo = ap_state.servo_outputs_pwm;
+                std::cout << " servo="
+                          << servo[0] << ','
+                          << servo[1] << ','
+                          << servo[2] << ','
+                          << servo[3];
+            }
+            std::cout << "\n";
             last_log = now;
         }
         std::this_thread::sleep_until(loop_start + period);

@@ -485,6 +485,20 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
         mavlink_global_position_int_t position {};
         mavlink_msg_global_position_int_decode(&message, &position);
         state_.relative_altitude_m = position.relative_alt / 1000.0;
+    } else if (message.msgid == MAVLINK_MSG_ID_SERVO_OUTPUT_RAW) {
+        mavlink_servo_output_raw_t servo {};
+        mavlink_msg_servo_output_raw_decode(&message, &servo);
+        state_.servo_outputs_pwm = {
+            servo.servo1_raw,
+            servo.servo2_raw,
+            servo.servo3_raw,
+            servo.servo4_raw,
+            servo.servo5_raw,
+            servo.servo6_raw,
+            servo.servo7_raw,
+            servo.servo8_raw,
+        };
+        state_.servo_outputs_seen = true;
     } else if (message.msgid == MAVLINK_MSG_ID_ATTITUDE) {
         mavlink_attitude_t attitude {};
         mavlink_msg_attitude_decode(&message, &attitude);
