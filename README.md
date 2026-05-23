@@ -281,12 +281,19 @@ Props-removed motor command check:
   --motor 1 --percent 5 --seconds 1 --props-removed
 ```
 
-Real line-follow arming requires explicit acknowledgement:
+Line-follow default GUIDED + body-NED velocity path:
 
 ```bash
 ./build/line_follow_node --config config --target ardupilot_serial \
-  --vision rpicam --line-mode dark_on_light --video --allow-arm-takeoff
+  --vision rpicam --line-mode dark_on_light --video \
+  --control-backend guided_velocity \
+  --allow-arm-takeoff
 ```
+
+`guided_velocity` is the default, so `--control-backend guided_velocity` may be
+omitted. This path requests GUIDED, arms, performs MAVLink takeoff, then sends
+body-frame NED velocity setpoints. On real serial targets it requires RC input
+and an optical-flow/range local estimate before arm/takeoff.
 
 Line-follow only ALT_HOLD + RC override experiment path:
 
@@ -294,7 +301,8 @@ Line-follow only ALT_HOLD + RC override experiment path:
 ./build/line_follow_node --config config --target ardupilot_serial \
   --vision rpicam --line-mode dark_on_light --video \
   --control-backend alt_hold_rc_override --alt-hold-auto-takeoff \
-  --allow-rc-override --allow-arm-takeoff
+  --allow-rc-override --allow-arm-takeoff \
+  --unsafe-assume-rc-present
 ```
 
 This backend is intentionally limited to `line_follow_node`. With
@@ -313,8 +321,25 @@ removed and Mission Planner's radio view open:
 ```
 
 If the real RC receiver works through ArduPilot but MAVLink `RC_CHANNELS` is
-not visible to onboard, add `--unsafe-assume-rc-present` only after verifying
-the transmitter mode switch can take over.
+not visible to onboard, `--unsafe-assume-rc-present` bypasses only the onboard
+RC gate. ArduPilot pre-arm checks still apply, and the transmitter mode switch
+must be verified to take over before using this flag.
+
+For a short video-only line-follow sanity check, omit `--mavlink-smoke` and do
+not pass `--alt-hold-auto-takeoff`; stop with Ctrl+C after confirming frames:
+
+```bash
+./build/line_follow_node --config config --target ardupilot_serial \
+  --vision rpicam --line-mode dark_on_light --video --fps 12 \
+  --control-backend alt_hold_rc_override \
+  --allow-rc-override --unsafe-assume-rc-present
+```
+
+During `line_follow_node`, Ctrl+C/SIGTERM is handled as a safety land request:
+the node releases RC override, requests LAND mode, and requests disarm only
+after touchdown is likely. Use the transmitter takeover/disarm path first in an
+emergency; Ctrl+C depends on the Raspberry Pi process and MAVLink link still
+being alive.
 
 Real grid-mission arming also requires explicit acknowledgement. The
 `ardupilot_serial` defaults to `runtime.ardupilot_serial.toml` and `rpicam`; override the
