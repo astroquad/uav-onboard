@@ -4,6 +4,7 @@
 #include <toml++/toml.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -93,6 +94,10 @@ struct ProbeState {
     std::optional<double> optical_flow_ground_distance_m;
     std::optional<int> rc_channel_count;
     std::optional<int> rc_rssi;
+    std::array<std::uint16_t, 8> rc_channels {};
+    bool rc_channels_seen = false;
+    std::array<std::uint16_t, 8> servo_outputs {};
+    bool servo_outputs_seen = false;
     std::optional<std::uint16_t> ekf_flags;
     std::vector<std::string> statustext;
     std::optional<std::uint32_t> autopilot_capabilities;
@@ -527,6 +532,22 @@ bool processMessage(
         state.relative_altitude_m = position.relative_alt / 1000.0;
         break;
     }
+    case MAVLINK_MSG_ID_SERVO_OUTPUT_RAW: {
+        mavlink_servo_output_raw_t servo {};
+        mavlink_msg_servo_output_raw_decode(&message, &servo);
+        state.servo_outputs = {
+            servo.servo1_raw,
+            servo.servo2_raw,
+            servo.servo3_raw,
+            servo.servo4_raw,
+            servo.servo5_raw,
+            servo.servo6_raw,
+            servo.servo7_raw,
+            servo.servo8_raw,
+        };
+        state.servo_outputs_seen = true;
+        break;
+    }
     case MAVLINK_MSG_ID_LOCAL_POSITION_NED: {
         mavlink_local_position_ned_t position {};
         mavlink_msg_local_position_ned_decode(&message, &position);
@@ -596,6 +617,17 @@ bool processMessage(
         mavlink_msg_rc_channels_decode(&message, &channels);
         state.rc_channel_count = channels.chancount;
         state.rc_rssi = channels.rssi;
+        state.rc_channels = {
+            channels.chan1_raw,
+            channels.chan2_raw,
+            channels.chan3_raw,
+            channels.chan4_raw,
+            channels.chan5_raw,
+            channels.chan6_raw,
+            channels.chan7_raw,
+            channels.chan8_raw,
+        };
+        state.rc_channels_seen = true;
         break;
     }
 #endif
@@ -731,6 +763,26 @@ void printSummary(const ProbeState& state)
               << " ground_distance_m=" << optionalDouble(state.optical_flow_ground_distance_m) << "\n";
     std::cout << "rc: channels=" << optionalInt(state.rc_channel_count)
               << " rssi=" << optionalInt(state.rc_rssi) << "\n";
+    if (state.rc_channels_seen) {
+        std::cout << "rc_raw: ch1=" << state.rc_channels[0]
+                  << " ch2=" << state.rc_channels[1]
+                  << " ch3=" << state.rc_channels[2]
+                  << " ch4=" << state.rc_channels[3]
+                  << " ch5=" << state.rc_channels[4]
+                  << " ch6=" << state.rc_channels[5]
+                  << " ch7=" << state.rc_channels[6]
+                  << " ch8=" << state.rc_channels[7] << "\n";
+    }
+    if (state.servo_outputs_seen) {
+        std::cout << "servo_output_raw: s1=" << state.servo_outputs[0]
+                  << " s2=" << state.servo_outputs[1]
+                  << " s3=" << state.servo_outputs[2]
+                  << " s4=" << state.servo_outputs[3]
+                  << " s5=" << state.servo_outputs[4]
+                  << " s6=" << state.servo_outputs[5]
+                  << " s7=" << state.servo_outputs[6]
+                  << " s8=" << state.servo_outputs[7] << "\n";
+    }
     std::cout << "ekf: flags=" << optionalHex16(state.ekf_flags) << "\n";
     if (!state.statustext.empty()) {
         std::cout << "statustext:\n";
