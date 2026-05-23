@@ -112,7 +112,7 @@ void AutopilotMavlinkAdapter::arm(std::chrono::seconds timeout)
 {
     const auto deadline = Clock::now() + timeout;
     while (Clock::now() < deadline) {
-        sendCommandLong(MAV_CMD_COMPONENT_ARM_DISARM, 1.0f);
+        requestArm();
         const auto attempt_deadline = Clock::now() + std::chrono::seconds(3);
         while (Clock::now() < attempt_deadline) {
             poll(200);
@@ -122,6 +122,11 @@ void AutopilotMavlinkAdapter::arm(std::chrono::seconds timeout)
         }
     }
     throw std::runtime_error("timed out waiting for armed state");
+}
+
+void AutopilotMavlinkAdapter::requestArm()
+{
+    sendCommandLong(MAV_CMD_COMPONENT_ARM_DISARM, 1.0f);
 }
 
 void AutopilotMavlinkAdapter::requestDisarm()

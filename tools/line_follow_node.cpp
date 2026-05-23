@@ -22,6 +22,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cmath>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -35,6 +36,24 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+
+volatile std::sig_atomic_t g_shutdown_requested = 0;
+
+void handleShutdownSignal(int)
+{
+    g_shutdown_requested = 1;
+}
+
+bool shutdownRequested()
+{
+    return g_shutdown_requested != 0;
+}
+
+void installShutdownSignalHandlers()
+{
+    std::signal(SIGINT, handleShutdownSignal);
+    std::signal(SIGTERM, handleShutdownSignal);
+}
 
 enum class TransportKind {
     Udp,
@@ -992,6 +1011,10 @@ bool waitRcReady(
     std::cout << "[safety] waiting for RC input via MAVLink RC_CHANNELS...\n";
     const auto deadline = Clock::now() + timeout;
     while (Clock::now() < deadline) {
+        if (shutdownRequested()) {
+            std::cerr << "[safety] shutdown requested while waiting for RC input\n";
+            return false;
+        }
         autopilot.poll(200);
         if (rcInputFresh(autopilot.state(), safety, Clock::now())) {
             const auto& state = autopilot.state();
@@ -1549,6 +1572,58 @@ void sendRcOverrideNeutral(
     autopilot.sendRcChannelsOverride(neutralRcOverrideChannels(rc_config));
 }
 
+bool requestShutdownLandAndDisarm(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    RcOverrideReleaseGuard& guard,
+    const RcOverrideConfig& rc_config,
+    std::chrono::duration<double> period)
+{
+    std::cerr << "[safety] shutdown requested; neutral/release RC override and request LAND\n";
+    try {
+        sendRcOverrideNeutral(autopilot, guard, rc_config);
+    } catch (const std::exception& error) {
+        std::cerr << "[safety] failed to send neutral RC override: " << error.what() << "\n";
+    }
+    guard.releaseNoThrow();
+    autopilot.poll(100);
+
+    if (!autopilot.state().armed) {
+        std::cout << "[safety] vehicle already disarmed\n";
+        return true;
+    }
+
+    try {
+        autopilot.setLandMode(std::chrono::seconds(10));
+    } catch (const std::exception& error) {
+        std::cerr << "[safety] LAND mode request failed: " << error.what() << "\n";
+    }
+
+    const auto deadline = Clock::now() + std::chrono::seconds(90);
+    auto last_disarm_request = Clock::time_point {};
+    while (Clock::now() < deadline) {
+        const auto loop_start = Clock::now();
+        autopilot.poll(100);
+        if (autopilot.state().heartbeat_seen && !autopilot.state().armed) {
+            std::cout << "[safety] shutdown landing disarmed\n";
+            return true;
+        }
+        const bool retry_due =
+            last_disarm_request.time_since_epoch().count() == 0 ||
+            loop_start - last_disarm_request >= std::chrono::seconds(4);
+        if (touchdownLikely(autopilot.state()) && retry_due) {
+            std::cout << "[safety] shutdown touchdown likely height="
+                      << landingHeightM(autopilot.state()).value_or(-1.0)
+                      << "m; requesting disarm\n";
+            autopilot.requestDisarm();
+            last_disarm_request = loop_start;
+        }
+        std::this_thread::sleep_until(loop_start + period);
+    }
+
+    std::cerr << "[safety] shutdown landing timed out waiting for disarm\n";
+    return false;
+}
+
 bool waitAltHoldPilotReady(
     onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
     const onboard::safety::SafetyConfig& safety,
@@ -1572,6 +1647,10 @@ bool waitAltHoldPilotReady(
     const auto deadline = Clock::now() + timeout;
     auto last_log = Clock::now() - std::chrono::seconds(1);
     while (Clock::now() < deadline) {
+        if (shutdownRequested()) {
+            std::cerr << "[safety] shutdown requested while waiting for ALT_HOLD hover\n";
+            return false;
+        }
         autopilot.poll(100);
         const auto now = Clock::now();
         const auto altitude = autopilot.bestAltitudeM();
@@ -1628,6 +1707,12 @@ bool runAltHoldRcOverrideAutoTakeoff(
 
     const auto arm_prep_deadline = Clock::now() + std::chrono::seconds(1);
     while (Clock::now() < arm_prep_deadline) {
+        if (shutdownRequested()) {
+            std::cerr << "[safety] shutdown requested before ALT_HOLD auto-takeoff arm\n";
+            autopilot.sendRcChannelsOverride(neutral);
+            guard.releaseNoThrow();
+            return false;
+        }
         const auto loop_start = Clock::now();
         autopilot.poll(1);
         autopilot.sendRcChannelsOverride(low_throttle);
@@ -1639,7 +1724,29 @@ bool runAltHoldRcOverrideAutoTakeoff(
         autopilot.setAltHoldMode(std::chrono::seconds(10));
     }
     if (!autopilot.state().armed) {
-        autopilot.arm(std::chrono::seconds(30));
+        const auto arm_deadline = Clock::now() + std::chrono::seconds(30);
+        while (!autopilot.state().armed && Clock::now() < arm_deadline) {
+            if (shutdownRequested()) {
+                std::cerr << "[safety] shutdown requested while waiting for armed state\n";
+                autopilot.sendRcChannelsOverride(neutral);
+                guard.releaseNoThrow();
+                return false;
+            }
+            autopilot.requestArm();
+            const auto attempt_deadline = Clock::now() + std::chrono::seconds(3);
+            while (!autopilot.state().armed && Clock::now() < attempt_deadline) {
+                if (shutdownRequested()) {
+                    std::cerr << "[safety] shutdown requested while waiting for armed state\n";
+                    autopilot.sendRcChannelsOverride(neutral);
+                    guard.releaseNoThrow();
+                    return false;
+                }
+                autopilot.poll(200);
+            }
+        }
+        if (!autopilot.state().armed) {
+            throw std::runtime_error("timed out waiting for armed state");
+        }
         std::cout << "[mavlink] armed\n";
     }
 
@@ -1654,6 +1761,11 @@ bool runAltHoldRcOverrideAutoTakeoff(
     bool climb_seen = false;
 
     while (Clock::now() < takeoff_deadline) {
+        if (shutdownRequested()) {
+            std::cerr << "[safety] shutdown requested during ALT_HOLD auto-takeoff\n";
+            autopilot.sendRcChannelsOverride(neutral);
+            return false;
+        }
         const auto loop_start = Clock::now();
         autopilot.poll(1);
         const auto altitude = autopilot.bestAltitudeM();
@@ -1683,6 +1795,11 @@ bool runAltHoldRcOverrideAutoTakeoff(
                     Clock::now() +
                     std::chrono::milliseconds(static_cast<int>(settle_s * 1000.0));
                 while (Clock::now() < settle_deadline) {
+                    if (shutdownRequested()) {
+                        std::cerr << "[safety] shutdown requested during ALT_HOLD takeoff settle\n";
+                        autopilot.sendRcChannelsOverride(neutral);
+                        return false;
+                    }
                     const auto settle_loop_start = Clock::now();
                     autopilot.poll(1);
                     autopilot.sendRcChannelsOverride(neutral);
@@ -2078,6 +2195,7 @@ int runVisionSmoke(const RuntimeConfig& config, int count)
 int main(int argc, char** argv)
 {
     try {
+        installShutdownSignalHandlers();
         const Options options = parseOptions(argc, argv);
         const RuntimeConfig config = loadRuntimeConfig(options);
 
@@ -2385,6 +2503,14 @@ int main(int argc, char** argv)
                         config.mission.altitude_reached_ratio,
                         config.mission.takeoff_settle_s,
                         period)) {
+                    if (shutdownRequested()) {
+                        const bool disarmed = requestShutdownLandAndDisarm(
+                            autopilot,
+                            rc_override_guard,
+                            config.rc_override,
+                            period);
+                        return disarmed ? 130 : 2;
+                    }
                     return 2;
                 }
             } else {
@@ -2395,6 +2521,14 @@ int main(int argc, char** argv)
                         config.mission.altitude_reached_ratio,
                         options.alt_hold_set_mode,
                         std::chrono::seconds(60))) {
+                    if (shutdownRequested()) {
+                        const bool disarmed = requestShutdownLandAndDisarm(
+                            autopilot,
+                            rc_override_guard,
+                            config.rc_override,
+                            period);
+                        return disarmed ? 130 : 2;
+                    }
                     return 2;
                 }
             }
@@ -2497,6 +2631,7 @@ int main(int argc, char** argv)
         RcMarkerVisualServo marker_servo;
         std::optional<Clock::time_point> rc_marker_hover_started_at;
         bool rc_marker_hover_land_logged = false;
+        bool shutdown_land_logged = false;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         int mission_vision_frames = 0;
         onboard::app::GcsTelemetryPublishStats mission_publish_stats;
@@ -2574,6 +2709,11 @@ int main(int argc, char** argv)
                 std::cout << "[mission] ALT_HOLD_RC_MARKER_HOVER complete; requesting LAND\n";
                 rc_marker_hover_land_logged = true;
             }
+            const bool shutdown_land = shutdownRequested();
+            if (shutdown_land && !shutdown_land_logged) {
+                std::cerr << "[safety] Ctrl+C/SIGTERM received; requesting LAND\n";
+                shutdown_land_logged = true;
+            }
 
             const bool line_tracking_ready = lineTrackingActive(line_input, config.controller);
             const auto& ap_state_for_safety = autopilot.state();
@@ -2618,7 +2758,7 @@ int main(int argc, char** argv)
                 line_tracking_ready,
                 marker_detected,
                 marker_centered_for_mission,
-                safety_land || rc_marker_hover_forced_land,
+                safety_land || rc_marker_hover_forced_land || shutdown_land,
                 false,
                 loop_start,
             });
