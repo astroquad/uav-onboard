@@ -1043,6 +1043,29 @@ bool nearGroundAndStable(const onboard::autopilot::AutopilotState& state)
     return vx < 0.35 && vy < 0.35 && vz < 0.35;
 }
 
+std::optional<double> validRangefinderAltitudeM(
+    const onboard::autopilot::AutopilotState& state)
+{
+    if (state.distance_sensor_m &&
+        *state.distance_sensor_m >= 0.03 &&
+        *state.distance_sensor_m <= 8.0) {
+        return state.distance_sensor_m;
+    }
+    return std::nullopt;
+}
+
+std::optional<double> altHoldTakeoffAltitudeM(
+    const onboard::autopilot::AutopilotState& state)
+{
+    if (const auto range = validRangefinderAltitudeM(state)) {
+        return range;
+    }
+    if (state.relative_altitude_m) {
+        return state.relative_altitude_m;
+    }
+    return state.local_altitude_m;
+}
+
 std::optional<double> landingHeightM(const onboard::autopilot::AutopilotState& state)
 {
     if (state.distance_sensor_m) {
@@ -1757,7 +1780,11 @@ bool runAltHoldRcOverrideAutoTakeoff(
         std::chrono::milliseconds(
             static_cast<int>(std::max(3.0, rc_config.takeoff_timeout_s) * 1000.0));
     auto last_log = Clock::now() - std::chrono::seconds(1);
-    auto first_altitude = autopilot.bestAltitudeM();
+    auto first_altitude = altHoldTakeoffAltitudeM(autopilot.state());
+    if (!validRangefinderAltitudeM(autopilot.state())) {
+        std::cerr << "[safety] warning: ALT_HOLD auto-takeoff has no valid rangefinder altitude; "
+                     "falling back to EKF/baro altitude\n";
+    }
     bool climb_seen = false;
 
     while (Clock::now() < takeoff_deadline) {
@@ -1768,20 +1795,21 @@ bool runAltHoldRcOverrideAutoTakeoff(
         }
         const auto loop_start = Clock::now();
         autopilot.poll(1);
-        const auto altitude = autopilot.bestAltitudeM();
+        const auto& ap_state = autopilot.state();
+        const auto altitude = altHoldTakeoffAltitudeM(ap_state);
         const auto now = Clock::now();
 
-        if (autopilot.state().custom_mode != COPTER_MODE_ALT_HOLD) {
+        if (ap_state.custom_mode != COPTER_MODE_ALT_HOLD) {
             std::cerr << "[safety] operator takeover during ALT_HOLD auto-takeoff\n";
             guard.releaseNoThrow();
             return false;
         }
-        if (!autopilot.state().armed) {
+        if (!ap_state.armed) {
             std::cerr << "[safety] vehicle disarmed during ALT_HOLD auto-takeoff\n";
             guard.releaseNoThrow();
             return false;
         }
-        if (!rcInputFresh(autopilot.state(), safety, now)) {
+        if (!rcInputFresh(ap_state, safety, now)) {
             std::cerr << "[safety] RC input not fresh during ALT_HOLD auto-takeoff\n";
             autopilot.sendRcChannelsOverride(neutral);
             return false;
@@ -1789,7 +1817,11 @@ bool runAltHoldRcOverrideAutoTakeoff(
         if (altitude && *altitude >= target_reached_m) {
             autopilot.sendRcChannelsOverride(neutral);
             std::cout << "[mission] ALT_HOLD_RC_TAKEOFF altitude reached alt="
-                      << *altitude << "m\n";
+                      << *altitude
+                      << "m range=" << ap_state.distance_sensor_m.value_or(-1.0)
+                      << " rel_alt=" << ap_state.relative_altitude_m.value_or(-1.0)
+                      << " local_alt=" << ap_state.local_altitude_m.value_or(-1.0)
+                      << "\n";
             if (settle_s > 0.0) {
                 const auto settle_deadline =
                     Clock::now() +
@@ -1829,6 +1861,9 @@ bool runAltHoldRcOverrideAutoTakeoff(
         if (now - last_log >= std::chrono::seconds(1)) {
             std::cout << "[mission] ALT_HOLD_RC_TAKEOFF alt="
                       << altitude.value_or(-1.0)
+                      << " range=" << ap_state.distance_sensor_m.value_or(-1.0)
+                      << " rel_alt=" << ap_state.relative_altitude_m.value_or(-1.0)
+                      << " local_alt=" << ap_state.local_altitude_m.value_or(-1.0)
                       << " target_reached=" << target_reached_m
                       << " throttle=" << climb[2] << "\n";
             last_log = now;
