@@ -1718,6 +1718,10 @@ bool runAltHoldRcOverrideAutoTakeoff(
         return false;
     }
 
+    autopilot.sendGcsHeartbeat();
+    autopilot.setRcOverrideAuxEnabled(true);
+    std::cout << "[mavlink] RC override aux enable requested\n";
+
     guard.markActive();
     const auto low_throttle = throttleRcOverrideChannels(rc_config, rc_config.arm_throttle_pwm);
     const auto neutral = neutralRcOverrideChannels(rc_config);
@@ -1738,6 +1742,7 @@ bool runAltHoldRcOverrideAutoTakeoff(
         }
         const auto loop_start = Clock::now();
         autopilot.poll(1);
+        autopilot.sendGcsHeartbeat();
         autopilot.sendRcChannelsOverride(low_throttle);
         std::this_thread::sleep_until(loop_start + period);
     }
@@ -1858,6 +1863,7 @@ bool runAltHoldRcOverrideAutoTakeoff(
         }
 
         autopilot.sendRcChannelsOverride(climb);
+        autopilot.sendGcsHeartbeat();
         if (now - last_log >= std::chrono::seconds(1)) {
             std::cout << "[mission] ALT_HOLD_RC_TAKEOFF alt="
                       << altitude.value_or(-1.0)
@@ -2403,6 +2409,7 @@ int main(int argc, char** argv)
         if (rc_override_backend || options.rc_override_smoke) {
             mavlink_ids.system_id =
                 static_cast<std::uint8_t>(config.rc_override.sender_system_id);
+            mavlink_ids.component_id = MAV_COMP_ID_MISSIONPLANNER;
         }
         onboard::autopilot::AutopilotMavlinkAdapter autopilot(
             std::move(transport),

@@ -70,6 +70,21 @@ void AutopilotMavlinkAdapter::waitHeartbeat(std::chrono::seconds timeout)
     throw std::runtime_error("timed out waiting for MAVLink heartbeat");
 }
 
+void AutopilotMavlinkAdapter::sendGcsHeartbeat()
+{
+    mavlink_message_t message {};
+    mavlink_msg_heartbeat_pack(
+        ids_.system_id,
+        ids_.component_id,
+        &message,
+        MAV_TYPE_GCS,
+        MAV_AUTOPILOT_INVALID,
+        0,
+        0,
+        MAV_STATE_ACTIVE);
+    transport_->sendMessage(message);
+}
+
 void AutopilotMavlinkAdapter::requestDefaultStreams()
 {
     requestMessageInterval(MAVLINK_MSG_ID_DISTANCE_SENSOR, 10.0);
@@ -265,6 +280,14 @@ void AutopilotMavlinkAdapter::sendLocalNedPositionTarget(
         0.0f,
         command.yaw_rate_rad_s);
     transport_->sendMessage(message);
+}
+
+void AutopilotMavlinkAdapter::setRcOverrideAuxEnabled(bool enabled)
+{
+    sendCommandLong(
+        MAV_CMD_DO_AUX_FUNCTION,
+        46.0f,
+        enabled ? 2.0f : 0.0f);
 }
 
 void AutopilotMavlinkAdapter::sendRcChannelsOverride(

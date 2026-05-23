@@ -19,6 +19,7 @@ public:
     const std::string& transportName() const { return transport_->name(); }
 
     void waitHeartbeat(std::chrono::seconds timeout);
+    void sendGcsHeartbeat();
     void requestDefaultStreams();
     void setGuidedMode(std::chrono::seconds timeout);
     void setAltHoldMode(std::chrono::seconds timeout);
@@ -30,6 +31,7 @@ public:
     void takeoff(double target_altitude_m);
     void sendBodyVelocity(const BodyVelocityCommand& command);
     void sendLocalNedPositionTarget(const LocalNedPositionTargetCommand& command);
+    void setRcOverrideAuxEnabled(bool enabled);
     void sendRcChannelsOverride(const std::array<std::uint16_t, 18>& channels_pwm);
     void releaseRcChannelsOverride();
     bool waitAltitudeReached(double target_altitude_m, double ratio, std::chrono::seconds timeout);
