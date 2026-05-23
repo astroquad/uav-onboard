@@ -1357,6 +1357,24 @@ std::array<std::uint16_t, 18> throttleRcOverrideChannels(
     return channels;
 }
 
+bool rcChannelEchoMatches(
+    const onboard::autopilot::AutopilotState& state,
+    std::size_t channel_index,
+    std::uint16_t expected_pwm,
+    std::uint16_t tolerance_pwm = 35)
+{
+    if (!state.rc_channel_count ||
+        *state.rc_channel_count <= static_cast<int>(channel_index)) {
+        return false;
+    }
+    const auto observed = state.rc_channels_pwm[channel_index];
+    if (observed == 0 || observed == UINT16_MAX) {
+        return false;
+    }
+    return std::abs(static_cast<int>(observed) - static_cast<int>(expected_pwm)) <=
+        static_cast<int>(tolerance_pwm);
+}
+
 std::array<std::uint16_t, 18> toRcOverrideChannels(
     const onboard::control::ControlSetpoint& setpoint,
     const onboard::control::GuidedVelocityControllerConfig& controller_config,
@@ -1791,6 +1809,8 @@ bool runAltHoldRcOverrideAutoTakeoff(
                      "falling back to EKF/baro altitude\n";
     }
     bool climb_seen = false;
+    bool throttle_override_echo_seen = false;
+    auto last_override_echo_warning = Clock::now() - std::chrono::seconds(1);
 
     while (Clock::now() < takeoff_deadline) {
         if (shutdownRequested()) {
@@ -1853,8 +1873,26 @@ bool runAltHoldRcOverrideAutoTakeoff(
             climb_seen = true;
         }
         const auto elapsed_s = std::chrono::duration<double>(now - takeoff_started_at).count();
+        if (!throttle_override_echo_seen && elapsed_s >= 1.0) {
+            throttle_override_echo_seen = rcChannelEchoMatches(ap_state, 2, climb[2]);
+            if (!throttle_override_echo_seen &&
+                now - last_override_echo_warning >= std::chrono::seconds(1)) {
+                std::cerr << "[safety] RC throttle override not echoed by FCU: sent="
+                          << climb[2]
+                          << " rc3=" << ap_state.rc_channels_pwm[2]
+                          << " channels=" << ap_state.rc_channel_count.value_or(0)
+                          << ". FCU is probably using receiver throttle or rejecting overrides; "
+                             "check MAV_GCS_SYSID/MAV_OPTIONS, RC_OPTIONS bit1, RC Override Enable aux, "
+                             "and other GCS joystick overrides.\n";
+                last_override_echo_warning = now;
+            }
+        }
         if (!climb_seen && elapsed_s >= 5.0) {
             std::cerr << "[safety] no climb detected during ALT_HOLD auto-takeoff\n";
+            if (!throttle_override_echo_seen) {
+                std::cerr << "[safety] FCU never echoed takeoff throttle override; "
+                             "this is an RC override acceptance/configuration problem, not a 1700 PWM sizing problem\n";
+            }
             autopilot.sendRcChannelsOverride(neutral);
             if (nearGroundAndStable(autopilot.state())) {
                 autopilot.requestDisarm();
@@ -1922,10 +1960,23 @@ int runRcOverrideSmoke(
             autopilot.sendRcChannelsOverride(channels);
             std::this_thread::sleep_until(loop_start + period);
         }
+        autopilot.poll(100);
+        const auto& state = autopilot.state();
+        std::cout << "[rc-override-smoke] echo "
+                  << "ch1=" << state.rc_channels_pwm[0]
+                  << " ch2=" << state.rc_channels_pwm[1]
+                  << " ch3=" << state.rc_channels_pwm[2]
+                  << " ch4=" << state.rc_channels_pwm[3]
+                  << " channels=" << state.rc_channel_count.value_or(0)
+                  << " rssi=" << state.rc_rssi.value_or(-1) << "\n";
     };
 
     auto neutral = neutralRcOverrideChannels(config.rc_override);
     send_for("neutral", neutral);
+
+    auto throttle_takeoff = neutral;
+    throttle_takeoff[2] = pwmFromInt(config.rc_override.takeoff_throttle_pwm);
+    send_for("throttle_takeoff", throttle_takeoff);
 
     auto roll_right = neutral;
     roll_right[0] = pwmFromInt(
