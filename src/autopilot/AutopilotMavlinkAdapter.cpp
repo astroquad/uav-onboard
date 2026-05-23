@@ -76,6 +76,9 @@ void AutopilotMavlinkAdapter::requestDefaultStreams()
     requestMessageInterval(MAVLINK_MSG_ID_LOCAL_POSITION_NED, 10.0);
     requestMessageInterval(MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 5.0);
     requestMessageInterval(MAVLINK_MSG_ID_ATTITUDE, 20.0);
+#ifdef MAVLINK_MSG_ID_SERVO_OUTPUT_RAW
+    requestMessageInterval(MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, 10.0);
+#endif
 #ifdef MAVLINK_MSG_ID_RANGEFINDER
     requestMessageInterval(MAVLINK_MSG_ID_RANGEFINDER, 10.0);
 #endif

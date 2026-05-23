@@ -1874,6 +1874,8 @@ bool runAltHoldRcOverrideAutoTakeoff(
                           << servo[1] << ','
                           << servo[2] << ','
                           << servo[3];
+            } else {
+                std::cout << " servo=unseen";
             }
             std::cout << "\n";
             last_log = now;
