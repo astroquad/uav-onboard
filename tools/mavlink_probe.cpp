@@ -46,6 +46,7 @@ struct Options {
     bool dump_params = false;
     bool apply_params = false;
     bool allow_param_write = false;
+    bool reboot_autopilot = false;
     bool strict_local_estimate = false;
     bool strict_rc = false;
     bool strict_battery = false;
@@ -126,6 +127,7 @@ void printUsage()
         << "  --apply-params              Apply parameter file entries to the autopilot\n"
         << "  --i-understand-this-writes-autopilot-params\n"
         << "                              Required with --apply-params\n"
+        << "  --reboot-autopilot          Send MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN to Pixhawk\n"
         << "  --strict-local-estimate     Fail if local/range/flow telemetry is missing\n"
         << "  --strict-rc                 Fail if RC_CHANNELS are missing\n"
         << "  --strict-battery            Fail if battery telemetry is unavailable\n"
@@ -173,6 +175,8 @@ Options parseOptions(int argc, char** argv)
             options.apply_params = true;
         } else if (arg == "--i-understand-this-writes-autopilot-params") {
             options.allow_param_write = true;
+        } else if (arg == "--reboot-autopilot") {
+            options.reboot_autopilot = true;
         } else if (arg == "--strict-local-estimate") {
             options.strict_local_estimate = true;
         } else if (arg == "--strict-rc") {
@@ -387,6 +391,12 @@ void requestMessageInterval(
         MAV_CMD_SET_MESSAGE_INTERVAL,
         static_cast<float>(message_id),
         static_cast<float>(1000000.0 / rate_hz));
+}
+
+void rebootAutopilot(onboard::autopilot::MavlinkTransport& transport, const ProbeState& state)
+{
+    std::cout << "[mavlink_probe] rebooting autopilot\n";
+    sendCommandLong(transport, state, MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, 1.0f);
 }
 
 void requestDataStream(onboard::autopilot::MavlinkTransport& transport, const ProbeState& state)
@@ -969,6 +979,10 @@ int main(int argc, char** argv)
             requestParamList(*transport, state);
             pollFor(*transport, state, std::chrono::milliseconds(5000));
             printParamComparison(param_file_entries, state);
+        }
+        if (options.reboot_autopilot) {
+            rebootAutopilot(*transport, state);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
         return strictChecksPass(options, state) ? 0 : 3;

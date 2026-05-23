@@ -55,9 +55,9 @@ lost_timeout_s = 5.0
 sender_system_id = 255
 arm_throttle_pwm = 1000
 throttle_hold_pwm = 1500
-# 1.5kg-class 3S/T2212-920KV airframe: keep climb modest but above the
-# common AltHold throttle deadband edge. If it will not lift, raise by 10us.
-takeoff_throttle_pwm = 1620
+# 1.5kg-class 3S/T2212-920KV airframe: 1620 sat too close to AltHold's
+# throttle deadband on the real frame and did not produce a clear climb.
+takeoff_throttle_pwm = 1700
 # Stick authority for line-follow RC override. With forward_mps=0.20 and
 # pitch_full_scale_mps=0.50, pitch command is about 32us from trim.
 max_roll_delta_pwm = 70

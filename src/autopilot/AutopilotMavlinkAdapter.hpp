@@ -24,6 +24,7 @@ public:
     void setAltHoldMode(std::chrono::seconds timeout);
     void setLandMode(std::chrono::seconds timeout);
     void arm(std::chrono::seconds timeout);
+    void requestArm();
     void requestDisarm();
     void disarm(std::chrono::seconds timeout);
     void takeoff(double target_altitude_m);
