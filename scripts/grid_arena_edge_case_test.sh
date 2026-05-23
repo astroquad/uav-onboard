@@ -2,7 +2,7 @@
 # Gazebo + ArduCopter SITL launcher for the Astroquad grid arena edge-case world.
 # Run from WSL: bash ~/astroquad/uav-onboard/scripts/grid_arena_edge_case_test.sh
 #
-# This launches only Gazebo + ArduCopter SITL. Run grid_mission_node from a
+# This launches only Gazebo + ArduCopter SITL. Run astroquad-onboard from a
 # second terminal after the simulator is ready.
 
 set -euo pipefail
@@ -107,7 +107,7 @@ echo "    cd $ARDUCOPTER_DIR"
 echo "    sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON ${MAVPROXY_ARGS[*]} --out 127.0.0.1:14550 --add-param-file \"$INDOOR_PARAM_FILE\" --wipe-eeprom"
 echo
 echo "포트 구분:"
-echo "    MAVLink SITL -> onboard grid_mission_node/line_follow_node: UDP 127.0.0.1:14550"
+echo "    MAVLink SITL -> onboard astroquad-onboard/line_follow_node: UDP 127.0.0.1:14550"
 echo "    Astroquad onboard -> Windows GCS telemetry: UDP <Windows GCS IP>:14550"
 echo "    Astroquad onboard -> Windows GCS MJPEG video: UDP <Windows GCS IP>:5600"
 echo
@@ -124,7 +124,7 @@ echo
 echo "Edge-case grid:"
 echo "    3x3 nodes, markers: id3@(0,0), id2@(0,-2), id4@(-1,-2), id1@(-2,0)"
 echo "    Gazebo world name은 기존 grid_arena_test_world로 맞춰서"
-echo "    grid_mission_node --world grid 기본 camera topic이 그대로 동작합니다."
+echo "    astroquad-onboard --world grid 기본 camera topic이 그대로 동작합니다."
 echo
 echo "Vision-only smoke:"
 echo "    cd $ONBOARD_DIR"
@@ -133,7 +133,7 @@ echo "      --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Grid mission SITL:"
 echo "    cd $ONBOARD_DIR"
-echo "    ./build/grid_mission_node --config config --target sitl --vision gazebo \\"
+echo "    ./build/astroquad-onboard --config config --target sitl --vision gazebo \\"
 echo "      --world grid \\"
 echo "      --line-mode dark_on_light --marker-count 4 --video --gcs-ip <windows-gcs-ip>"
 echo

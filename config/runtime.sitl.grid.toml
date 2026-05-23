@@ -1,5 +1,5 @@
 # Runtime profile for SITL grid arena (grid_arena_test_world).
-# Use with: ./build/uav_onboard --target sitl --vision gazebo --world grid
+# Use with: ./build/astroquad-onboard --target sitl --vision gazebo --world grid
 
 [runtime]
 target = "sitl"

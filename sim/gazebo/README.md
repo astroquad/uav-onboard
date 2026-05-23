@@ -63,7 +63,7 @@ Current mission command:
 WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
 
 cd ~/astroquad/uav-onboard
-./build/grid_mission_node \
+./build/astroquad-onboard \
   --config config \
   --target sitl \
   --vision gazebo \

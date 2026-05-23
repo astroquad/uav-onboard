@@ -15,11 +15,13 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 
 현재 구현 기준은 다음과 같이 나뉜다.
 
-- `uav_onboard`: basic telemetry bring-up sender. 최종 composition root 목표.
+- `astroquad-onboard`: 현재 grid arena full-snake SITL 및 guarded ArduPilot
+  serial mission runtime.
+- `uav-onboard-telem`: basic telemetry bring-up sender / development probe.
 - `vision_debug_node`: 현재 안정적인 camera/vision/GCS debug runtime.
 - `line_follow_node`: SITL 및 guarded ArduPilot serial line-follow staging.
-- `grid_mission_node`: 현재 grid arena full-snake SITL 및 guarded ArduPilot
-  serial staging.
+- `grid_mission_node`: `astroquad-onboard`와 같은 entrypoint를 빌드하는
+  compatibility/staging alias.
 
 ## 2. 책임 범위
 
@@ -47,7 +49,7 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 | Intersection classifier/stabilizer | 구현됨 | `IntersectionDetector.*`, `IntersectionStabilizer.*` |
 | Intersection decision | 구현됨 | `src/mission/IntersectionDecision.*` |
 | Local grid coordinate tracker | 구현됨 | `src/mission/GridCoordinateTracker.*` |
-| Grid mission state machine | SITL staging | `src/mission/GridMission.*`, `tools/grid_mission_node.cpp` |
+| Grid mission state machine | SITL staging | `src/mission/GridMission.*`, `src/main.cpp` |
 | Snake boundary planner | 구현됨 | `src/mission/SnakePlanner.*` |
 | Marker registry/window gate | 구현됨 | `src/mission/MarkerRegistry.*`, `GridMission::MarkerWindow` |
 | Guided velocity line/marker controller | 구현됨 | `src/control/GuidedVelocityController.*` |
@@ -196,8 +198,8 @@ any active state -> EMERGENCY_LAND
   `ENTRY_CENTER_ORIGIN`에서 X/Y 중심과 속도 gate를 통과해야 `(0,0)`이 된다.
 - `GridCoordinateTracker::update()`는 peek-only다. Mission gate가 승인할 때만
   `commitAdvance()`로 tracker 상태를 전진시킨다.
-- `grid_mission_node`는 GCS UDP loss에 대비해 최신 committed grid node를 매
-  frame telemetry에 다시 실어 보낸다.
+- `astroquad-onboard`와 `grid_mission_node` alias는 GCS UDP loss에 대비해
+  최신 committed grid node를 매 frame telemetry에 다시 실어 보낸다.
 - Snake hop은 last committed node의 LOCAL_NED 위치에서 시작한다.
 - Cell 중간 `hop_align_start_m..hop_align_end_m` 구간에서만 line following을
   열고, 나머지는 yaw-locked `ForwardBlind`를 사용한다.
@@ -235,7 +237,7 @@ Real hardware boundary:
 
 - `line_follow_node --target ardupilot_serial` has guarded serial support.
 - `mavlink_probe` and `mavlink_motor_test` are the required bench tools.
-- `grid_mission_node --target ardupilot_serial --allow-arm-takeoff` has
+- `astroquad-onboard --target ardupilot_serial --allow-arm-takeoff` has
   guarded serial support and uses the same RC/local-estimate preflight gates as
   the line-follow real path.
 
@@ -262,7 +264,7 @@ Real hardware boundary:
 - `debug.*`: timing, video counters, line workload counters
 
 `MissionTelemetry` richer fields are present in the serializer, but current
-`VisionDebugPublisher` users do not populate them yet. `grid_mission_node`
+`VisionDebugPublisher` users do not populate them yet. `astroquad-onboard`
 state is currently authoritative in its console log plus `debug.note =
 "grid_mission"`.
 
@@ -295,9 +297,10 @@ send_fps = 5
 chunk_pacing_us = 150
 ```
 
-`vision_debug_node`, `line_follow_node`, and `grid_mission_node` expose
-`--fps <n>` as a CLI override for raw debug-video send FPS. Mission telemetry
-still follows processed frames; debug video remains best-effort.
+`vision_debug_node`, `line_follow_node`, `astroquad-onboard`, and
+`grid_mission_node` expose `--fps <n>` as a CLI override for raw debug-video
+send FPS. Mission telemetry still follows processed frames; debug video remains
+best-effort.
 
 `config/mission.toml [grid_mission]` 주요값:
 
@@ -355,18 +358,21 @@ uav-onboard/
 │  ├─ protocol/             # telemetry JSON serializer
 │  ├─ safety/               # safety monitor
 │  ├─ video/                # UDP MJPEG streamer
-│  └─ vision/               # detectors, stabilizers, frame sources, processor
+│  ├─ vision/               # detectors, stabilizers, frame sources, processor
+│  ├─ main.cpp              # astroquad-onboard entrypoint
+│  └─ telemetry_main.cpp    # uav-onboard-telem entrypoint
 ├─ tests/
 └─ tools/
 ```
 
-Key tools:
+Key entrypoints/tools:
 
 | File | Role |
 |---|---|
+| `src/main.cpp` | astroquad-onboard/grid_mission_node composition root |
+| `src/telemetry_main.cpp` | telemetry bring-up sender |
 | `tools/vision_debug_node.cpp` | camera/vision/GCS debug runtime |
 | `tools/line_follow_node.cpp` | line-follow staging mission |
-| `tools/grid_mission_node.cpp` | current grid arena staging mission |
 | `tools/mavlink_probe.cpp` | no-arm MAVLink/autopilot bench probe |
 | `tools/mavlink_motor_test.cpp` | props-removed motor command check |
 | `tools/grid_image_smoke.cpp` | deterministic image-grid smoke |
@@ -401,7 +407,7 @@ Line-follow SITL:
 Grid mission SITL:
 
 ```bash
-./build/grid_mission_node --config config --target sitl --vision gazebo \
+./build/astroquad-onboard --config config --target sitl --vision gazebo \
   --world grid --line-mode dark_on_light --marker-count 4 \
   --video --gcs-ip <windows-gcs-ip>
 ```
@@ -417,11 +423,11 @@ ArduPilot serial bench:
 
 | 순서 | 작업 | 이유/검증 |
 |---:|---|---|
-| 1 | `grid_mission_node` SITL snake 안정화 | 현재 full-grid 알고리즘의 중심 |
+| 1 | `astroquad-onboard` SITL snake 안정화 | 현재 full-grid 알고리즘의 중심 |
 | 2 | GCS mission/grid telemetry 보강 | console-only state를 GCS에도 구조화 |
 | 3 | Grid mission unit/integration tests 확대 | Entry/origin/hop/turn/marker commit 회귀 방지 |
 | 4 | Real ArduPilot serial grid mission guarded flight 검증 | serial/vision/control path 통합 검증 |
-| 5 | Full mission composition을 `uav_onboard`로 수렴 | 최종 실행 파일 정리 |
+| 5 | `grid_mission_node` alias 제거 여부 결정 | 최종 실행 파일 정리 |
 | 6 | Marker reverse revisit / return home policy | 대회 최종 미션 완성 |
 | 7 | GCS command channel 연동 | START/ABORT/EMERGENCY LAND/backend 선택 |
 | 8 | File logging/replay | 비행 후 재현성과 보고서 자료 |

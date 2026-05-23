@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(uav_onboard LANGUAGES CXX)
+project(astroquad_onboard LANGUAGES CXX)
 
 if(POLICY CMP0135)
     cmake_policy(SET CMP0135 NEW)
@@ -141,11 +141,11 @@ add_library(onboard_video STATIC
 target_include_directories(onboard_video PUBLIC src)
 target_link_libraries(onboard_video PUBLIC onboard_core)
 
-add_executable(uav_onboard
-    src/main.cpp
+add_executable(uav-onboard-telem
+    src/telemetry_main.cpp
 )
 
-target_link_libraries(uav_onboard PRIVATE onboard_core)
+target_link_libraries(uav-onboard-telem PRIVATE onboard_core)
 
 if(TARGET onboard_autopilot)
     add_executable(line_follow_node tools/line_follow_node.cpp)
@@ -240,13 +240,22 @@ if(BUILD_TOOLS)
         target_link_libraries(vision_debug_node PRIVATE onboard_core onboard_video onboard_vision)
 
         if(TARGET onboard_autopilot)
-            add_executable(grid_mission_node
-                tools/grid_mission_node.cpp
-                src/app/VisionDebugPublisher.cpp
+            foreach(runtime
+                astroquad-onboard
+                grid_mission_node
             )
-            target_include_directories(grid_mission_node PRIVATE src)
-            target_link_libraries(grid_mission_node PRIVATE
-                onboard_core onboard_autopilot onboard_video onboard_vision)
+                add_executable(${runtime}
+                    src/main.cpp
+                    src/app/VisionDebugPublisher.cpp
+                )
+                target_include_directories(${runtime} PRIVATE src)
+                target_link_libraries(${runtime} PRIVATE
+                    onboard_core onboard_autopilot onboard_video onboard_vision)
+            endforeach()
+            target_compile_definitions(astroquad-onboard PRIVATE
+                ONBOARD_PROGRAM_NAME="astroquad-onboard")
+            target_compile_definitions(grid_mission_node PRIVATE
+                ONBOARD_PROGRAM_NAME="grid_mission_node")
         endif()
     else()
         message(WARNING "OpenCV with aruco was not found; camera_preview, aruco_detector_tester, and vision_debug_node will not be built.")

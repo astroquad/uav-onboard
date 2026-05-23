@@ -31,9 +31,9 @@ not block onboard mission logic.
   continue processing the latest camera frame.
 - GCS overlay rendering uses only onboard metadata. GCS does not run marker,
   line, or intersection detection locally.
-- `vision.grid_node` is an event-style field, but `grid_mission_node` resends
-  the latest committed node every frame for UDP-loss tolerance. GCS deduplicates
-  by node id and coordinate.
+- `vision.grid_node` is an event-style field, but `astroquad-onboard` and its
+  `grid_mission_node` compatibility target resend the latest committed node
+  every frame for UDP-loss tolerance. GCS deduplicates by node id and coordinate.
 - `vision.drone_position` carries fractional progress from the last committed
   grid node. The current GCS parser accepts it; the current ASCII grid map still
   renders the heading arrow at the latest committed node.
@@ -261,9 +261,9 @@ Required top-level fields:
 
 The serializer supports a richer `mission` object, but the current
 `VisionDebugPublisher` path used by `vision_debug_node`, `line_follow_node`,
-and `grid_mission_node` does not yet populate it. For those executables, the
-console log and `debug.note` identify the active runtime, while GCS mission
-state remains minimal.
+`astroquad-onboard`, and `grid_mission_node` does not yet populate it. For
+those executables, the console log and `debug.note` identify the active
+runtime, while GCS mission state remains minimal.
 
 Reserved richer shape:
 
@@ -310,7 +310,7 @@ Reserved richer shape:
 | `vision.line.contour_px` | Simplified selected contour. Intersections may appear as cross-shaped contours. |
 | `vision.intersection.*` | Stabilized per-frame topology from the line mask. `straight` is valid but not a turn node. |
 | `vision.intersection_decision.*` | Sliding-window decision layer over intersection classification. It emits node/turn readiness hints, not autopilot commands. |
-| `vision.grid_node` | Latest committed grid node event. In `grid_mission_node`, this is intentionally resent every frame. |
+| `vision.grid_node` | Latest committed grid node event. In `astroquad-onboard`/`grid_mission_node`, this is intentionally resent every frame. |
 | `vision.grid_node.local_coord` | Local exploration coordinates only; official competition origin conversion is not implemented. |
 | `vision.drone_position` | Fractional progress from the last committed node, derived from short-window local estimate displacement. |
 | `vision.markers[]` | ArUco observations in the current frame. Marker commitment/stability is onboard mission logic, not a GCS decision. |
@@ -369,8 +369,9 @@ Current boundaries:
 
 - `line_follow_node` supports SITL UDP and guarded real ArduPilot serial paths.
 - `mavlink_probe` and `mavlink_motor_test` are no-arm/props-removed bench tools.
-- `grid_mission_node` supports SITL UDP and guarded real ArduPilot serial paths;
-  real arm/takeoff requires `--allow-arm-takeoff`.
+- `astroquad-onboard` supports SITL UDP and guarded real ArduPilot serial paths;
+  `grid_mission_node` builds the same entrypoint as a compatibility/staging
+  alias. Real arm/takeoff requires `--allow-arm-takeoff`.
 - Command channel fields for GCS-originated mission control remain planned.
 
 ## 8. Command Channel
@@ -392,10 +393,11 @@ receive a `CMD_ACK` telemetry response when implemented.
 
 | Executable | Repo | Purpose |
 |---|---|---|
-| `uav_onboard` | onboard | Basic telemetry bring-up sender; final onboard composition root target. |
+| `astroquad-onboard` | onboard | Current grid arena snake-mission SITL and guarded serial runtime. |
+| `grid_mission_node` | onboard | Compatibility/staging alias for `astroquad-onboard`. |
+| `uav-onboard-telem` | onboard | Basic telemetry bring-up sender / development probe. |
 | `vision_debug_node` | onboard | Camera/vision telemetry and optional raw MJPEG debug video. |
 | `line_follow_node` | onboard | Short line-follow mission staging for SITL and guarded ArduPilot serial tests. |
-| `grid_mission_node` | onboard | Current grid arena snake-mission SITL and guarded serial staging executable. |
 | `mavlink_probe` | onboard | No-arm MAVLink/local-estimate/parameter probe. |
 | `mavlink_motor_test` | onboard | Props-removed low-throttle motor command check. |
 | `video_streamer` | onboard | Raw MJPEG transport smoke tool. |

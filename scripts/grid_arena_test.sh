@@ -2,8 +2,8 @@
 # Gazebo + ArduCopter SITL launcher for the Astroquad grid arena test world.
 # Run from WSL: bash ~/astroquad/uav-onboard/scripts/grid_arena_test.sh
 #
-# NOTE: grid arena mission staging executable is now grid_mission_node.
-# This script only launches Gazebo + ArduCopter SITL; run grid_mission_node
+# NOTE: grid arena mission runtime executable is now astroquad-onboard.
+# This script only launches Gazebo + ArduCopter SITL; run astroquad-onboard
 # from a second terminal after the simulator is ready.
 
 set -euo pipefail
@@ -104,7 +104,7 @@ echo "    cd $ARDUCOPTER_DIR"
 echo "    sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON ${MAVPROXY_ARGS[*]} --out 127.0.0.1:14550 --add-param-file \"$INDOOR_PARAM_FILE\" --wipe-eeprom"
 echo
 echo "포트 구분:"
-echo "    MAVLink SITL -> onboard grid_mission_node/line_follow_node: UDP 127.0.0.1:14550"
+echo "    MAVLink SITL -> onboard astroquad-onboard/line_follow_node: UDP 127.0.0.1:14550"
 echo "    Astroquad onboard -> Windows GCS telemetry: UDP <Windows GCS IP>:14550"
 echo "    Astroquad onboard -> Windows GCS MJPEG video: UDP <Windows GCS IP>:5600"
 echo
@@ -119,7 +119,7 @@ else
 fi
 echo
 echo "Grid mission runtime:"
-echo "    grid_mission_node --world grid 는 config/runtime.sitl.grid.toml 의"
+echo "    astroquad-onboard --world grid 는 config/runtime.sitl.grid.toml 의"
 echo "    grid_arena_test_world camera topic 을 사용합니다. custom fixture 만"
 echo "    --gazebo-topic 으로 override 하세요."
 echo
@@ -137,7 +137,7 @@ echo "      --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Grid mission SITL:"
 echo "    cd $ONBOARD_DIR"
-echo "    ./build/grid_mission_node --config config --target sitl --vision gazebo \\"
+echo "    ./build/astroquad-onboard --config config --target sitl --vision gazebo \\"
 echo "      --world grid --line-mode dark_on_light --marker-count 4 \\"
 echo "      --video --gcs-ip <windows-gcs-ip>"
 echo

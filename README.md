@@ -9,13 +9,12 @@ The codebase now has three practical runtime layers:
 - `vision_debug_node`: camera/vision/GCS telemetry bring-up.
 - `line_follow_node`: short line-follow mission staging for SITL and guarded
   real ArduPilot serial tests.
-- `grid_mission_node`: current grid-arena snake mission staging for SITL and
+- `astroquad-onboard`: current grid-arena snake mission runtime for SITL and
   guarded ArduPilot serial tests.
 
-The final product target is still `uav_onboard`, but today that executable is a
-basic telemetry bring-up sender. Mission development should keep sharing the
-libraries already factored out of the tools instead of copying detector code
-between executables.
+`grid_mission_node` remains as a compatibility/staging alias that builds the
+same mission entrypoint. The old telemetry bring-up sender is now
+`uav-onboard-telem`.
 
 ## Layout
 
@@ -32,10 +31,11 @@ between executables.
 
 | Executable | Role |
 |---|---|
-| `uav_onboard` | Basic telemetry sender; final composition root target. |
+| `astroquad-onboard` | Current full grid-arena snake mission runtime. Supports SITL UDP and guarded ArduPilot serial paths. |
+| `grid_mission_node` | Compatibility/staging alias for `astroquad-onboard`. |
+| `uav-onboard-telem` | Basic telemetry sender / development probe. |
 | `vision_debug_node` | Camera source + ArUco/line/intersection processing + GCS telemetry + optional MJPEG video. |
 | `line_follow_node` | Auto takeoff, short line follow, marker hover/landing staging. Supports SITL UDP and guarded ArduPilot serial paths. |
-| `grid_mission_node` | Current full grid-arena snake mission staging. Supports SITL UDP and guarded ArduPilot serial paths. |
 | `mavlink_probe` | No-arm MAVLink heartbeat/local estimate/RC/battery/parameter probe. |
 | `mavlink_motor_test` | Props-removed low-throttle motor command check. |
 | `video_streamer` | Raw MJPEG transport smoke tool. |
@@ -108,9 +108,9 @@ Start `astroquad-gcs` on the laptop first, then run:
 Onboard sends raw camera JPEG only when `--video` is enabled. Marker boxes,
 line contours, intersection labels, and grid-map text are drawn by GCS from
 telemetry metadata.
-`line_follow_node`, `grid_mission_node`, and `vision_debug_node` all accept
-`--fps <n>` to override raw debug-video send FPS; the publisher clamps it to
-the configured camera FPS.
+`astroquad-onboard`, `grid_mission_node`, `line_follow_node`, and
+`vision_debug_node` all accept `--fps <n>` to override raw debug-video send
+FPS; the publisher clamps it to the configured camera FPS.
 
 Current vision path:
 
@@ -175,7 +175,7 @@ Current grid mission command:
 WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
 
 cd ~/astroquad/uav-onboard
-./build/grid_mission_node \
+./build/astroquad-onboard \
   --config config \
   --target sitl \
   --vision gazebo \
@@ -191,7 +191,7 @@ Descending marker revisit order is the default, so `--revisit-order desc` can
 be omitted. Use this only when you want ascending order:
 
 ```bash
-./build/grid_mission_node --config config --target sitl --vision gazebo --world grid \
+./build/astroquad-onboard --config config --target sitl --vision gazebo --world grid \
   --line-mode dark_on_light --marker-count 4 --revisit-order asc --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
@@ -293,7 +293,7 @@ Real grid-mission arming also requires explicit acknowledgement. The
 serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:
 
 ```bash
-./build/grid_mission_node --config config --target ardupilot_serial \
+./build/astroquad-onboard --config config --target ardupilot_serial \
   --line-mode dark_on_light --marker-count 4 --revisit-order asc \
   --video --allow-arm-takeoff
 ```
@@ -325,8 +325,8 @@ moving forward in camera frame.
 Start `uav-gcs-telem` on the laptop first:
 
 ```bash
-./build/uav_onboard --config config --count 10
-./build/uav_onboard --config config --gcs-ip 127.0.0.1 --count 10
+./build/uav-onboard-telem --config config --count 10
+./build/uav-onboard-telem --config config --gcs-ip 127.0.0.1 --count 10
 ```
 
 The default GCS IP is broadcast:
