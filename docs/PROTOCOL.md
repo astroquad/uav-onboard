@@ -260,7 +260,7 @@ Required top-level fields:
 ### 3.2 Optional Mission Object
 
 The serializer supports a richer `mission` object, but the current
-`VisionDebugPublisher` path used by `vision_debug_node`, `line_follow_node`,
+`GcsTelemetryPublisher` path used by `vision_debug_node`, `line_follow_node`,
 `astroquad-onboard`, and `grid_mission_node` does not yet populate it. For
 those executables, the console log and `debug.note` identify the active
 runtime, while GCS mission state remains minimal.

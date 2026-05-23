@@ -15,7 +15,7 @@
 
 namespace onboard::app {
 
-struct VisionDebugPublisherOptions {
+struct GcsTelemetryPublisherOptions {
     common::NetworkConfig network;
     common::VisionConfig vision;
     bool send_video = false;
@@ -25,7 +25,7 @@ struct VisionDebugPublisherOptions {
     int camera_index = 0;
 };
 
-struct VisionDebugPublishInput {
+struct GcsTelemetryPublishInput {
     vision::Frame frame;
     cv::Mat image_bgr;
     vision::VisionProcessingOutput vision_output;
@@ -51,7 +51,7 @@ struct VisionDebugPublishInput {
     std::string camera_status = "streaming";
 };
 
-struct VisionDebugPublishStats {
+struct GcsTelemetryPublishStats {
     double telemetry_build_ms = 0.0;
     double telemetry_send_ms = 0.0;
     double video_submit_ms = 0.0;
@@ -66,16 +66,16 @@ struct VisionDebugPublishStats {
     int video_chunk_count = 0;
 };
 
-class VisionDebugPublisher {
+class GcsTelemetryPublisher {
 public:
-    VisionDebugPublisher();
-    ~VisionDebugPublisher();
+    GcsTelemetryPublisher();
+    ~GcsTelemetryPublisher();
 
-    VisionDebugPublisher(const VisionDebugPublisher&) = delete;
-    VisionDebugPublisher& operator=(const VisionDebugPublisher&) = delete;
+    GcsTelemetryPublisher(const GcsTelemetryPublisher&) = delete;
+    GcsTelemetryPublisher& operator=(const GcsTelemetryPublisher&) = delete;
 
-    bool open(const VisionDebugPublisherOptions& options);
-    VisionDebugPublishStats publish(VisionDebugPublishInput input);
+    bool open(const GcsTelemetryPublisherOptions& options);
+    GcsTelemetryPublishStats publish(GcsTelemetryPublishInput input);
     void close();
     std::string lastError() const;
 

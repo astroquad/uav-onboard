@@ -1,4 +1,4 @@
-#include "app/VisionDebugPublisher.hpp"
+#include "app/GcsTelemetryPublisher.hpp"
 
 #include "camera/CameraFrame.hpp"
 #include "network/UdpTelemetrySender.hpp"
@@ -404,8 +404,8 @@ private:
 
 } // namespace
 
-struct VisionDebugPublisher::Impl {
-    VisionDebugPublisherOptions options;
+struct GcsTelemetryPublisher::Impl {
+    GcsTelemetryPublisherOptions options;
     network::UdpTelemetrySender telemetry_sender;
     LatestVideoSender video_sender;
     std::uint32_t telemetry_seq = 1;
@@ -419,18 +419,18 @@ struct VisionDebugPublisher::Impl {
     std::uint64_t last_telemetry_bytes = 0;
 };
 
-VisionDebugPublisher::VisionDebugPublisher()
+GcsTelemetryPublisher::GcsTelemetryPublisher()
     : impl_(new Impl)
 {
 }
 
-VisionDebugPublisher::~VisionDebugPublisher()
+GcsTelemetryPublisher::~GcsTelemetryPublisher()
 {
     close();
     delete impl_;
 }
 
-bool VisionDebugPublisher::open(const VisionDebugPublisherOptions& options)
+bool GcsTelemetryPublisher::open(const GcsTelemetryPublisherOptions& options)
 {
     close();
     impl_->options = options;
@@ -462,9 +462,9 @@ bool VisionDebugPublisher::open(const VisionDebugPublisherOptions& options)
     return true;
 }
 
-VisionDebugPublishStats VisionDebugPublisher::publish(VisionDebugPublishInput input)
+GcsTelemetryPublishStats GcsTelemetryPublisher::publish(GcsTelemetryPublishInput input)
 {
-    VisionDebugPublishStats stats;
+    GcsTelemetryPublishStats stats;
     const auto& result = input.vision_output.result;
     const std::size_t input_jpeg_bytes = input.frame.jpeg_data.size();
 
@@ -643,7 +643,7 @@ VisionDebugPublishStats VisionDebugPublisher::publish(VisionDebugPublishInput in
     return stats;
 }
 
-void VisionDebugPublisher::close()
+void GcsTelemetryPublisher::close()
 {
     if (impl_ == nullptr) {
         return;
@@ -651,7 +651,7 @@ void VisionDebugPublisher::close()
     impl_->video_sender.stop();
 }
 
-std::string VisionDebugPublisher::lastError() const
+std::string GcsTelemetryPublisher::lastError() const
 {
     return impl_->last_error;
 }

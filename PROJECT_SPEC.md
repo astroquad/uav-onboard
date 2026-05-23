@@ -49,7 +49,7 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 | Intersection classifier/stabilizer | 구현됨 | `IntersectionDetector.*`, `IntersectionStabilizer.*` |
 | Intersection decision | 구현됨 | `src/mission/IntersectionDecision.*` |
 | Local grid coordinate tracker | 구현됨 | `src/mission/GridCoordinateTracker.*` |
-| Grid mission state machine | SITL staging | `src/mission/GridMission.*`, `src/main.cpp` |
+| Grid mission state machine | SITL staging | `src/mission/GridMission.*`, `src/app/AstroquadOnboardApp.*` |
 | Snake boundary planner | 구현됨 | `src/mission/SnakePlanner.*` |
 | Marker registry/window gate | 구현됨 | `src/mission/MarkerRegistry.*`, `GridMission::MarkerWindow` |
 | Guided velocity line/marker controller | 구현됨 | `src/control/GuidedVelocityController.*` |
@@ -59,7 +59,7 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 | MAVLink serial transport | 구현됨 | `src/autopilot/SerialMavlinkTransport.*` |
 | Autopilot adapter | 구현됨 | `src/autopilot/AutopilotMavlinkAdapter.*` |
 | Safety monitor | 부분 구현 | `src/safety/SafetyMonitor.*`, mission-local failsafe |
-| GCS telemetry/video publisher | 구현됨 | `src/app/VisionDebugPublisher.*` |
+| GCS telemetry/video publisher | 구현됨 | `src/app/GcsTelemetryPublisher.*` |
 | Gazebo line/grid worlds | 구현됨 | `sim/gazebo/`, `scripts/line_tracing_test.sh`, `scripts/grid_arena_test.sh` |
 | ArduPilot serial bench tools | 구현됨 | `tools/mavlink_probe.cpp`, `tools/mavlink_motor_test.cpp` |
 | GCS command receiver | 미구현 | planned |
@@ -102,7 +102,7 @@ FrameSource
   -> AutopilotMavlinkAdapter
 
 Support:
-  VisionDebugPublisher sends telemetry/debug video
+  GcsTelemetryPublisher sends telemetry/debug video
   SafetyMonitor and mission-local failsafe observe runtime state
 ```
 
@@ -264,7 +264,7 @@ Real hardware boundary:
 - `debug.*`: timing, video counters, line workload counters
 
 `MissionTelemetry` richer fields are present in the serializer, but current
-`VisionDebugPublisher` users do not populate them yet. `astroquad-onboard`
+`GcsTelemetryPublisher` users do not populate them yet. `astroquad-onboard`
 state is currently authoritative in its console log plus `debug.note =
 "grid_mission"`.
 
@@ -348,7 +348,7 @@ uav-onboard/
 │  └─ setup_rpi_dependencies.sh
 ├─ sim/gazebo/
 ├─ src/
-│  ├─ app/                  # VisionDebugPipeline / VisionDebugPublisher
+│  ├─ app/                  # AstroquadOnboardApp / VisionDebugPipeline / GcsTelemetryPublisher
 │  ├─ autopilot/            # MAVLink adapter + UDP/serial transports
 │  ├─ camera/               # rpicam MJPEG capture
 │  ├─ common/               # config/time helpers
@@ -369,7 +369,8 @@ Key entrypoints/tools:
 
 | File | Role |
 |---|---|
-| `src/main.cpp` | astroquad-onboard/grid_mission_node composition root |
+| `src/main.cpp` | thin astroquad-onboard/grid_mission_node entrypoint |
+| `src/app/AstroquadOnboardApp.*` | grid mission runtime composition root |
 | `src/telemetry_main.cpp` | telemetry bring-up sender |
 | `tools/vision_debug_node.cpp` | camera/vision/GCS debug runtime |
 | `tools/line_follow_node.cpp` | line-follow staging mission |

@@ -1,6 +1,6 @@
 #include "app/VisionDebugPipeline.hpp"
 
-#include "app/VisionDebugPublisher.hpp"
+#include "app/GcsTelemetryPublisher.hpp"
 #include "camera/RpicamMjpegSource.hpp"
 #include "mission/GridCoordinateTracker.hpp"
 #include "mission/IntersectionDecision.hpp"
@@ -594,8 +594,8 @@ int runFrameSourceVisionDebug(const VisionDebugPipelineOptions& options)
         return 1;
     }
 
-    VisionDebugPublisher publisher;
-    VisionDebugPublisherOptions publisher_options;
+    GcsTelemetryPublisher publisher;
+    GcsTelemetryPublisherOptions publisher_options;
     publisher_options.network = options.network;
     publisher_options.vision = options.vision;
     publisher_options.send_video = options.send_video;
@@ -700,7 +700,7 @@ int runFrameSourceVisionDebug(const VisionDebugPipelineOptions& options)
             processing_finished - processing_started).count();
         const double processing_fps = processing_rate.note(processing_finished);
 
-        VisionDebugPublishInput publish_input;
+        GcsTelemetryPublishInput publish_input;
         publish_input.frame = frame;
         publish_input.image_bgr = frame.image_bgr;
         publish_input.vision_output = vision_output;

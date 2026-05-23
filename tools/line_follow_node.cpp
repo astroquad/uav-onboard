@@ -8,7 +8,7 @@
 #include "safety/SafetyMonitor.hpp"
 
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
-#include "app/VisionDebugPublisher.hpp"
+#include "app/GcsTelemetryPublisher.hpp"
 #include "vision/FakeFrameSource.hpp"
 #include "vision/GazeboCameraSource.hpp"
 #include "vision/RpicamFrameSource.hpp"
@@ -1120,7 +1120,7 @@ onboard::vision::VisionResult readVisionResult(
 struct VisionFrameResult {
     onboard::vision::Frame frame;
     onboard::vision::VisionProcessingOutput output;
-    onboard::app::VisionDebugPublishStats publish_stats;
+    onboard::app::GcsTelemetryPublishStats publish_stats;
     double read_frame_ms = 0.0;
     double processing_latency_ms = 0.0;
     bool published = false;
@@ -1186,7 +1186,7 @@ private:
 VisionFrameResult readAndPublishVisionFrame(
     onboard::vision::FrameSource& source,
     onboard::vision::VisionProcessor& processor,
-    onboard::app::VisionDebugPublisher* publisher,
+    onboard::app::GcsTelemetryPublisher* publisher,
     RateMeter& capture_rate,
     RateMeter& processing_rate)
 {
@@ -1195,7 +1195,7 @@ VisionFrameResult readAndPublishVisionFrame(
     const double processing_fps = processing_rate.note(Clock::now());
 
     if (publisher) {
-        onboard::app::VisionDebugPublishInput publish_input;
+        onboard::app::GcsTelemetryPublishInput publish_input;
         publish_input.frame = frame_result.frame;
         publish_input.image_bgr = frame_result.frame.image_bgr;
         publish_input.vision_output = frame_result.output;
@@ -1220,7 +1220,7 @@ public:
     StartupVisionStreamer(
         onboard::vision::FrameSource& source,
         onboard::vision::VisionProcessor& processor,
-        onboard::app::VisionDebugPublisher& publisher,
+        onboard::app::GcsTelemetryPublisher& publisher,
         RateMeter& capture_rate,
         RateMeter& processing_rate,
         std::chrono::milliseconds period)
@@ -1285,7 +1285,7 @@ private:
 
     onboard::vision::FrameSource& source_;
     onboard::vision::VisionProcessor& processor_;
-    onboard::app::VisionDebugPublisher& publisher_;
+    onboard::app::GcsTelemetryPublisher& publisher_;
     RateMeter& capture_rate_;
     RateMeter& processing_rate_;
     std::chrono::milliseconds period_;
@@ -1462,7 +1462,7 @@ int main(int argc, char** argv)
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         std::unique_ptr<onboard::vision::FrameSource> frame_source;
         std::unique_ptr<onboard::vision::VisionProcessor> vision_processor;
-        std::unique_ptr<onboard::app::VisionDebugPublisher> gcs_publisher;
+        std::unique_ptr<onboard::app::GcsTelemetryPublisher> gcs_publisher;
         RateMeter capture_rate;
         RateMeter processing_rate;
         std::unique_ptr<StartupVisionStreamer> startup_vision_streamer;
@@ -1483,8 +1483,8 @@ int main(int argc, char** argv)
                 ? options.send_video
                 : config.vision.debug_video.enabled;
             if (send_video || options.send_telemetry) {
-                auto publisher = std::make_unique<onboard::app::VisionDebugPublisher>();
-                onboard::app::VisionDebugPublisherOptions publisher_options;
+                auto publisher = std::make_unique<onboard::app::GcsTelemetryPublisher>();
+                onboard::app::GcsTelemetryPublisherOptions publisher_options;
                 publisher_options.network = config.network;
                 publisher_options.vision = config.vision;
                 publisher_options.send_video = send_video;
@@ -1614,7 +1614,7 @@ int main(int argc, char** argv)
         bool hold_anchor_warning_logged = false;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         int mission_vision_frames = 0;
-        onboard::app::VisionDebugPublishStats mission_publish_stats;
+        onboard::app::GcsTelemetryPublishStats mission_publish_stats;
         onboard::vision::VisionProcessingMetrics last_vision_metrics;
         double last_read_frame_ms = 0.0;
         double last_processing_latency_ms = 0.0;
@@ -1885,7 +1885,7 @@ int main(int argc, char** argv)
         auto last_disarm_request = Clock::time_point {};
         int landing_video_frames = 0;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
-        onboard::app::VisionDebugPublishStats landing_publish_stats;
+        onboard::app::GcsTelemetryPublishStats landing_publish_stats;
 #endif
         while (Clock::now() < disarm_deadline) {
             const auto loop_start = Clock::now();
