@@ -288,6 +288,34 @@ Real line-follow arming requires explicit acknowledgement:
   --vision rpicam --line-mode dark_on_light --video --allow-arm-takeoff
 ```
 
+Line-follow only ALT_HOLD + RC override experiment path:
+
+```bash
+./build/line_follow_node --config config --target ardupilot_serial \
+  --vision rpicam --line-mode dark_on_light --video \
+  --control-backend alt_hold_rc_override --alt-hold-auto-takeoff \
+  --allow-rc-override --allow-arm-takeoff
+```
+
+This backend is intentionally limited to `line_follow_node`. With
+`--alt-hold-auto-takeoff`, it requests ALT_HOLD, arms, climbs with
+`RC_CHANNELS_OVERRIDE` throttle, settles at neutral throttle, then sends small
+roll/pitch/yaw override inputs for line following. The `[rc_override]`
+marker servo settings are only used by this backend; they give marker centering
+separate roll/pitch scaling so line following can stay gentle while marker
+braking is stronger. On exit, takeover, or landing it releases the override.
+Use this no-arm smoke first with props
+removed and Mission Planner's radio view open:
+
+```bash
+./build/line_follow_node --config config --target ardupilot_serial \
+  --rc-override-smoke --allow-rc-override
+```
+
+If the real RC receiver works through ArduPilot but MAVLink `RC_CHANNELS` is
+not visible to onboard, add `--unsafe-assume-rc-present` only after verifying
+the transmitter mode switch can take over.
+
 Real grid-mission arming also requires explicit acknowledgement. The
 `ardupilot_serial` defaults to `runtime.ardupilot_serial.toml` and `rpicam`; override the
 serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:

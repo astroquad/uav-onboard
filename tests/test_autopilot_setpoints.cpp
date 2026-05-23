@@ -1,6 +1,7 @@
 #include "autopilot/AutopilotMavlinkAdapter.hpp"
 #include "autopilot/MavlinkTransport.hpp"
 
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <memory>
@@ -116,6 +117,36 @@ int main()
     mavlink_command_long_t disarm {};
     mavlink_msg_command_long_decode(&capture->sent_messages.back(), &disarm);
     requireNear(disarm.param1, 0.0f);
+
+    std::array<std::uint16_t, 18> rc_override {};
+    rc_override.fill(UINT16_MAX);
+    rc_override[0] = 1580;
+    rc_override[1] = 1420;
+    rc_override[2] = 1500;
+    rc_override[3] = 1525;
+    adapter.sendRcChannelsOverride(rc_override);
+    assert(capture->sent_messages.size() == 4);
+    assert(capture->sent_messages.back().msgid == MAVLINK_MSG_ID_RC_CHANNELS_OVERRIDE);
+    mavlink_rc_channels_override_t rc {};
+    mavlink_msg_rc_channels_override_decode(&capture->sent_messages.back(), &rc);
+    assert(rc.target_system == ids.target_system);
+    assert(rc.target_component == ids.target_component);
+    assert(rc.chan1_raw == 1580);
+    assert(rc.chan2_raw == 1420);
+    assert(rc.chan3_raw == 1500);
+    assert(rc.chan4_raw == 1525);
+    assert(rc.chan5_raw == UINT16_MAX);
+
+    adapter.releaseRcChannelsOverride();
+    assert(capture->sent_messages.size() == 5);
+    mavlink_rc_channels_override_t release {};
+    mavlink_msg_rc_channels_override_decode(&capture->sent_messages.back(), &release);
+    assert(release.chan1_raw == 0);
+    assert(release.chan2_raw == 0);
+    assert(release.chan3_raw == 0);
+    assert(release.chan4_raw == 0);
+    assert(release.chan8_raw == 0);
+    assert(release.chan9_raw == UINT16_MAX);
 
     return 0;
 }

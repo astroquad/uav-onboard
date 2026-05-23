@@ -52,6 +52,38 @@ invert_yaw = false
 # Output EMA smoothing: blend 40% new command with 60% previous command.
 output_ema_alpha = 0.4
 
+[rc_override]
+# ArduPilot SITL normally accepts RC override from GCS system id 255.
+sender_system_id = 255
+arm_throttle_pwm = 1000
+throttle_hold_pwm = 1500
+# 1600 can sit on the AltHold throttle deadband edge in SITL, so use a
+# slightly clearer climb command for the simulation path.
+takeoff_throttle_pwm = 1700
+max_roll_delta_pwm = 80
+max_pitch_delta_pwm = 100
+max_yaw_delta_pwm = 60
+# RC override is stick input, not velocity control. These scales say how much
+# requested pseudo-velocity maps to full stick delta. A 0.25m/s forward command
+# therefore maps to 25% of max_pitch_delta_pwm.
+roll_full_scale_mps = 0.8
+pitch_full_scale_mps = 1.0
+yaw_full_scale_rad_s = 0.8
+# ALT_HOLD-only marker visual servo: stronger stick scale is used only while
+# visually centering over an ArUco marker.
+marker_roll_full_scale_mps = 0.45
+marker_pitch_full_scale_mps = 0.35
+marker_servo_kp_x = 0.35
+marker_servo_kp_y = 0.22
+marker_servo_kd_x = 0.10
+marker_servo_kd_y = 0.40
+marker_servo_max_lateral_mps = 0.25
+marker_servo_max_forward_mps = 0.30
+marker_servo_max_reverse_mps = 0.45
+marker_servo_max_rate_mps = 0.25
+marker_servo_derivative_alpha = 0.35
+takeoff_timeout_s = 20.0
+
 [marker_hover]
 hold_s = 3.0
 center_tolerance_px = 30.0

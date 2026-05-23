@@ -3,7 +3,9 @@
 #include "autopilot/AutopilotState.hpp"
 #include "autopilot/MavlinkTransport.hpp"
 
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -19,6 +21,7 @@ public:
     void waitHeartbeat(std::chrono::seconds timeout);
     void requestDefaultStreams();
     void setGuidedMode(std::chrono::seconds timeout);
+    void setAltHoldMode(std::chrono::seconds timeout);
     void setLandMode(std::chrono::seconds timeout);
     void arm(std::chrono::seconds timeout);
     void requestDisarm();
@@ -26,6 +29,8 @@ public:
     void takeoff(double target_altitude_m);
     void sendBodyVelocity(const BodyVelocityCommand& command);
     void sendLocalNedPositionTarget(const LocalNedPositionTargetCommand& command);
+    void sendRcChannelsOverride(const std::array<std::uint16_t, 18>& channels_pwm);
+    void releaseRcChannelsOverride();
     bool waitAltitudeReached(double target_altitude_m, double ratio, std::chrono::seconds timeout);
     bool waitDisarmed(std::chrono::seconds timeout);
     bool poll(int timeout_ms);

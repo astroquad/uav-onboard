@@ -1,5 +1,6 @@
 #include "autopilot/AutopilotMavlinkAdapter.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -95,6 +96,11 @@ void AutopilotMavlinkAdapter::requestDefaultStreams()
 void AutopilotMavlinkAdapter::setGuidedMode(std::chrono::seconds timeout)
 {
     setMode(static_cast<std::uint32_t>(COPTER_MODE_GUIDED), "GUIDED", timeout);
+}
+
+void AutopilotMavlinkAdapter::setAltHoldMode(std::chrono::seconds timeout)
+{
+    setMode(static_cast<std::uint32_t>(COPTER_MODE_ALT_HOLD), "ALT_HOLD", timeout);
 }
 
 void AutopilotMavlinkAdapter::setLandMode(std::chrono::seconds timeout)
@@ -251,6 +257,45 @@ void AutopilotMavlinkAdapter::sendLocalNedPositionTarget(
         0.0f,
         command.yaw_rate_rad_s);
     transport_->sendMessage(message);
+}
+
+void AutopilotMavlinkAdapter::sendRcChannelsOverride(
+    const std::array<std::uint16_t, 18>& channels_pwm)
+{
+    mavlink_message_t message {};
+    mavlink_msg_rc_channels_override_pack(
+        ids_.system_id,
+        ids_.component_id,
+        &message,
+        state_.target_system,
+        state_.target_component,
+        channels_pwm[0],
+        channels_pwm[1],
+        channels_pwm[2],
+        channels_pwm[3],
+        channels_pwm[4],
+        channels_pwm[5],
+        channels_pwm[6],
+        channels_pwm[7],
+        channels_pwm[8],
+        channels_pwm[9],
+        channels_pwm[10],
+        channels_pwm[11],
+        channels_pwm[12],
+        channels_pwm[13],
+        channels_pwm[14],
+        channels_pwm[15],
+        channels_pwm[16],
+        channels_pwm[17]);
+    transport_->sendMessage(message);
+}
+
+void AutopilotMavlinkAdapter::releaseRcChannelsOverride()
+{
+    std::array<std::uint16_t, 18> channels_pwm {};
+    channels_pwm.fill(UINT16_MAX);
+    std::fill_n(channels_pwm.begin(), 8, 0);
+    sendRcChannelsOverride(channels_pwm);
 }
 
 bool AutopilotMavlinkAdapter::waitAltitudeReached(

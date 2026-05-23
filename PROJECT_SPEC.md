@@ -218,6 +218,16 @@ Primary:
 - MAVLink `SET_POSITION_TARGET_LOCAL_NED`
 - Body-frame velocity setpoint
 
+Line-follow experiment-only alternate path:
+
+- `line_follow_node --control-backend alt_hold_rc_override`
+- ArduPilot `ALT_HOLD`
+- Optional line-follow-only `--alt-hold-auto-takeoff` arms and climbs using
+  `RC_CHANNELS_OVERRIDE` throttle, then switches to roll/pitch/yaw overrides
+  with neutral throttle for line following.
+- This path is intentionally not used by `astroquad-onboard` or
+  `grid_mission_node`.
+
 현재 intent:
 
 | Intent | 역할 |

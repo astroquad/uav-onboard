@@ -17,6 +17,7 @@
 
 #include <toml++/toml.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <algorithm>
@@ -40,6 +41,33 @@ enum class TransportKind {
     Serial,
 };
 
+enum class ControlBackend {
+    GuidedVelocity,
+    AltHoldRcOverride,
+};
+
+const char* toString(ControlBackend backend)
+{
+    switch (backend) {
+    case ControlBackend::GuidedVelocity:
+        return "guided_velocity";
+    case ControlBackend::AltHoldRcOverride:
+        return "alt_hold_rc_override";
+    }
+    return "unknown";
+}
+
+ControlBackend parseControlBackend(const std::string& value)
+{
+    if (value == "guided_velocity") {
+        return ControlBackend::GuidedVelocity;
+    }
+    if (value == "alt_hold_rc_override") {
+        return ControlBackend::AltHoldRcOverride;
+    }
+    throw std::runtime_error("unknown --control-backend: " + value);
+}
+
 struct EndpointConfig {
     TransportKind kind = TransportKind::Udp;
     std::string label = "sitl";
@@ -47,6 +75,36 @@ struct EndpointConfig {
     std::uint16_t listen_port = 14550;
     std::string serial_device = "/dev/serial0";
     int serial_baudrate = 115200;
+};
+
+struct RcOverrideConfig {
+    int sender_system_id = 255;
+    int trim_pwm = 1500;
+    int arm_throttle_pwm = 1000;
+    int throttle_hold_pwm = 1500;
+    int takeoff_throttle_pwm = 1600;
+    int max_roll_delta_pwm = 80;
+    int max_pitch_delta_pwm = 80;
+    int max_yaw_delta_pwm = 80;
+    double roll_full_scale_mps = 0.8;
+    double pitch_full_scale_mps = 1.0;
+    double yaw_full_scale_rad_s = 0.8;
+    double marker_roll_full_scale_mps = 0.45;
+    double marker_pitch_full_scale_mps = 0.35;
+    double marker_servo_kp_x = 0.35;
+    double marker_servo_kp_y = 0.35;
+    double marker_servo_kd_x = 0.08;
+    double marker_servo_kd_y = 0.14;
+    double marker_servo_max_lateral_mps = 0.22;
+    double marker_servo_max_forward_mps = 0.10;
+    double marker_servo_max_reverse_mps = 0.30;
+    double marker_servo_max_rate_mps = 0.04;
+    double marker_servo_derivative_alpha = 0.35;
+    double takeoff_timeout_s = 20.0;
+    bool override_throttle = true;
+    bool invert_roll = false;
+    bool invert_pitch = false;
+    bool invert_yaw = false;
 };
 
 struct RuntimeConfig {
@@ -57,6 +115,7 @@ struct RuntimeConfig {
     int setpoint_rate_hz = 20;
     onboard::mission::LineFollowMissionConfig mission;
     onboard::control::GuidedVelocityControllerConfig controller;
+    RcOverrideConfig rc_override;
     onboard::safety::SafetyConfig safety;
     double fake_center_error_norm = 0.0;
     double fake_line_angle_deg = 90.0;
@@ -70,6 +129,7 @@ struct Options {
     std::string target;
     std::string autopilot_uri;
     std::string vision;
+    ControlBackend control_backend = ControlBackend::GuidedVelocity;
     std::string line_mode_override;
     std::string gcs_ip_override;
     std::string gazebo_topic_override;
@@ -87,6 +147,10 @@ struct Options {
     bool no_arm = false;
     bool dry_run = false;
     bool allow_arm_takeoff = false;
+    bool allow_rc_override = false;
+    bool rc_override_smoke = false;
+    bool alt_hold_set_mode = false;
+    bool alt_hold_auto_takeoff = false;
     bool unsafe_assume_rc_present = false;
     bool profile_vision = false;
 };
@@ -115,6 +179,8 @@ void printUsage()
         << "                              or serial:///dev/serial0:115200\n"
         << "  --vision <fake|gazebo|rpicam>\n"
         << "                              Vision source for this MVP node\n"
+        << "  --control-backend <guided_velocity|alt_hold_rc_override>\n"
+        << "                              Default guided_velocity. alt_hold_rc_override is line-follow only.\n"
         << "  --line-mode <mode>          auto, light_on_dark, or dark_on_light\n"
         << "  --gcs-ip <ip>               Override GCS telemetry/video destination IP\n"
         << "  --telemetry-port <n>        Override GCS telemetry UDP port\n"
@@ -129,6 +195,10 @@ void printUsage()
         << "  --no-arm                    Real serial safety mode; no mode/arm/takeoff\n"
         << "  --dry-run                   Real serial safety mode; no command-producing mission\n"
         << "  --allow-arm-takeoff         Explicitly allow real serial arm/takeoff path\n"
+        << "  --allow-rc-override         Explicitly allow ALT_HOLD RC override control\n"
+        << "  --rc-override-smoke         No-arm RC override channel smoke; sends neutral/pulses/release\n"
+        << "  --alt-hold-set-mode         In alt_hold_rc_override, request ALT_HOLD before waiting ready\n"
+        << "  --alt-hold-auto-takeoff     In alt_hold_rc_override, arm and climb using RC throttle override\n"
         << "  --unsafe-assume-rc-present  Bypass MAVLink RC gate for real-flight debugging\n"
         << "  --profile-vision            Log per-stage vision latency in control log\n"
         << "  --smoke-duration-ms <n>     MAVLink smoke duration, default 10000\n"
@@ -165,6 +235,8 @@ Options parseOptions(int argc, char** argv)
             options.autopilot_uri = argv[++i];
         } else if (arg == "--vision" && i + 1 < argc) {
             options.vision = argv[++i];
+        } else if (arg == "--control-backend" && i + 1 < argc) {
+            options.control_backend = parseControlBackend(argv[++i]);
         } else if (arg == "--line-mode" && i + 1 < argc) {
             options.line_mode_override = argv[++i];
         } else if (arg == "--gcs-ip" && i + 1 < argc) {
@@ -196,6 +268,14 @@ Options parseOptions(int argc, char** argv)
             options.dry_run = true;
         } else if (arg == "--allow-arm-takeoff") {
             options.allow_arm_takeoff = true;
+        } else if (arg == "--allow-rc-override") {
+            options.allow_rc_override = true;
+        } else if (arg == "--rc-override-smoke") {
+            options.rc_override_smoke = true;
+        } else if (arg == "--alt-hold-set-mode") {
+            options.alt_hold_set_mode = true;
+        } else if (arg == "--alt-hold-auto-takeoff") {
+            options.alt_hold_auto_takeoff = true;
         } else if (arg == "--unsafe-assume-rc-present") {
             options.unsafe_assume_rc_present = true;
         } else if (arg == "--profile-vision") {
@@ -447,6 +527,71 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
         config.controller.invert_marker_y =
             marker_hover["invert_y"].value_or(config.controller.invert_marker_y);
     }
+    if (const auto rc_override = table["rc_override"]) {
+        config.rc_override.sender_system_id =
+            rc_override["sender_system_id"].value_or(config.rc_override.sender_system_id);
+        config.rc_override.trim_pwm =
+            rc_override["trim_pwm"].value_or(config.rc_override.trim_pwm);
+        config.rc_override.arm_throttle_pwm =
+            rc_override["arm_throttle_pwm"].value_or(config.rc_override.arm_throttle_pwm);
+        config.rc_override.throttle_hold_pwm =
+            rc_override["throttle_hold_pwm"].value_or(config.rc_override.throttle_hold_pwm);
+        config.rc_override.takeoff_throttle_pwm =
+            rc_override["takeoff_throttle_pwm"].value_or(config.rc_override.takeoff_throttle_pwm);
+        config.rc_override.max_roll_delta_pwm =
+            rc_override["max_roll_delta_pwm"].value_or(config.rc_override.max_roll_delta_pwm);
+        config.rc_override.max_pitch_delta_pwm =
+            rc_override["max_pitch_delta_pwm"].value_or(config.rc_override.max_pitch_delta_pwm);
+        config.rc_override.max_yaw_delta_pwm =
+            rc_override["max_yaw_delta_pwm"].value_or(config.rc_override.max_yaw_delta_pwm);
+        config.rc_override.roll_full_scale_mps =
+            rc_override["roll_full_scale_mps"].value_or(config.rc_override.roll_full_scale_mps);
+        config.rc_override.pitch_full_scale_mps =
+            rc_override["pitch_full_scale_mps"].value_or(config.rc_override.pitch_full_scale_mps);
+        config.rc_override.yaw_full_scale_rad_s =
+            rc_override["yaw_full_scale_rad_s"].value_or(config.rc_override.yaw_full_scale_rad_s);
+        config.rc_override.marker_roll_full_scale_mps =
+            rc_override["marker_roll_full_scale_mps"].value_or(
+                config.rc_override.marker_roll_full_scale_mps);
+        config.rc_override.marker_pitch_full_scale_mps =
+            rc_override["marker_pitch_full_scale_mps"].value_or(
+                config.rc_override.marker_pitch_full_scale_mps);
+        config.rc_override.marker_servo_kp_x =
+            rc_override["marker_servo_kp_x"].value_or(config.rc_override.marker_servo_kp_x);
+        config.rc_override.marker_servo_kp_y =
+            rc_override["marker_servo_kp_y"].value_or(config.rc_override.marker_servo_kp_y);
+        config.rc_override.marker_servo_kd_x =
+            rc_override["marker_servo_kd_x"].value_or(config.rc_override.marker_servo_kd_x);
+        config.rc_override.marker_servo_kd_y =
+            rc_override["marker_servo_kd_y"].value_or(config.rc_override.marker_servo_kd_y);
+        config.rc_override.marker_servo_max_lateral_mps =
+            rc_override["marker_servo_max_lateral_mps"].value_or(
+                config.rc_override.marker_servo_max_lateral_mps);
+        config.rc_override.marker_servo_max_forward_mps =
+            rc_override["marker_servo_max_forward_mps"].value_or(
+                rc_override["marker_approach_max_forward_mps"].value_or(
+                    config.rc_override.marker_servo_max_forward_mps));
+        config.rc_override.marker_servo_max_reverse_mps =
+            rc_override["marker_servo_max_reverse_mps"].value_or(
+                rc_override["marker_brake_reverse_mps"].value_or(
+                    config.rc_override.marker_servo_max_reverse_mps));
+        config.rc_override.marker_servo_max_rate_mps =
+            rc_override["marker_servo_max_rate_mps"].value_or(
+                config.rc_override.marker_servo_max_rate_mps);
+        config.rc_override.marker_servo_derivative_alpha =
+            rc_override["marker_servo_derivative_alpha"].value_or(
+                config.rc_override.marker_servo_derivative_alpha);
+        config.rc_override.takeoff_timeout_s =
+            rc_override["takeoff_timeout_s"].value_or(config.rc_override.takeoff_timeout_s);
+        config.rc_override.override_throttle =
+            rc_override["override_throttle"].value_or(config.rc_override.override_throttle);
+        config.rc_override.invert_roll =
+            rc_override["invert_roll"].value_or(config.rc_override.invert_roll);
+        config.rc_override.invert_pitch =
+            rc_override["invert_pitch"].value_or(config.rc_override.invert_pitch);
+        config.rc_override.invert_yaw =
+            rc_override["invert_yaw"].value_or(config.rc_override.invert_yaw);
+    }
 }
 
 RuntimeConfig loadRuntimeConfig(const Options& options)
@@ -589,6 +734,71 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
             config.controller.invert_marker_y =
                 marker_hover["invert_y"].value_or(config.controller.invert_marker_y);
         }
+        if (const auto rc_override = table["rc_override"]) {
+            config.rc_override.sender_system_id =
+                rc_override["sender_system_id"].value_or(config.rc_override.sender_system_id);
+            config.rc_override.trim_pwm =
+                rc_override["trim_pwm"].value_or(config.rc_override.trim_pwm);
+            config.rc_override.arm_throttle_pwm =
+                rc_override["arm_throttle_pwm"].value_or(config.rc_override.arm_throttle_pwm);
+            config.rc_override.throttle_hold_pwm =
+                rc_override["throttle_hold_pwm"].value_or(config.rc_override.throttle_hold_pwm);
+            config.rc_override.takeoff_throttle_pwm =
+                rc_override["takeoff_throttle_pwm"].value_or(config.rc_override.takeoff_throttle_pwm);
+            config.rc_override.max_roll_delta_pwm =
+                rc_override["max_roll_delta_pwm"].value_or(config.rc_override.max_roll_delta_pwm);
+            config.rc_override.max_pitch_delta_pwm =
+                rc_override["max_pitch_delta_pwm"].value_or(config.rc_override.max_pitch_delta_pwm);
+            config.rc_override.max_yaw_delta_pwm =
+                rc_override["max_yaw_delta_pwm"].value_or(config.rc_override.max_yaw_delta_pwm);
+            config.rc_override.roll_full_scale_mps =
+                rc_override["roll_full_scale_mps"].value_or(config.rc_override.roll_full_scale_mps);
+            config.rc_override.pitch_full_scale_mps =
+                rc_override["pitch_full_scale_mps"].value_or(config.rc_override.pitch_full_scale_mps);
+            config.rc_override.yaw_full_scale_rad_s =
+                rc_override["yaw_full_scale_rad_s"].value_or(config.rc_override.yaw_full_scale_rad_s);
+            config.rc_override.marker_roll_full_scale_mps =
+                rc_override["marker_roll_full_scale_mps"].value_or(
+                    config.rc_override.marker_roll_full_scale_mps);
+            config.rc_override.marker_pitch_full_scale_mps =
+                rc_override["marker_pitch_full_scale_mps"].value_or(
+                    config.rc_override.marker_pitch_full_scale_mps);
+            config.rc_override.marker_servo_kp_x =
+                rc_override["marker_servo_kp_x"].value_or(config.rc_override.marker_servo_kp_x);
+            config.rc_override.marker_servo_kp_y =
+                rc_override["marker_servo_kp_y"].value_or(config.rc_override.marker_servo_kp_y);
+            config.rc_override.marker_servo_kd_x =
+                rc_override["marker_servo_kd_x"].value_or(config.rc_override.marker_servo_kd_x);
+            config.rc_override.marker_servo_kd_y =
+                rc_override["marker_servo_kd_y"].value_or(config.rc_override.marker_servo_kd_y);
+            config.rc_override.marker_servo_max_lateral_mps =
+                rc_override["marker_servo_max_lateral_mps"].value_or(
+                    config.rc_override.marker_servo_max_lateral_mps);
+            config.rc_override.marker_servo_max_forward_mps =
+                rc_override["marker_servo_max_forward_mps"].value_or(
+                    rc_override["marker_approach_max_forward_mps"].value_or(
+                        config.rc_override.marker_servo_max_forward_mps));
+            config.rc_override.marker_servo_max_reverse_mps =
+                rc_override["marker_servo_max_reverse_mps"].value_or(
+                    rc_override["marker_brake_reverse_mps"].value_or(
+                        config.rc_override.marker_servo_max_reverse_mps));
+            config.rc_override.marker_servo_max_rate_mps =
+                rc_override["marker_servo_max_rate_mps"].value_or(
+                    config.rc_override.marker_servo_max_rate_mps);
+            config.rc_override.marker_servo_derivative_alpha =
+                rc_override["marker_servo_derivative_alpha"].value_or(
+                    config.rc_override.marker_servo_derivative_alpha);
+            config.rc_override.takeoff_timeout_s =
+                rc_override["takeoff_timeout_s"].value_or(config.rc_override.takeoff_timeout_s);
+            config.rc_override.override_throttle =
+                rc_override["override_throttle"].value_or(config.rc_override.override_throttle);
+            config.rc_override.invert_roll =
+                rc_override["invert_roll"].value_or(config.rc_override.invert_roll);
+            config.rc_override.invert_pitch =
+                rc_override["invert_pitch"].value_or(config.rc_override.invert_pitch);
+            config.rc_override.invert_yaw =
+                rc_override["invert_yaw"].value_or(config.rc_override.invert_yaw);
+        }
     } catch (const toml::parse_error&) {
     }
 
@@ -679,6 +889,36 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
         config.safety.assume_rc_present = true;
         config.safety.rc_required = false;
     }
+    config.rc_override.sender_system_id =
+        std::clamp(config.rc_override.sender_system_id, 1, 255);
+    config.rc_override.roll_full_scale_mps =
+        std::max(0.05, config.rc_override.roll_full_scale_mps);
+    config.rc_override.pitch_full_scale_mps =
+        std::max(0.05, config.rc_override.pitch_full_scale_mps);
+    config.rc_override.yaw_full_scale_rad_s =
+        std::max(0.05, config.rc_override.yaw_full_scale_rad_s);
+    config.rc_override.marker_roll_full_scale_mps =
+        std::max(0.05, config.rc_override.marker_roll_full_scale_mps);
+    config.rc_override.marker_pitch_full_scale_mps =
+        std::max(0.05, config.rc_override.marker_pitch_full_scale_mps);
+    config.rc_override.marker_servo_kp_x =
+        std::max(0.0, config.rc_override.marker_servo_kp_x);
+    config.rc_override.marker_servo_kp_y =
+        std::max(0.0, config.rc_override.marker_servo_kp_y);
+    config.rc_override.marker_servo_kd_x =
+        std::max(0.0, config.rc_override.marker_servo_kd_x);
+    config.rc_override.marker_servo_kd_y =
+        std::max(0.0, config.rc_override.marker_servo_kd_y);
+    config.rc_override.marker_servo_max_lateral_mps =
+        std::max(0.0, config.rc_override.marker_servo_max_lateral_mps);
+    config.rc_override.marker_servo_max_forward_mps =
+        std::max(0.0, config.rc_override.marker_servo_max_forward_mps);
+    config.rc_override.marker_servo_max_reverse_mps =
+        std::max(0.0, config.rc_override.marker_servo_max_reverse_mps);
+    config.rc_override.marker_servo_max_rate_mps =
+        std::max(0.0, config.rc_override.marker_servo_max_rate_mps);
+    config.rc_override.marker_servo_derivative_alpha =
+        std::clamp(config.rc_override.marker_servo_derivative_alpha, 0.05, 1.0);
 
     return config;
 }
@@ -1029,6 +1269,514 @@ void holdAnchoredAltitude(
     }
 }
 
+int clampPwm(int pwm)
+{
+    return std::clamp(pwm, 1000, 2000);
+}
+
+double rateLimitStep(double current, double target, double max_change)
+{
+    if (max_change <= 0.0) {
+        return target;
+    }
+    const double delta = target - current;
+    return current + std::clamp(delta, -max_change, max_change);
+}
+
+std::uint16_t pwmFromInt(int pwm)
+{
+    return static_cast<std::uint16_t>(clampPwm(pwm));
+}
+
+std::array<std::uint16_t, 18> neutralRcOverrideChannels(
+    const RcOverrideConfig& rc_config)
+{
+    std::array<std::uint16_t, 18> channels {};
+    channels.fill(UINT16_MAX);
+    channels[0] = pwmFromInt(rc_config.trim_pwm);
+    channels[1] = pwmFromInt(rc_config.trim_pwm);
+    channels[2] = rc_config.override_throttle
+        ? pwmFromInt(rc_config.throttle_hold_pwm)
+        : UINT16_MAX;
+    channels[3] = pwmFromInt(rc_config.trim_pwm);
+    return channels;
+}
+
+std::array<std::uint16_t, 18> throttleRcOverrideChannels(
+    const RcOverrideConfig& rc_config,
+    int throttle_pwm)
+{
+    auto channels = neutralRcOverrideChannels(rc_config);
+    channels[2] = pwmFromInt(throttle_pwm);
+    return channels;
+}
+
+std::array<std::uint16_t, 18> toRcOverrideChannels(
+    const onboard::control::ControlSetpoint& setpoint,
+    const onboard::control::GuidedVelocityControllerConfig& controller_config,
+    const RcOverrideConfig& rc_config,
+    std::optional<double> roll_full_scale_mps = std::nullopt,
+    std::optional<double> pitch_full_scale_mps = std::nullopt)
+{
+    auto channels = neutralRcOverrideChannels(rc_config);
+
+    const double forward_scale =
+        std::max(0.05, pitch_full_scale_mps.value_or(rc_config.pitch_full_scale_mps));
+    const double lateral_scale =
+        std::max(0.05, roll_full_scale_mps.value_or(rc_config.roll_full_scale_mps));
+    const double yaw_scale = std::max(0.05, rc_config.yaw_full_scale_rad_s);
+
+    double roll_norm = std::clamp(
+        static_cast<double>(setpoint.vy_right_mps) / lateral_scale,
+        -1.0,
+        1.0);
+    double pitch_norm = std::clamp(
+        static_cast<double>(setpoint.vx_forward_mps) / forward_scale,
+        -1.0,
+        1.0);
+    double yaw_norm = std::clamp(
+        static_cast<double>(setpoint.yaw_rate_rad_s) / yaw_scale,
+        -1.0,
+        1.0);
+
+    if (rc_config.invert_roll) {
+        roll_norm = -roll_norm;
+    }
+    if (rc_config.invert_pitch) {
+        pitch_norm = -pitch_norm;
+    }
+    if (rc_config.invert_yaw) {
+        yaw_norm = -yaw_norm;
+    }
+
+    channels[0] = pwmFromInt(
+        rc_config.trim_pwm +
+        static_cast<int>(std::lround(roll_norm * rc_config.max_roll_delta_pwm)));
+    channels[1] = pwmFromInt(
+        rc_config.trim_pwm -
+        static_cast<int>(std::lround(pitch_norm * rc_config.max_pitch_delta_pwm)));
+    channels[3] = pwmFromInt(
+        rc_config.trim_pwm +
+        static_cast<int>(std::lround(yaw_norm * rc_config.max_yaw_delta_pwm)));
+    return channels;
+}
+
+class RcMarkerVisualServo {
+public:
+    onboard::control::ControlSetpoint update(
+        const onboard::control::MarkerControlInput& marker,
+        const onboard::control::GuidedVelocityControllerConfig& controller_config,
+        const RcOverrideConfig& rc_config,
+        Clock::time_point now)
+    {
+        if (!marker.marker_detected) {
+            reset();
+            return {};
+        }
+
+        double error_x = controller_config.invert_marker_x
+            ? -marker.center_error_x_norm
+            : marker.center_error_x_norm;
+        double error_y = controller_config.invert_marker_y
+            ? -marker.center_error_y_norm
+            : marker.center_error_y_norm;
+        if (std::abs(error_x) < controller_config.marker_deadband_norm) {
+            error_x = 0.0;
+        }
+        if (std::abs(error_y) < controller_config.marker_deadband_norm) {
+            error_y = 0.0;
+        }
+
+        double error_x_rate = 0.0;
+        double error_y_rate = 0.0;
+        if (has_prev_error_) {
+            const double dt_s = std::clamp(
+                std::chrono::duration<double>(now - prev_time_).count(),
+                0.02,
+                0.50);
+            error_x_rate = (error_x - prev_error_x_) / dt_s;
+            error_y_rate = (error_y - prev_error_y_) / dt_s;
+            const double alpha = rc_config.marker_servo_derivative_alpha;
+            filtered_error_x_rate_ =
+                filtered_error_x_rate_ * (1.0 - alpha) + error_x_rate * alpha;
+            filtered_error_y_rate_ =
+                filtered_error_y_rate_ * (1.0 - alpha) + error_y_rate * alpha;
+        } else {
+            has_prev_error_ = true;
+            filtered_error_x_rate_ = 0.0;
+            filtered_error_y_rate_ = 0.0;
+        }
+        prev_error_x_ = error_x;
+        prev_error_y_ = error_y;
+        prev_time_ = now;
+
+        double lateral = rc_config.marker_servo_kp_x * error_x +
+            rc_config.marker_servo_kd_x * filtered_error_x_rate_;
+        double forward = rc_config.marker_servo_kp_y * error_y +
+            rc_config.marker_servo_kd_y * filtered_error_y_rate_;
+
+        lateral = std::clamp(
+            lateral,
+            -rc_config.marker_servo_max_lateral_mps,
+            rc_config.marker_servo_max_lateral_mps);
+        forward = std::clamp(
+            forward,
+            -rc_config.marker_servo_max_reverse_mps,
+            rc_config.marker_servo_max_forward_mps);
+
+        if (has_prev_output_ && rc_config.marker_servo_max_rate_mps > 0.0) {
+            lateral = rateLimitStep(
+                prev_lateral_,
+                lateral,
+                rc_config.marker_servo_max_rate_mps);
+            forward = rateLimitStep(
+                prev_forward_,
+                forward,
+                rc_config.marker_servo_max_rate_mps);
+        } else {
+            has_prev_output_ = true;
+        }
+        prev_lateral_ = lateral;
+        prev_forward_ = forward;
+
+        return onboard::control::ControlSetpoint {
+            static_cast<float>(forward),
+            static_cast<float>(lateral),
+            0.0f,
+            0.0f,
+        };
+    }
+
+    void reset()
+    {
+        has_prev_error_ = false;
+        has_prev_output_ = false;
+        prev_error_x_ = 0.0;
+        prev_error_y_ = 0.0;
+        filtered_error_x_rate_ = 0.0;
+        filtered_error_y_rate_ = 0.0;
+        prev_lateral_ = 0.0;
+        prev_forward_ = 0.0;
+        prev_time_ = {};
+    }
+
+private:
+    bool has_prev_error_ = false;
+    bool has_prev_output_ = false;
+    double prev_error_x_ = 0.0;
+    double prev_error_y_ = 0.0;
+    double filtered_error_x_rate_ = 0.0;
+    double filtered_error_y_rate_ = 0.0;
+    double prev_lateral_ = 0.0;
+    double prev_forward_ = 0.0;
+    Clock::time_point prev_time_ {};
+};
+
+class RcOverrideReleaseGuard {
+public:
+    explicit RcOverrideReleaseGuard(onboard::autopilot::AutopilotMavlinkAdapter& autopilot)
+        : autopilot_(autopilot)
+    {
+    }
+
+    ~RcOverrideReleaseGuard()
+    {
+        releaseNoThrow();
+    }
+
+    RcOverrideReleaseGuard(const RcOverrideReleaseGuard&) = delete;
+    RcOverrideReleaseGuard& operator=(const RcOverrideReleaseGuard&) = delete;
+
+    void markActive()
+    {
+        active_ = true;
+    }
+
+    void release()
+    {
+        if (!active_) {
+            return;
+        }
+        autopilot_.releaseRcChannelsOverride();
+        active_ = false;
+    }
+
+    void releaseNoThrow()
+    {
+        if (!active_) {
+            return;
+        }
+        try {
+            autopilot_.releaseRcChannelsOverride();
+        } catch (...) {
+        }
+        active_ = false;
+    }
+
+private:
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot_;
+    bool active_ = false;
+};
+
+void sendRcOverrideSetpoint(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    RcOverrideReleaseGuard& guard,
+    const onboard::control::ControlSetpoint& setpoint,
+    const onboard::control::GuidedVelocityControllerConfig& controller_config,
+    const RcOverrideConfig& rc_config,
+    bool use_marker_stick_scale = false)
+{
+    guard.markActive();
+    autopilot.sendRcChannelsOverride(
+        toRcOverrideChannels(
+            setpoint,
+            controller_config,
+            rc_config,
+            use_marker_stick_scale
+                ? std::optional<double> { rc_config.marker_roll_full_scale_mps }
+                : std::nullopt,
+            use_marker_stick_scale
+                ? std::optional<double> { rc_config.marker_pitch_full_scale_mps }
+                : std::nullopt));
+}
+
+void sendRcOverrideNeutral(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    RcOverrideReleaseGuard& guard,
+    const RcOverrideConfig& rc_config)
+{
+    guard.markActive();
+    autopilot.sendRcChannelsOverride(neutralRcOverrideChannels(rc_config));
+}
+
+bool waitAltHoldPilotReady(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    const onboard::safety::SafetyConfig& safety,
+    double target_altitude_m,
+    double altitude_reached_ratio,
+    bool request_alt_hold_mode,
+    std::chrono::seconds timeout)
+{
+    if (!waitRcReady(autopilot, safety, std::chrono::seconds(10))) {
+        std::cerr << "[safety] refusing ALT_HOLD RC override until RC input is visible\n";
+        return false;
+    }
+
+    if (request_alt_hold_mode && autopilot.state().custom_mode != COPTER_MODE_ALT_HOLD) {
+        std::cout << "[mavlink] requesting ALT_HOLD mode\n";
+        autopilot.setAltHoldMode(std::chrono::seconds(10));
+    }
+
+    std::cout << "[preflight] waiting for pilot ALT_HOLD hover: armed=true mode=ALT_HOLD altitude>="
+              << target_altitude_m * altitude_reached_ratio << "m\n";
+    const auto deadline = Clock::now() + timeout;
+    auto last_log = Clock::now() - std::chrono::seconds(1);
+    while (Clock::now() < deadline) {
+        autopilot.poll(100);
+        const auto now = Clock::now();
+        const auto altitude = autopilot.bestAltitudeM();
+        const bool ready =
+            autopilot.state().armed &&
+            autopilot.state().custom_mode == COPTER_MODE_ALT_HOLD &&
+            altitude &&
+            *altitude >= target_altitude_m * altitude_reached_ratio &&
+            rcInputFresh(autopilot.state(), safety, now);
+        if (ready) {
+            std::cout << "[preflight] ALT_HOLD hover ready alt="
+                      << altitude.value_or(-1.0)
+                      << " mode=" << autopilot.state().mode_name << "\n";
+            return true;
+        }
+        if (now - last_log >= std::chrono::seconds(1)) {
+            const auto& state = autopilot.state();
+            std::cout << "[preflight] armed=" << (state.armed ? "true" : "false")
+                      << " mode=" << state.mode_name
+                      << " alt=" << altitude.value_or(-1.0)
+                      << " rc_channels=" << state.rc_channel_count.value_or(0)
+                      << "\n";
+            last_log = now;
+        }
+    }
+    std::cerr << "[preflight] ALT_HOLD hover not ready before timeout\n";
+    return false;
+}
+
+bool runAltHoldRcOverrideAutoTakeoff(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    RcOverrideReleaseGuard& guard,
+    const onboard::safety::SafetyConfig& safety,
+    const RcOverrideConfig& rc_config,
+    double target_altitude_m,
+    double altitude_reached_ratio,
+    double settle_s,
+    std::chrono::duration<double> period)
+{
+    if (!waitRcReady(autopilot, safety, std::chrono::seconds(10))) {
+        std::cerr << "[safety] refusing ALT_HOLD auto-takeoff until RC input is visible\n";
+        return false;
+    }
+
+    guard.markActive();
+    const auto low_throttle = throttleRcOverrideChannels(rc_config, rc_config.arm_throttle_pwm);
+    const auto neutral = neutralRcOverrideChannels(rc_config);
+    const auto climb = throttleRcOverrideChannels(rc_config, rc_config.takeoff_throttle_pwm);
+
+    std::cout << "[mission] ALT_HOLD_RC_TAKEOFF arm_throttle="
+              << low_throttle[2]
+              << " climb_throttle=" << climb[2]
+              << " target=" << target_altitude_m << "m\n";
+
+    const auto arm_prep_deadline = Clock::now() + std::chrono::seconds(1);
+    while (Clock::now() < arm_prep_deadline) {
+        const auto loop_start = Clock::now();
+        autopilot.poll(1);
+        autopilot.sendRcChannelsOverride(low_throttle);
+        std::this_thread::sleep_until(loop_start + period);
+    }
+
+    if (autopilot.state().custom_mode != COPTER_MODE_ALT_HOLD) {
+        std::cout << "[mavlink] requesting ALT_HOLD mode\n";
+        autopilot.setAltHoldMode(std::chrono::seconds(10));
+    }
+    if (!autopilot.state().armed) {
+        autopilot.arm(std::chrono::seconds(30));
+        std::cout << "[mavlink] armed\n";
+    }
+
+    const auto target_reached_m = target_altitude_m * altitude_reached_ratio;
+    const auto takeoff_started_at = Clock::now();
+    const auto takeoff_deadline =
+        takeoff_started_at +
+        std::chrono::milliseconds(
+            static_cast<int>(std::max(3.0, rc_config.takeoff_timeout_s) * 1000.0));
+    auto last_log = Clock::now() - std::chrono::seconds(1);
+    auto first_altitude = autopilot.bestAltitudeM();
+    bool climb_seen = false;
+
+    while (Clock::now() < takeoff_deadline) {
+        const auto loop_start = Clock::now();
+        autopilot.poll(1);
+        const auto altitude = autopilot.bestAltitudeM();
+        const auto now = Clock::now();
+
+        if (autopilot.state().custom_mode != COPTER_MODE_ALT_HOLD) {
+            std::cerr << "[safety] operator takeover during ALT_HOLD auto-takeoff\n";
+            guard.releaseNoThrow();
+            return false;
+        }
+        if (!autopilot.state().armed) {
+            std::cerr << "[safety] vehicle disarmed during ALT_HOLD auto-takeoff\n";
+            guard.releaseNoThrow();
+            return false;
+        }
+        if (!rcInputFresh(autopilot.state(), safety, now)) {
+            std::cerr << "[safety] RC input not fresh during ALT_HOLD auto-takeoff\n";
+            autopilot.sendRcChannelsOverride(neutral);
+            return false;
+        }
+        if (altitude && *altitude >= target_reached_m) {
+            autopilot.sendRcChannelsOverride(neutral);
+            std::cout << "[mission] ALT_HOLD_RC_TAKEOFF altitude reached alt="
+                      << *altitude << "m\n";
+            if (settle_s > 0.0) {
+                const auto settle_deadline =
+                    Clock::now() +
+                    std::chrono::milliseconds(static_cast<int>(settle_s * 1000.0));
+                while (Clock::now() < settle_deadline) {
+                    const auto settle_loop_start = Clock::now();
+                    autopilot.poll(1);
+                    autopilot.sendRcChannelsOverride(neutral);
+                    std::this_thread::sleep_until(settle_loop_start + period);
+                }
+            }
+            return true;
+        }
+
+        if (!first_altitude && altitude) {
+            first_altitude = altitude;
+        }
+        if (first_altitude && altitude && *altitude - *first_altitude >= 0.20) {
+            climb_seen = true;
+        }
+        const auto elapsed_s = std::chrono::duration<double>(now - takeoff_started_at).count();
+        if (!climb_seen && elapsed_s >= 5.0) {
+            std::cerr << "[safety] no climb detected during ALT_HOLD auto-takeoff\n";
+            autopilot.sendRcChannelsOverride(neutral);
+            if (nearGroundAndStable(autopilot.state())) {
+                autopilot.requestDisarm();
+            }
+            return false;
+        }
+
+        autopilot.sendRcChannelsOverride(climb);
+        if (now - last_log >= std::chrono::seconds(1)) {
+            std::cout << "[mission] ALT_HOLD_RC_TAKEOFF alt="
+                      << altitude.value_or(-1.0)
+                      << " target_reached=" << target_reached_m
+                      << " throttle=" << climb[2] << "\n";
+            last_log = now;
+        }
+        std::this_thread::sleep_until(loop_start + period);
+    }
+
+    std::cerr << "[safety] ALT_HOLD auto-takeoff timeout\n";
+    autopilot.sendRcChannelsOverride(neutral);
+    if (autopilot.state().armed) {
+        autopilot.setLandMode(std::chrono::seconds(10));
+    }
+    return false;
+}
+
+int runRcOverrideSmoke(
+    onboard::autopilot::AutopilotMavlinkAdapter& autopilot,
+    const RuntimeConfig& config)
+{
+    RcOverrideReleaseGuard guard(autopilot);
+    if (autopilot.state().armed) {
+        std::cerr << "[rc-override-smoke] refusing to send test pulses while armed\n";
+        return 2;
+    }
+
+    const auto period = std::chrono::milliseconds(100);
+    const auto send_for = [&](const char* label, std::array<std::uint16_t, 18> channels) {
+        std::cout << "[rc-override-smoke] " << label
+                  << " ch1=" << channels[0]
+                  << " ch2=" << channels[1]
+                  << " ch3=" << channels[2]
+                  << " ch4=" << channels[3] << "\n";
+        guard.markActive();
+        const auto deadline = Clock::now() + std::chrono::milliseconds(900);
+        while (Clock::now() < deadline) {
+            const auto loop_start = Clock::now();
+            autopilot.poll(1);
+            autopilot.sendRcChannelsOverride(channels);
+            std::this_thread::sleep_until(loop_start + period);
+        }
+    };
+
+    auto neutral = neutralRcOverrideChannels(config.rc_override);
+    send_for("neutral", neutral);
+
+    auto roll_right = neutral;
+    roll_right[0] = pwmFromInt(
+        config.rc_override.trim_pwm + config.rc_override.max_roll_delta_pwm);
+    send_for("roll_right", roll_right);
+
+    auto pitch_forward = neutral;
+    pitch_forward[1] = pwmFromInt(
+        config.rc_override.trim_pwm - config.rc_override.max_pitch_delta_pwm);
+    send_for("pitch_forward", pitch_forward);
+
+    auto yaw_clockwise = neutral;
+    yaw_clockwise[3] = pwmFromInt(
+        config.rc_override.trim_pwm + config.rc_override.max_yaw_delta_pwm);
+    send_for("yaw_clockwise", yaw_clockwise);
+
+    guard.release();
+    std::cout << "[rc-override-smoke] release sent\n";
+    return 0;
+}
+
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
 std::unique_ptr<onboard::vision::FrameSource> createFrameSource(const std::string& vision_source)
 {
@@ -1345,7 +2093,44 @@ int main(int argc, char** argv)
 #endif
 
         const bool real_serial_target = config.endpoint.kind == TransportKind::Serial;
+        const bool rc_override_backend =
+            options.control_backend == ControlBackend::AltHoldRcOverride;
+        if (options.alt_hold_auto_takeoff && !rc_override_backend) {
+            std::cerr << "--alt-hold-auto-takeoff requires --control-backend alt_hold_rc_override\n";
+            return 2;
+        }
+        if (real_serial_target && options.rc_override_smoke && !options.allow_rc_override) {
+            std::cerr << "target " << config.endpoint.label
+                      << " selected real serial endpoint " << config.endpoint.serial_device
+                      << ':' << config.endpoint.serial_baudrate << "\n"
+                      << "refusing RC override smoke on a real serial target without "
+                      << "--allow-rc-override\n";
+            return 2;
+        }
         if (real_serial_target &&
+            rc_override_backend &&
+            !options.allow_rc_override) {
+            std::cerr << "target " << config.endpoint.label
+                      << " selected real serial endpoint " << config.endpoint.serial_device
+                      << ':' << config.endpoint.serial_baudrate << "\n"
+                      << "refusing ALT_HOLD RC override control on a real serial target without "
+                      << "--allow-rc-override\n";
+            return 2;
+        }
+        if (real_serial_target &&
+            rc_override_backend &&
+            options.alt_hold_auto_takeoff &&
+            !options.allow_arm_takeoff) {
+            std::cerr << "target " << config.endpoint.label
+                      << " selected real serial endpoint " << config.endpoint.serial_device
+                      << ':' << config.endpoint.serial_baudrate << "\n"
+                      << "refusing ALT_HOLD RC auto-takeoff on a real serial target without "
+                      << "--allow-arm-takeoff\n";
+            return 2;
+        }
+        if (real_serial_target &&
+            !rc_override_backend &&
+            !options.rc_override_smoke &&
             !options.mavlink_smoke &&
             !options.no_arm &&
             !options.dry_run &&
@@ -1359,6 +2144,7 @@ int main(int argc, char** argv)
         }
 
         std::cout << "[line_follow_node] target=" << config.endpoint.label
+                  << " backend=" << toString(options.control_backend)
                   << " vision=" << config.vision_source
                   << " endpoint="
                   << (config.endpoint.kind == TransportKind::Serial
@@ -1394,6 +2180,42 @@ int main(int argc, char** argv)
                   << " marker_rate=" << config.controller.max_marker_rate_mps
                   << " hover_recenter_timeout="
                   << config.mission.marker_hover_recenter_timeout_s << "\n";
+        if (rc_override_backend || options.rc_override_smoke) {
+            std::cout << "[rc_override] sender_system_id=" << config.rc_override.sender_system_id
+                      << " trim=" << config.rc_override.trim_pwm
+                      << " arm_throttle=" << config.rc_override.arm_throttle_pwm
+                      << " throttle_hold=" << config.rc_override.throttle_hold_pwm
+                      << " takeoff_throttle=" << config.rc_override.takeoff_throttle_pwm
+                      << " max_delta roll/pitch/yaw="
+                      << config.rc_override.max_roll_delta_pwm << '/'
+                      << config.rc_override.max_pitch_delta_pwm << '/'
+                      << config.rc_override.max_yaw_delta_pwm
+                      << " full_scale roll/pitch/yaw="
+                      << config.rc_override.roll_full_scale_mps << '/'
+                      << config.rc_override.pitch_full_scale_mps << '/'
+                      << config.rc_override.yaw_full_scale_rad_s
+                      << " marker_scale roll/pitch="
+                      << config.rc_override.marker_roll_full_scale_mps << '/'
+                      << config.rc_override.marker_pitch_full_scale_mps
+                      << " marker_servo kp_xy="
+                      << config.rc_override.marker_servo_kp_x << '/'
+                      << config.rc_override.marker_servo_kp_y
+                      << " kd_xy="
+                      << config.rc_override.marker_servo_kd_x << '/'
+                      << config.rc_override.marker_servo_kd_y
+                      << " max_lat/fwd/rev="
+                      << config.rc_override.marker_servo_max_lateral_mps << '/'
+                      << config.rc_override.marker_servo_max_forward_mps << '/'
+                      << config.rc_override.marker_servo_max_reverse_mps
+                      << " servo_rate=" << config.rc_override.marker_servo_max_rate_mps
+                      << " takeoff_timeout_s=" << config.rc_override.takeoff_timeout_s
+                      << " override_throttle="
+                      << (config.rc_override.override_throttle ? "true" : "false")
+                      << " invert roll/pitch/yaw="
+                      << (config.rc_override.invert_roll ? "true" : "false") << '/'
+                      << (config.rc_override.invert_pitch ? "true" : "false") << '/'
+                      << (config.rc_override.invert_yaw ? "true" : "false") << "\n";
+        }
         if (options.unsafe_assume_rc_present) {
             std::cerr
                 << "[safety] WARNING: --unsafe-assume-rc-present bypasses the MAVLink RC gate\n";
@@ -1412,12 +2234,34 @@ int main(int argc, char** argv)
                 MAVLINK_COMM_0,
                 config.endpoint.label);
         }
+        auto mavlink_ids = config.mavlink;
+        if (rc_override_backend || options.rc_override_smoke) {
+            mavlink_ids.system_id =
+                static_cast<std::uint8_t>(config.rc_override.sender_system_id);
+        }
         onboard::autopilot::AutopilotMavlinkAdapter autopilot(
             std::move(transport),
-            config.mavlink);
+            mavlink_ids);
         onboard::control::GuidedVelocityController controller(config.controller);
         onboard::mission::LineFollowMission mission(config.mission);
         onboard::safety::SafetyMonitor safety(config.safety);
+        RcOverrideReleaseGuard rc_override_guard(autopilot);
+
+        if (options.rc_override_smoke) {
+            std::cout << "[rc-override-smoke] waiting for heartbeat...\n";
+            autopilot.waitHeartbeat(std::chrono::seconds(30));
+            std::cout << "[rc-override-smoke] heartbeat ok system="
+                      << static_cast<int>(autopilot.state().target_system)
+                      << " component=" << static_cast<int>(autopilot.state().target_component)
+                      << " mode=" << autopilot.state().mode_name
+                      << " armed=" << (autopilot.state().armed ? "true" : "false") << "\n";
+            autopilot.requestDefaultStreams();
+            if (!waitRcReady(autopilot, config.safety, std::chrono::seconds(10))) {
+                std::cerr << "[rc-override-smoke] RC input is not visible; refusing smoke\n";
+                return 2;
+            }
+            return runRcOverrideSmoke(autopilot, config);
+        }
 
         if (options.mavlink_smoke || options.no_arm || options.dry_run) {
             std::cout << "[mavlink] safety smoke mode: no mode/arm/takeoff/velocity commands\n";
@@ -1526,54 +2370,92 @@ int main(int argc, char** argv)
                   << " mode=" << autopilot.state().mode_name << "\n";
 
         autopilot.requestDefaultStreams();
-        if (!waitRcReady(autopilot, config.safety, std::chrono::seconds(10))) {
-            std::cerr << "[safety] refusing GUIDED/arm/takeoff until RC input is visible\n";
-            return 2;
-        }
-        if (real_serial_target &&
-            !waitLocalHoldEstimateReady(autopilot, std::chrono::seconds(15))) {
-            std::cerr << "[safety] refusing GUIDED/arm/takeoff until optical-flow local hold is ready\n";
-            return 2;
-        }
-        const auto takeoff_anchor = captureLocalHoldAnchor(autopilot.state());
-        if (real_serial_target && !takeoff_anchor) {
-            std::cerr << "[safety] refusing takeoff: local XY anchor is unavailable\n";
-            return 2;
-        }
-        autopilot.setGuidedMode(std::chrono::seconds(10));
-        std::cout << "[mavlink] GUIDED confirmed\n";
-        autopilot.arm(std::chrono::seconds(30));
-        std::cout << "[mavlink] armed\n";
-
         const auto period = std::chrono::duration<double>(
             1.0 / static_cast<double>(std::max(1, config.setpoint_rate_hz)));
+
+        std::optional<LocalHoldAnchor> takeoff_anchor;
+        if (rc_override_backend) {
+            if (options.alt_hold_auto_takeoff) {
+                if (!runAltHoldRcOverrideAutoTakeoff(
+                        autopilot,
+                        rc_override_guard,
+                        config.safety,
+                        config.rc_override,
+                        config.mission.target_altitude_m,
+                        config.mission.altitude_reached_ratio,
+                        config.mission.takeoff_settle_s,
+                        period)) {
+                    return 2;
+                }
+            } else {
+                if (!waitAltHoldPilotReady(
+                        autopilot,
+                        config.safety,
+                        config.mission.target_altitude_m,
+                        config.mission.altitude_reached_ratio,
+                        options.alt_hold_set_mode,
+                        std::chrono::seconds(60))) {
+                    return 2;
+                }
+            }
+        } else {
+            if (!waitRcReady(autopilot, config.safety, std::chrono::seconds(10))) {
+                std::cerr << "[safety] refusing GUIDED/arm/takeoff until RC input is visible\n";
+                return 2;
+            }
+            if (real_serial_target &&
+                !waitLocalHoldEstimateReady(autopilot, std::chrono::seconds(15))) {
+                std::cerr << "[safety] refusing GUIDED/arm/takeoff until optical-flow local hold is ready\n";
+                return 2;
+            }
+            takeoff_anchor = captureLocalHoldAnchor(autopilot.state());
+            if (real_serial_target && !takeoff_anchor) {
+                std::cerr << "[safety] refusing takeoff: local XY anchor is unavailable\n";
+                return 2;
+            }
+            autopilot.setGuidedMode(std::chrono::seconds(10));
+            std::cout << "[mavlink] GUIDED confirmed\n";
+            autopilot.arm(std::chrono::seconds(30));
+            std::cout << "[mavlink] armed\n";
+        }
+
         const auto mission_started_at = Clock::now();
         mission.startTakeoff(mission_started_at);
         safety.startMission(mission_started_at);
 
-        autopilot.takeoff(config.mission.target_altitude_m);
-        std::cout << "[mission] TAKEOFF target=" << config.mission.target_altitude_m << "m";
-        if (takeoff_anchor) {
-            std::cout << " hold_xy=(" << takeoff_anchor->x_m << ',' << takeoff_anchor->y_m << ')';
-        }
-        std::cout << "\n";
-        const bool takeoff_altitude_reached = autopilot.waitAltitudeReached(
-            config.mission.target_altitude_m,
-            config.mission.altitude_reached_ratio,
-            std::chrono::seconds(30));
-        if (!takeoff_altitude_reached) {
-            throw std::runtime_error("timed out waiting for takeoff altitude");
-        }
-        if (takeoff_anchor && config.mission.takeoff_settle_s > 0.0) {
-            std::cout << "[mission] TAKEOFF altitude reached; holding XY settle_s="
-                      << config.mission.takeoff_settle_s << "\n";
-            holdAnchoredAltitude(
-                autopilot,
-                controller,
-                *takeoff_anchor,
+        if (rc_override_backend) {
+            std::cout << "[mission] ALT_HOLD_RC_OVERRIDE control start";
+            if (options.alt_hold_auto_takeoff) {
+                std::cout << "; auto-takeoff complete";
+            } else {
+                std::cout << "; pilot takeoff already complete";
+            }
+            std::cout << "\n";
+        } else {
+            autopilot.takeoff(config.mission.target_altitude_m);
+            std::cout << "[mission] TAKEOFF target=" << config.mission.target_altitude_m << "m";
+            if (takeoff_anchor) {
+                std::cout << " hold_xy=(" << takeoff_anchor->x_m << ',' << takeoff_anchor->y_m << ')';
+            }
+            std::cout << "\n";
+            const bool takeoff_altitude_reached = autopilot.waitAltitudeReached(
                 config.mission.target_altitude_m,
-                std::chrono::duration<double>(config.mission.takeoff_settle_s),
-                period);
+                config.mission.altitude_reached_ratio,
+                std::chrono::seconds(30));
+            if (!takeoff_altitude_reached) {
+                throw std::runtime_error("timed out waiting for takeoff altitude");
+            }
+            if (takeoff_anchor && config.mission.takeoff_settle_s > 0.0) {
+                std::cout << "[mission] TAKEOFF altitude reached; holding XY settle_s="
+                          << config.mission.takeoff_settle_s << "\n";
+                holdAnchoredAltitude(
+                    autopilot,
+                    controller,
+                    *takeoff_anchor,
+                    config.mission.target_altitude_m,
+                    std::chrono::duration<double>(config.mission.takeoff_settle_s),
+                    period);
+            }
         }
 
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
@@ -1612,6 +2494,9 @@ int main(int argc, char** argv)
         bool operator_takeover = false;
         std::optional<LocalHoldAnchor> active_hold_anchor;
         bool hold_anchor_warning_logged = false;
+        RcMarkerVisualServo marker_servo;
+        std::optional<Clock::time_point> rc_marker_hover_started_at;
+        bool rc_marker_hover_land_logged = false;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         int mission_vision_frames = 0;
         onboard::app::GcsTelemetryPublishStats mission_publish_stats;
@@ -1673,8 +2558,28 @@ int main(int argc, char** argv)
             }
 #endif
 
+            if (rc_override_backend && marker_detected && !rc_marker_hover_started_at) {
+                rc_marker_hover_started_at = loop_start;
+                std::cout << "[mission] ALT_HOLD_RC_MARKER_HOVER timer start hold_s="
+                          << config.mission.marker_hover_s << "\n";
+            }
+            const bool rc_marker_hover_timer_active =
+                rc_override_backend && rc_marker_hover_started_at.has_value();
+            const bool rc_marker_hover_complete =
+                rc_marker_hover_timer_active &&
+                std::chrono::duration<double>(
+                    loop_start - *rc_marker_hover_started_at).count() >=
+                    config.mission.marker_hover_s;
+            if (rc_marker_hover_complete && !rc_marker_hover_land_logged) {
+                std::cout << "[mission] ALT_HOLD_RC_MARKER_HOVER complete; requesting LAND\n";
+                rc_marker_hover_land_logged = true;
+            }
+
             const bool line_tracking_ready = lineTrackingActive(line_input, config.controller);
             const auto& ap_state_for_safety = autopilot.state();
+            const bool expected_control_mode = rc_override_backend
+                ? ap_state_for_safety.custom_mode == COPTER_MODE_ALT_HOLD
+                : ap_state_for_safety.custom_mode == COPTER_MODE_GUIDED;
             const auto safety_decision = safety.update(onboard::safety::SafetyInput {
                 ap_state_for_safety.heartbeat_seen,
                 line_tracking_ready || marker_detected,
@@ -1684,26 +2589,36 @@ int main(int argc, char** argv)
                 ap_state_for_safety.rc_channel_count.value_or(0),
                 ap_state_for_safety.last_rc_channels_time,
                 ap_state_for_safety.heartbeat_seen,
-                ap_state_for_safety.custom_mode == COPTER_MODE_GUIDED,
+                expected_control_mode,
             });
 
             if (safety_decision.action == onboard::safety::SafetyAction::Abort) {
+                std::string abort_reason = safety_decision.reason;
+                if (rc_override_backend &&
+                    abort_reason == "operator takeover: mode changed from GUIDED") {
+                    abort_reason = "operator takeover: mode changed from ALT_HOLD";
+                }
                 operator_takeover =
-                    safety_decision.reason.find("operator takeover") != std::string::npos;
-                mission.abort(safety_decision.reason);
+                    abort_reason.find("operator takeover") != std::string::npos;
+                mission.abort(abort_reason);
                 break;
             }
 
             const bool safety_land =
                 safety_decision.action == onboard::safety::SafetyAction::Land;
             const auto altitude_now = autopilot.bestAltitudeM();
+            const bool marker_centered_for_mission =
+                marker_is_centered || (rc_marker_hover_timer_active && marker_detected);
+            const bool rc_marker_hover_forced_land =
+                rc_marker_hover_complete &&
+                mission.state() != onboard::mission::LineFollowMissionState::MarkerHover;
             mission.update(onboard::mission::LineFollowMissionInput {
                 altitude_now.has_value(),
                 altitude_now.value_or(0.0),
                 line_tracking_ready,
                 marker_detected,
-                marker_is_centered,
-                safety_land,
+                marker_centered_for_mission,
+                safety_land || rc_marker_hover_forced_land,
                 false,
                 loop_start,
             });
@@ -1724,24 +2639,48 @@ int main(int argc, char** argv)
             };
             onboard::control::ControlSetpoint setpoint;
             bool use_local_hold = false;
+            bool use_marker_stick_scale = false;
             std::string hold_reason;
             if (mission.state() == onboard::mission::LineFollowMissionState::MarkerHover) {
-                setpoint = controller.stop(altitude_input);
-                use_local_hold = true;
-                hold_reason = "marker_hover";
+                if (rc_override_backend && marker_detected) {
+                    setpoint = marker_servo.update(
+                        marker_input,
+                        config.controller,
+                        config.rc_override,
+                        loop_start);
+                    use_marker_stick_scale = true;
+                    hold_reason = "marker_hover_recenter";
+                } else {
+                    marker_servo.reset();
+                    setpoint = controller.stop(altitude_input);
+                    use_local_hold = true;
+                    hold_reason = "marker_hover";
+                }
             } else if (mission.state() == onboard::mission::LineFollowMissionState::MarkerApproach) {
                 if (marker_detected) {
-                    setpoint = controller.updateMarker(marker_input, altitude_input);
+                    if (rc_override_backend) {
+                        setpoint = marker_servo.update(
+                            marker_input,
+                            config.controller,
+                            config.rc_override,
+                            loop_start);
+                        use_marker_stick_scale = true;
+                    } else {
+                        setpoint = controller.updateMarker(marker_input, altitude_input);
+                    }
                     active_hold_anchor.reset();
                 } else if (line_tracking_ready) {
+                    marker_servo.reset();
                     setpoint = controller.updateLine(line_input, altitude_input);
                     active_hold_anchor.reset();
                 } else {
+                    marker_servo.reset();
                     setpoint = controller.stop(altitude_input);
                     use_local_hold = true;
                     hold_reason = "marker_approach_no_target";
                 }
             } else {
+                marker_servo.reset();
                 if (line_tracking_ready) {
                     setpoint = controller.updateLine(line_input, altitude_input);
                     active_hold_anchor.reset();
@@ -1752,7 +2691,17 @@ int main(int argc, char** argv)
                 }
             }
             std::string command_frame = "body_vel";
-            if (use_local_hold) {
+            if (rc_override_backend) {
+                sendRcOverrideSetpoint(
+                    autopilot,
+                    rc_override_guard,
+                    setpoint,
+                    config.controller,
+                    config.rc_override,
+                    use_marker_stick_scale);
+                command_frame = use_local_hold ? "rc_override_neutral" :
+                    (use_marker_stick_scale ? "rc_override_marker_servo" : "rc_override");
+            } else if (use_local_hold) {
                 if (!active_hold_anchor) {
                     active_hold_anchor = captureLocalHoldAnchor(autopilot.state());
                     if (active_hold_anchor) {
@@ -1830,6 +2779,10 @@ int main(int argc, char** argv)
         if (operator_takeover) {
             std::cerr << "[mission] ABORT reason=" << mission.landingReason() << "\n";
             std::cerr << "[safety] operator takeover detected; not sending LAND or velocity commands\n";
+            if (rc_override_backend) {
+                rc_override_guard.releaseNoThrow();
+                std::cerr << "[safety] RC override release sent\n";
+            }
             return 2;
         }
 
@@ -1843,8 +2796,10 @@ int main(int argc, char** argv)
         }
 #endif
 
-        auto landing_anchor = captureLocalHoldAnchor(autopilot.state());
-        if (!landing_anchor && active_hold_anchor) {
+        auto landing_anchor = rc_override_backend
+            ? std::optional<LocalHoldAnchor> {}
+            : captureLocalHoldAnchor(autopilot.state());
+        if (!rc_override_backend && !landing_anchor && active_hold_anchor) {
             landing_anchor = active_hold_anchor;
         }
         const onboard::control::AltitudeControlInput landing_altitude_input {
@@ -1853,7 +2808,11 @@ int main(int argc, char** argv)
             config.mission.target_altitude_m,
         };
         const auto stop_setpoint = controller.stop(landing_altitude_input);
-        if (landing_anchor) {
+        if (rc_override_backend) {
+            sendRcOverrideNeutral(autopilot, rc_override_guard, config.rc_override);
+            rc_override_guard.release();
+            std::cout << "[mission] RC override neutral/release before LAND\n";
+        } else if (landing_anchor) {
             sendAnchoredVelocitySetpoint(
                 autopilot,
                 *landing_anchor,
@@ -1871,6 +2830,9 @@ int main(int argc, char** argv)
             std::cout << "[mission] GUIDED_DESCENT hold_xy=("
                       << landing_anchor->x_m << ',' << landing_anchor->y_m
                       << ") until low altitude, then LAND mode\n";
+        } else if (rc_override_backend) {
+            std::cout << "[mission] ALT_HOLD_RC_OVERRIDE complete; requesting LAND mode\n";
+            autopilot.setLandMode(std::chrono::seconds(10));
         } else {
             std::cerr << "[mission] local XY unavailable; using LAND mode\n";
             autopilot.setLandMode(std::chrono::seconds(10));
