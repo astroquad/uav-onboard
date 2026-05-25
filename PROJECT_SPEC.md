@@ -3,7 +3,7 @@
 > 제24회 한국로봇항공기경연대회 중급부문 멀티콥터형 드론 실내 조난자 탐색 온보드 소프트웨어 기준 문서  
 > **이 문서는 팀원과 코딩 에이전트가 공통으로 참조하는 Single Source of Truth입니다.**
 
-최종 수정: 2026-05-21
+최종 수정: 2026-05-26
 
 ## 1. 프로젝트 목적
 
@@ -11,12 +11,14 @@
 MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 
 최종 목표는 GPS 없는 격자 환경에서 이륙, grid snake 탐색, ArUco 조난자
-마커 기록, 번호 역순 재방문, 출발점 복귀, 자동 착륙까지 수행하는 것이다.
+마커 기록, 번호 역순 재방문, 출발점 복귀, 자동 착륙까지 수행하는 것이며,
+현재 이 한 사이클 전체가 한 상태머신 안에서 동작한다.
 
 현재 구현 기준은 다음과 같이 나뉜다.
 
-- `astroquad-onboard`: 현재 grid arena full-snake SITL 및 guarded ArduPilot
-  serial mission runtime.
+- `astroquad-onboard`: 현재 grid arena 진입 → snake 탐색 → 마커 재방문 →
+  vertiport 복귀 → 자동 착륙까지 풀-미션 SITL 및 guarded ArduPilot serial
+  mission runtime.
 - `uav-onboard-telem`: basic telemetry bring-up sender / development probe.
 - `vision_debug_node`: 현재 안정적인 camera/vision/GCS debug runtime.
 - `line_follow_node`: SITL 및 guarded ArduPilot serial line-follow staging.
@@ -27,7 +29,7 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 
 | 구분 | 내용 |
 |---|---|
-| 담당 | Pi camera frame 획득, ArUco/line/intersection detection, local grid-node 판단, mission state machine, grid/snake policy, control intent mapping, MAVLink adapter, safety, telemetry/debug video |
+| 담당 | Pi camera frame 획득, ArUco/line/intersection detection, local grid-node 판단, mission state machine (진입/탐색/재방문/복귀/착륙), grid/snake policy, marker revisit planning, control intent mapping, MAVLink adapter, safety, telemetry/debug video |
 | 미담당 | 자세 안정화와 모터 제어는 ArduPilot flight controller 담당, GCS UI/overlay/log window는 `uav-gcs` 담당 |
 
 역할 분리:
@@ -49,9 +51,11 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 | Intersection classifier/stabilizer | 구현됨 | `IntersectionDetector.*`, `IntersectionStabilizer.*` |
 | Intersection decision | 구현됨 | `src/mission/IntersectionDecision.*` |
 | Local grid coordinate tracker | 구현됨 | `src/mission/GridCoordinateTracker.*` |
-| Grid mission state machine | SITL staging | `src/mission/GridMission.*`, `src/app/AstroquadOnboardApp.*` |
+| Grid mission state machine (entry/snake/revisit/return) | 구현됨 | `src/mission/GridMission.*`, `src/app/AstroquadOnboardApp.*` |
 | Snake boundary planner | 구현됨 | `src/mission/SnakePlanner.*` |
 | Marker registry/window gate | 구현됨 | `src/mission/MarkerRegistry.*`, `GridMission::MarkerWindow` |
+| Marker revisit planner (asc/desc 정렬 + leg 경로 생성) | 구현됨 | `src/mission/MarkerRevisitPlanner.*` |
+| Return-home / return-vertiport sequence | 구현됨 | `GridMission` ReturnHome*/ReturnVertiport* states |
 | Guided velocity line/marker controller | 구현됨 | `src/control/GuidedVelocityController.*` |
 | Grid intent -> setpoint mapper | 구현됨 | `src/control/GridControlMapper.*` |
 | Altitude policy | 구현됨 | `src/mission/AltitudePolicy.*` |
@@ -59,11 +63,10 @@ MAVLink 제어, safety, GCS telemetry/debug video 송신을 담당한다.
 | MAVLink serial transport | 구현됨 | `src/autopilot/SerialMavlinkTransport.*` |
 | Autopilot adapter | 구현됨 | `src/autopilot/AutopilotMavlinkAdapter.*` |
 | Safety monitor | 부분 구현 | `src/safety/SafetyMonitor.*`, mission-local failsafe |
-| GCS telemetry/video publisher | 구현됨 | `src/app/GcsTelemetryPublisher.*` |
+| GCS telemetry/video publisher (mission/revisit/return phase 포함) | 구현됨 | `src/app/GcsTelemetryPublisher.*` |
 | Gazebo line/grid worlds | 구현됨 | `sim/gazebo/`, `scripts/line_tracing_test.sh`, `scripts/grid_arena_test.sh` |
 | ArduPilot serial bench tools | 구현됨 | `tools/mavlink_probe.cpp`, `tools/mavlink_motor_test.cpp` |
 | GCS command receiver | 미구현 | planned |
-| Marker reverse revisit / return home | 미구현 | planned |
 | Official coordinate conversion | 미구현 | planned |
 | File logging subsystem | 미구현 | `logs/`, future `src/logging` |
 
@@ -97,7 +100,8 @@ FrameSource
   -> VisionProcessor
   -> IntersectionDecisionEngine
   -> GridCoordinateTracker
-  -> GridMission
+  -> GridMission        (uses MarkerRegistry / SnakePlanner /
+                          AltitudePolicy / MarkerRevisitPlanner)
   -> GridControlMapper
   -> AutopilotMavlinkAdapter
 
@@ -173,6 +177,7 @@ IDLE
   -> MARKER_LOCK_YAW
   -> ENTRY_FORWARD
   -> ENTRY_CENTER_ORIGIN
+  -> ENTRY_ORIGIN_MARKER_HOVER
   -> SNAKE_LAUNCH_ALIGN
   -> SNAKE_FORWARD
   -> SNAKE_RECORD_NODE
@@ -180,14 +185,30 @@ IDLE
   -> SNAKE_TURN_90
   -> SNAKE_ADVANCE_ONE_CELL
   -> SNAKE_TURN_90_AGAIN
+  -> TURN_NODE_MARKER_HOVER       (snake 도중 마커 발견 시 dwell)
   -> SNAKE_COMPLETE
+  -> REVISIT_INIT
+  -> REVISIT_FORWARD
+  -> REVISIT_STOP_AT_TURN
+  -> REVISIT_TURN_90
+  -> REVISIT_MARKER_HOVER
+  -> REVISIT_COMPLETE
+  -> RETURN_HOME_INIT
+  -> RETURN_HOME_FORWARD
+  -> RETURN_HOME_STOP_AT_TURN
+  -> RETURN_HOME_TURN_90
+  -> RETURN_HOME_ALIGN_ORIGIN
+  -> RETURN_HOME_FACE_SOUTH
+  -> RETURN_VERTIPORT_FORWARD
+  -> RETURN_VERTIPORT_MARKER_HOVER
   -> LAND
+  -> MISSION_COMPLETE
   -> DONE
 
 any active state -> EMERGENCY_LAND
 ```
 
-핵심 규칙:
+핵심 규칙 (진입/탐색 공통):
 
 - Gazebo ground-truth pose를 쓰지 않는다.
 - 단거리 distance/hover 기준으로 MAVLink `LOCAL_POSITION_NED`, attitude,
@@ -206,9 +227,31 @@ any active state -> EMERGENCY_LAND
 - Boundary에서는 `SnakePlanner`가 첫 valid turn 방향을 latch하고, 이후
   boundary마다 left/right를 strict alternation한다.
 - 기대 alternation branch가 없으면 반대 방향으로 backtrack하지 않고 snake를
-  complete로 보고 land한다.
-- 현재는 marker count 충족 또는 snake complete 후 land한다. Marker ID 역순
-  재방문과 출발점 복귀는 아직 구현하지 않았다.
+  complete로 보고 다음 단계(재방문)로 전이한다.
+
+마커 재방문 (Revisit):
+
+- Snake 종료 시점의 격자 좌표/heading에서 출발해 `MarkerRevisitPlanner`가
+  `RevisitLeg`(목표 marker_id + `RevisitSegment{heading, cells}` 리스트)들을
+  생성한다.
+- 정렬 순서는 `revisit_order` 설정 (`asc` 또는 `desc`). CLI `--revisit-order`로
+  override. 기본은 `desc` (큰 ID부터).
+- 각 leg는 segment 단위로 `REVISIT_FORWARD` → `REVISIT_STOP_AT_TURN` →
+  `REVISIT_TURN_90`을 반복하며 진행한다. 목표 마커 위에서는
+  `REVISIT_MARKER_HOVER`로 dwell한 뒤 `MarkerRegistry.revisited` 플래그를 갱신한다.
+- 모든 마커 방문이 끝나면 `REVISIT_COMPLETE` → `RETURN_HOME_INIT`으로 전이한다.
+
+출발점 복귀 (Return Home / Return Vertiport):
+
+- 마지막 재방문 위치에서 `(0,0)`까지 `RETURN_HOME_*` 상태로 격자 경로를 따라
+  돌아온다.
+- `(0,0)`에 도착하면 `RETURN_HOME_ALIGN_ORIGIN`에서 중심을 다시 잡고,
+  `RETURN_HOME_FACE_SOUTH`에서 vertiport 방향(grid south)으로 yaw를 돌린다.
+- 그 다음 `RETURN_VERTIPORT_FORWARD`로 vertiport로 yaw-frozen blind forward.
+  vertiport ArUco를 잡으면 `RETURN_VERTIPORT_MARKER_HOVER`에서 중심을 맞춘 뒤
+  `LAND` → `MISSION_COMPLETE` → `DONE`으로 종료한다.
+- 어떤 단계에서든 heartbeat loss / mission timeout / altitude ceiling /
+  hop-distance 초과 등이 발생하면 `EMERGENCY_LAND`로 분기한다.
 
 ## 8. Control / MAVLink
 
@@ -239,8 +282,9 @@ Line-follow experiment-only alternate path:
 | `StopAndCenter` | boundary center deceleration |
 | `IntersectionCenter` | first origin/node center X/Y correction |
 | `LaunchAlign` | outgoing line lateral/yaw settle before hop |
+| `YawAlign` | hold position하면서 target yaw로 정렬 (return-home face-south 등) |
 | `YawTurn` | 90도 yaw-only turn |
-| `MarkerHover` | marker center hold + yaw target |
+| `MarkerHover` | marker center hold + yaw target (snake dwell / revisit / vertiport 착륙 전 모두 사용) |
 | `Land` | mapper는 setpoint를 내지 않고 LAND/GUIDED landing path가 처리 |
 
 Real hardware boundary:
@@ -273,10 +317,23 @@ Real hardware boundary:
 - `vision.markers[]`: current-frame ArUco observations
 - `debug.*`: timing, video counters, line workload counters
 
-`MissionTelemetry` richer fields are present in the serializer, but current
-`GcsTelemetryPublisher` users do not populate them yet. `astroquad-onboard`
-state is currently authoritative in its console log plus `debug.note =
-"grid_mission"`.
+`MissionTelemetry`는 현재 `astroquad-onboard`가 매 프레임 채워 보낸다. 포함되는
+주요 필드는 다음과 같다.
+
+- `mission.state` / `mission.control_intent` / `mission.target_altitude_m`
+- `mission.grid.{x,y,heading,snake_dir,valid}`
+- `mission.vertiport.{verified,marker_id}` / `mission.vertiport_acquired`
+- `mission.markers_expected` / `mission.markers_found[]`
+  (각 항목: `id`, `grid_x/y`, `orientation_deg`, `first_seen_s`, `revisited`, `revisited_s`)
+- `mission.snake_complete` / `mission.revisit_active` / `mission.revisit_order`
+  / `mission.revisit_target_id` / `mission.revisit_remaining`
+- `mission.return_active` / `mission.return_phase` / `mission.vertiport_return_active`
+- `mission.grid_map_finalized` / `mission.grid_pose_visible`
+- `mission.landing_success` / `mission.mission_complete`
+- `mission.last_safety_event`
+
+GCS는 이 필드들로 진행 단계, 발견/재방문 마커, 복귀 phase, 착륙 결과까지
+구조화된 형태로 렌더한다. `debug.note = "grid_mission"`는 호환을 위해 유지한다.
 
 ## 10. Current Config Defaults
 
@@ -325,12 +382,17 @@ entry_blind_clear_distance_m = 1.80
 entry_intersection_min_distance_m = 1.80
 entry_center_target_y_norm = 0.55
 cell_size_m = 3.0
+altitude_ceiling_m = 3.5
 hop_align_start_m = 1.4
 hop_align_end_m = 1.7
 hop_max_distance_m = 3.5
 hop_intersection_min_distance_m = 1.0
 marker_window_frames = 8
 marker_window_min_count = 4
+
+# Marker revisit (snake 완료 후 발견 마커 재방문)
+revisit_order = "desc"                   # asc | desc, CLI --revisit-order로 override
+revisit_passthrough_regular_nodes = true # 비목표 노드는 통과
 ```
 
 ## 11. Directory / File Roles
@@ -363,7 +425,8 @@ uav-onboard/
 │  ├─ camera/               # rpicam MJPEG capture
 │  ├─ common/               # config/time helpers
 │  ├─ control/              # setpoint model, guided velocity, grid mapper
-│  ├─ mission/              # altitude, grid mission, tracker, snake, marker registry
+│  ├─ mission/              # altitude, grid mission (entry/snake/revisit/return),
+│  │                        # tracker, snake planner, marker registry, marker revisit planner
 │  ├─ network/              # UDP telemetry sender
 │  ├─ protocol/             # telemetry JSON serializer
 │  ├─ safety/               # safety monitor
@@ -391,8 +454,9 @@ Key entrypoints/tools:
 
 Current focused tests cover telemetry JSON, line/marker/intersection
 stabilizers, intersection decision, guided velocity control, line-follow
-mission, grid mission entry/origin, safety monitor, fake frame source, vision
-processor, and MAVLink UDP/serial adapter behavior.
+mission, grid mission entry/origin/snake/revisit/return-home transitions,
+marker revisit planner, safety monitor, fake frame source, vision processor,
+and MAVLink UDP/serial adapter behavior.
 
 ## 12. Build / Run / Test
 
@@ -415,13 +479,16 @@ Line-follow SITL:
   --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>
 ```
 
-Grid mission SITL:
+Grid mission SITL (진입→snake→재방문→복귀→착륙 풀-미션):
 
 ```bash
 ./build/astroquad-onboard --config config --target sitl --vision gazebo \
   --world grid --line-mode dark_on_light --marker-count 4 \
+  --revisit-order desc \
   --video --gcs-ip <windows-gcs-ip>
 ```
+
+`--revisit-order`는 `asc`/`desc` 중 선택 (기본 `desc`).
 
 ArduPilot serial bench:
 
@@ -434,14 +501,13 @@ ArduPilot serial bench:
 
 | 순서 | 작업 | 이유/검증 |
 |---:|---|---|
-| 1 | `astroquad-onboard` SITL snake 안정화 | 현재 full-grid 알고리즘의 중심 |
-| 2 | GCS mission/grid telemetry 보강 | console-only state를 GCS에도 구조화 |
-| 3 | Grid mission unit/integration tests 확대 | Entry/origin/hop/turn/marker commit 회귀 방지 |
-| 4 | Real ArduPilot serial grid mission guarded flight 검증 | serial/vision/control path 통합 검증 |
-| 5 | `grid_mission_node` alias 제거 여부 결정 | 최종 실행 파일 정리 |
-| 6 | Marker reverse revisit / return home policy | 대회 최종 미션 완성 |
-| 7 | GCS command channel 연동 | START/ABORT/EMERGENCY LAND/backend 선택 |
-| 8 | File logging/replay | 비행 후 재현성과 보고서 자료 |
+| 1 | `astroquad-onboard` SITL 풀-미션 (snake/revisit/return) 안정화 유지 | 현재 대회 미션의 중심 |
+| 2 | Real ArduPilot serial grid 풀-미션 guarded flight 검증 | serial/vision/control path 통합 검증 |
+| 3 | Revisit/return 회귀 테스트 확대 | 마커 leg 생성, return-home 경로, vertiport 정렬 |
+| 4 | `grid_mission_node` alias 제거 여부 결정 | 최종 실행 파일 정리 |
+| 5 | GCS command channel 연동 | START/ABORT/EMERGENCY LAND/backend 선택 |
+| 6 | File logging/replay | 비행 후 재현성과 보고서 자료 |
+| 7 | Safety monitor 확장 | mission-local failsafe 외 공통 safety event 집계 |
 
 ## 14. 아직 하지 않는 것
 
@@ -449,4 +515,7 @@ ArduPilot serial bench:
 - Gazebo ground-truth pose를 mission 입력으로 쓰지 않는다.
 - 실기체에서 RC/local-estimate preflight gate 없이 arm/takeoff하지 않는다.
 - Debug video frame loss를 mission failure로 보지 않는다.
-- Marker reverse revisit/return-home을 구현된 기능처럼 문서화하지 않는다.
+- Revisit/return 단계에서도 ground-truth 좌표가 아니라 격자 기반 hop과
+  LOCAL_NED 거리만 사용한다.
+- Snake 도중 alternation branch가 비면 backtrack하지 않고 다음 단계(재방문)로
+  넘어간다.
