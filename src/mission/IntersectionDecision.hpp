@@ -89,7 +89,7 @@ public:
     void reset();
     void startCooldown();
 
-    // Cycle 8: GridMission relaxes the NodeRecord center band during LineEnter
+    // GridMission relaxes the NodeRecord center band during LineEnter
     // so the very first vertiport->grid intersection can be latched even when
     // it appears slightly off the camera midline.
     void setNodeRecordYBand(double y_min, double y_max);

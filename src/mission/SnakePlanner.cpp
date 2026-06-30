@@ -104,12 +104,11 @@ SnakePlannerOutput SnakePlanner::planAtBoundary(const SnakePlannerInput& input)
 
     SnakeTurnDir chosen = snake_dir_;
     if (chosen == SnakeTurnDir::Unknown) {
-        // Cycle 20: latch the very-first turn direction into snake_dir_ so the
-        // subsequent notifySecondTurnCompleted() can actually alternate. Before
-        // this fix snake_dir_ stayed Unknown forever, flip(Unknown)=Unknown,
-        // pickInitialTurn ran at every boundary and (with both branches open)
-        // defaulted to Right every time — the symptom the user reported as
-        // "column 3 끝에서도 또 우회전 → column 2로 복귀".
+        // Latch the very-first turn direction into snake_dir_ so the
+        // subsequent notifySecondTurnCompleted() can alternate from a known
+        // reference. While snake_dir_ stays Unknown, flip(Unknown)=Unknown and
+        // pickInitialTurn re-runs at every boundary, defaulting to Right
+        // whenever both branches are open (i.e. no real alternation).
         chosen = pickInitialTurn(input);
         if (chosen != SnakeTurnDir::Unknown) {
             snake_dir_ = chosen;
@@ -123,17 +122,16 @@ SnakePlannerOutput SnakePlanner::planAtBoundary(const SnakePlannerInput& input)
         out.boundary_terminated = true;
         return out;
     }
-    // Cycle 20: alternation-strict boundary decision. Per the user spec, if
-    // the snake's expected direction (snake_dir_ alternation) is not present
-    // in the latched grid_branch_mask, it means either:
-    //   (a) we have actually reached the grid's terminal column (an L-shape
-    //       boundary that forces the OPPOSITE of alternation — a contradiction
-    //       proving snake is complete), OR
+    // Alternation-strict boundary decision. If the snake's expected direction
+    // (snake_dir_ alternation) is not present in the latched grid_branch_mask,
+    // it means either:
+    //   (a) we have reached the grid's terminal column (an L-shape boundary
+    //       that forces the OPPOSITE of alternation — a contradiction proving
+    //       the snake is complete), OR
     //   (b) vision missed the branch this frame (rare).
-    // In either case the safe action is SnakeAction::Complete. The previous
-    // Cycle 19 fallback (silently flipping chosen to the opposite direction)
-    // caused the drone to backtrack into the prior column whenever the
-    // boundary node's last cached mask had a transient missing branch.
+    // In either case the safe action is SnakeAction::Complete. Silently
+    // flipping to the opposite direction here would make the drone backtrack
+    // into the prior column whenever a transient missing branch appears.
     const std::uint8_t chosen_bit = headingBit(applyTurn(input.heading, chosen));
     if ((input.grid_branch_mask & chosen_bit) == 0) {
         std::fprintf(stderr,
@@ -144,17 +142,15 @@ SnakePlannerOutput SnakePlanner::planAtBoundary(const SnakePlannerInput& input)
         out.boundary_terminated = true;
         return out;
     }
-    // Cycle 19: REMOVED `snake_dir_ = chosen;`. snake_dir_ is the snake's
-    // alternation reference (left ↔ right across boundaries) and must stay
-    // independent of any per-boundary fallback flip above. Without this
-    // change, a single vision glitch at one boundary could flip the
-    // alternation pattern permanently (the symptom the user reported as
-    // "직진 → 좌좌 → 직진 → 좌좌 ...").
+    // Do NOT reassign snake_dir_ here. It is the snake's alternation reference
+    // (left ↔ right across boundaries) and must stay independent of any
+    // per-boundary direction choice above; otherwise a single vision glitch at
+    // one boundary could flip the alternation pattern permanently.
     out.action = SnakeAction::StopAndTurn;
     out.plan_turn_dir = chosen;
     out.next_heading = applyTurn(input.heading, chosen);
-    // Cycle 19 logging: dump every boundary decision so we can audit which
-    // direction the planner actually picks vs. the alternation reference.
+    // Log every boundary decision so we can audit which direction the planner
+    // actually picks vs. the alternation reference.
     std::fprintf(stderr,
         "[snake] planAtBoundary heading=%d grid_mask=0x%02X snake_dir_=%s chosen=%s\n",
         static_cast<int>(input.heading), input.grid_branch_mask,

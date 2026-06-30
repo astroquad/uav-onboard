@@ -18,22 +18,48 @@ double GridControlMapper::wrapAngle(double a) const
     return a;
 }
 
-double GridControlMapper::computeAltitudeVz(bool available, double current, double target) const
+double GridControlMapper::computeAltitudeVz(bool available, double current, double target)
 {
-    if (!available) return 0.0;
+    if (!available) {
+        altitude_integral_ = 0.0;   // no estimate: drop the accumulator
+        return 0.0;
+    }
     const double err = target - current;
-    double vz_up = config_.altitude_kp * err;
+    // Integral term with clamp-based anti-windup. Skipped entirely when ki == 0,
+    // so the controller stays bit-for-bit the pure-P version by default.
+    if (config_.altitude_ki > 0.0) {
+        altitude_integral_ += err;
+        const double i_clamp = config_.altitude_max_vz_mps / config_.altitude_ki;
+        altitude_integral_ = std::clamp(altitude_integral_, -i_clamp, i_clamp);
+    }
+    double vz_up = config_.altitude_kp * err + config_.altitude_ki * altitude_integral_;
     if (vz_up > config_.altitude_max_vz_mps)  vz_up = config_.altitude_max_vz_mps;
     if (vz_up < -config_.altitude_max_vz_mps) vz_up = -config_.altitude_max_vz_mps;
     // ControlSetpoint.vz_down_mps is downward-positive; positive vz_up means rise.
     return -vz_up;
 }
 
-double GridControlMapper::computeYawRate(double current_yaw_rad, double target_yaw_rad) const
+double GridControlMapper::computeYawRate(double current_yaw_rad, double target_yaw_rad)
 {
+    // Reset the accumulator when the target changes (a new turn/align goal) so
+    // integral wound up against the previous target does not carry over.
+    if (!yaw_target_initialized_ ||
+        std::abs(wrapAngle(target_yaw_rad - prev_yaw_target_rad_)) > 1e-3) {
+        yaw_integral_ = 0.0;
+        prev_yaw_target_rad_ = target_yaw_rad;
+        yaw_target_initialized_ = true;
+    }
     const double err = wrapAngle(target_yaw_rad - current_yaw_rad);
-    if (std::abs(err) <= config_.yaw_align_deadband_rad) return 0.0;
-    double rate = config_.yaw_align_kp * err;
+    if (std::abs(err) <= config_.yaw_align_deadband_rad) {
+        yaw_integral_ = 0.0;        // settled inside deadband: no residual wind-up
+        return 0.0;
+    }
+    if (config_.yaw_align_ki > 0.0) {
+        yaw_integral_ += err;
+        const double i_clamp = config_.max_yaw_rate_rad_s / config_.yaw_align_ki;
+        yaw_integral_ = std::clamp(yaw_integral_, -i_clamp, i_clamp);
+    }
+    double rate = config_.yaw_align_kp * err + config_.yaw_align_ki * yaw_integral_;
     if (rate > config_.max_yaw_rate_rad_s)  rate = config_.max_yaw_rate_rad_s;
     if (rate < -config_.max_yaw_rate_rad_s) rate = -config_.max_yaw_rate_rad_s;
     return rate;
@@ -67,14 +93,14 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
             out.yaw_rate_rad_s = static_cast<float>(
                 computeYawRate(input.current_yaw_rad, input.target_yaw_rad));
         }
-        // Cycle 27: lateral line-centering while yaw stays frozen. Without
+        // Lateral line-centering while yaw stays frozen. Without
         // this the drone tracks a slight LineDetector center bias in body
         // frame which manifests as a consistent left/right tilt on one of
         // N/S only (the bias direction in grid frame depends on heading).
         // angle_error_rad is intentionally zeroed before the line_controller
         // call so the yaw lock above is the sole yaw authority.
         // populateLineInputs already nulls the line errors near intersections
-        // (Cycle 15 freeze) so vy here only acts on confident straight-line
+        // (line freeze), so vy here only acts on confident straight-line
         // detections.
         if (input.line_detected && line_controller_ != nullptr) {
             LineControlInput line {};
@@ -96,7 +122,7 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
         ControlSetpoint sp = line_controller_
             ? line_controller_->updateLine(line, alt)
             : ControlSetpoint {};
-        // Cycle 18: line_controller's yaw_rate follows the LineDetector's
+        // Line_controller's yaw_rate follows the LineDetector's
         // angle_error directly. That signal drifts cumulatively across cells
         // (LineDetector has a small angle bias) and walks the body-yaw away
         // from the latched column heading. Override the yaw_rate with a lock
@@ -128,7 +154,7 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
             ? line_controller_->updateLine(line, alt)
             : ControlSetpoint {};
         sp.vx_forward_mps = 0.0f;
-        // Cycle 18: same yaw lock as LineFollow — LaunchAlign was the main
+        // Same yaw lock as LineFollow — LaunchAlign was the main
         // contributor to per-cell yaw drift (the LineDetector angle bias gets
         // applied repeatedly during the multi-second hold) so this override
         // is the critical change.
@@ -142,7 +168,7 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
         out.vz_down_mps = static_cast<float>(
             computeAltitudeVz(input.altitude_available, input.current_altitude_m,
                               input.target_altitude_m));
-        // Cycle 12 B: cy-feedback deceleration. While the intersection center
+        // Cy-feedback deceleration. While the intersection center
         // is still above the camera target (cy < stop_center_target_cy), push
         // a small forward velocity that tapers off as the gap closes. When cy
         // reaches the target we command vx=0 and the drone settles right
@@ -203,7 +229,7 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
         ControlSetpoint sp = line_controller_
             ? line_controller_->updateMarker(marker, alt)
             : ControlSetpoint {};
-        // Cycle 16: marker hover must also drive the body-yaw toward the
+        // Marker hover must also drive the body-yaw toward the
         // mission's target_yaw_rad so MarkerLockYaw can rotate while staying
         // centered on the marker. GuidedVelocityController::updateMarker
         // forces yaw_rate_rad_s = 0, so we override it here from the mapper.

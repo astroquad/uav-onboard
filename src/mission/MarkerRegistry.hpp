@@ -43,7 +43,7 @@ public:
     // All markers that have been bound to a grid coord (i.e. excluding vertiport).
     const std::vector<MarkerRecord>& records() const { return records_; }
 
-    // Cycle 10: GCS / log access to the committed id set.
+    // GCS / log access to the committed id set.
     const std::unordered_set<int>& seenIds() const { return seen_ids_; }
 
     std::optional<MarkerRecord> findByGrid(GridCoord coord) const;

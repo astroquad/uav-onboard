@@ -7,6 +7,7 @@ namespace onboard::control {
 struct GuidedVelocityControllerConfig {
     double forward_mps = 0.25;
     double offset_kp = 0.35;
+    double offset_ki = 0.0;          // lateral integral gain w/ anti-windup; 0 = pure P
     double angle_yaw_kp = 1.0;
     double offset_yaw_kp = 0.25;
     double max_lateral_mps = 0.35;
@@ -46,6 +47,9 @@ struct GuidedVelocityControllerConfig {
     double forward_confidence_scale = 0.0;
 };
 
+// Computes lateral velocity and yaw-rate corrections from line center/angle
+// error (and marker center error), with EMA smoothing and rate limiting on the
+// outputs. Pure proportional control with configurable gains.
 class GuidedVelocityController {
 public:
     explicit GuidedVelocityController(GuidedVelocityControllerConfig config);
@@ -76,6 +80,8 @@ private:
     bool has_prev_output_ = false;
     double prev_lateral_ = 0.0;
     double prev_yaw_rate_ = 0.0;
+    // Lateral line-centering integral (only active when offset_ki > 0).
+    double offset_integral_ = 0.0;
     bool has_prev_marker_output_ = false;
     double prev_marker_forward_ = 0.0;
     double prev_marker_lateral_ = 0.0;

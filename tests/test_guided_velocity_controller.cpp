@@ -182,6 +182,50 @@ void runMarkerRateLimit()
            static_cast<float>(config.max_marker_rate_mps) + 1e-6f);
 }
 
+void runOffsetIntegral()
+{
+    const onboard::control::AltitudeControlInput altitude {true, 2.0, 2.0};
+
+    // ki == 0 must reproduce the pure-P output exactly, with no growth across
+    // repeated identical inputs.
+    {
+        auto config = baseConfig();
+        config.offset_kp = 0.8;
+        config.offset_ki = 0.0;
+        config.offset_deadband_norm = 0.0;
+        onboard::control::GuidedVelocityController controller(config);
+        const auto a = controller.updateLine({true, 0.1, 0.0, 1.0}, altitude);
+        const auto b = controller.updateLine({true, 0.1, 0.0, 1.0}, altitude);
+        assert(std::abs(a.vy_right_mps - 0.08f) < 1e-5f);
+        assert(std::abs(b.vy_right_mps - 0.08f) < 1e-5f);
+    }
+
+    // ki > 0 accumulates (output grows), anti-windup clamps it at max_lateral,
+    // and losing the line resets the accumulator.
+    {
+        auto config = baseConfig();
+        config.offset_kp = 0.8;
+        config.offset_ki = 0.1;
+        config.max_lateral_mps = 0.5;
+        config.offset_deadband_norm = 0.0;
+        onboard::control::GuidedVelocityController controller(config);
+        const auto t1 = controller.updateLine({true, 0.1, 0.0, 1.0}, altitude);
+        const auto t2 = controller.updateLine({true, 0.1, 0.0, 1.0}, altitude);
+        assert(t2.vy_right_mps > t1.vy_right_mps);
+
+        for (int i = 0; i < 200; ++i) {
+            controller.updateLine({true, 0.1, 0.0, 1.0}, altitude);
+        }
+        const auto sat = controller.updateLine({true, 0.1, 0.0, 1.0}, altitude);
+        assert(std::abs(sat.vy_right_mps - 0.5f) < 1e-5f);  // clamped, no overshoot
+
+        controller.updateLine({false, 0.0, 0.0, 0.0}, altitude);  // line lost -> reset
+        const auto reacq = controller.updateLine({true, 0.1, 0.0, 1.0}, altitude);
+        assert(reacq.vy_right_mps < sat.vy_right_mps);
+        assert(reacq.vy_right_mps < 0.2f);
+    }
+}
+
 } // namespace
 
 int main()
@@ -193,5 +237,6 @@ int main()
     runLostLineDecays();
     runMarkerDeadband();
     runMarkerRateLimit();
+    runOffsetIntegral();
     return 0;
 }

@@ -84,7 +84,7 @@ struct GridNodeTelemetry {
     bool updates_current = true;
 };
 
-// Cycle 13: fractional drone position relative to the last committed grid
+// Fractional drone position relative to the last committed grid
 // node, used by the GCS to render the heading arrow at a sub-cell position
 // so the operator can see progress along the line in real time rather than
 // only at intersection commits.
@@ -147,7 +147,7 @@ struct VisionTelemetry {
     IntersectionTelemetry intersection;
     IntersectionDecisionTelemetry intersection_decision;
     GridNodeTelemetry grid_node;
-    // Cycle 13: drone fractional position from the last committed grid node.
+    // Drone fractional position from the last committed grid node.
     DronePositionTelemetry drone_position;
     bool marker_detected = false;
     int marker_id = -1;
@@ -179,7 +179,7 @@ struct MissionMarkerEntry {
     int grid_y = 0;
     bool grid_valid = false;
     double orientation_deg = 0.0;
-    // Cycle 23: onboard wall-clock seconds when this marker was first
+    // Onboard wall-clock seconds when this marker was first
     // committed to the MarkerRegistry. Surfaced on the GCS markers panel.
     double first_seen_s = 0.0;
     bool revisited = false;

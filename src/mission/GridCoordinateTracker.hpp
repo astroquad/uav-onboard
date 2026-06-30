@@ -47,14 +47,18 @@ struct GridNodeEvent {
     bool updates_current = true;
 };
 
+// Tracks the drone's local grid coordinate and heading from vision node events.
+// update() is peek-only (it previews what the next node would be without moving
+// the tracker); commitAdvance() actually advances the coordinate once
+// GridMission's distance/lockout gates approve the move.
 class GridCoordinateTracker {
 public:
     explicit GridCoordinateTracker(const common::IntersectionDecisionConfig& config);
 
     // Peek-only: previews what the next node event would look like (its coord,
     // topology, branches) given the current heading. Does NOT advance internal
-    // state. Cycle 9 split: GridMission decides via distance/lockout gates
-    // whether to commit, then calls commitAdvance to actually move the tracker.
+    // state. GridMission decides via distance/lockout gates whether to commit,
+    // then calls commitAdvance to actually move the tracker.
     GridNodeEvent update(
         const IntersectionDecision& decision,
         std::uint32_t frame_seq,
@@ -76,7 +80,7 @@ public:
     const std::map<GridCoord, GridNodeEvent, GridCoordLess>& nodes() const;
 
     // Returns the GridCoord one cell forward of `coord` along `heading`.
-    // Cycle 23: exposed so GridMission can synthesise a boundary commit event
+    // Exposed so GridMission can synthesise a boundary commit event
     // when the IntersectionDecision routes straight to TurnReady (skipping
     // NodeRecord) and tracker peek did not fire a valid event.
     GridCoord advance(GridCoord coord, GridHeading heading) const;

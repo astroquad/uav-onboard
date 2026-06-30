@@ -31,14 +31,14 @@ struct GcsTelemetryPublishInput {
     vision::VisionProcessingOutput vision_output;
     mission::IntersectionDecision intersection_decision;
     mission::GridNodeEvent grid_node;
-    // Cycle 13: drone fractional position from the last committed grid node,
+    // Drone fractional position from the last committed grid node,
     // used by the GCS GridMapTracker to render the heading arrow at a sub-cell
     // position so the operator can see the drone moving along the line.
     bool   drone_position_valid = false;
     double drone_cell_progress = 0.0;
     double drone_grid_offset_x = 0.0;
     double drone_grid_offset_y = 0.0;
-    // Cycle 23: high-level mission telemetry (state, found-marker registry,
+    // High-level mission telemetry (state, found-marker registry,
     // grid coord/heading). Populated by the composition root from the
     // GridMission output + MarkerRegistry; forwarded verbatim to the GCS.
     protocol::MissionTelemetry mission;

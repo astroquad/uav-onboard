@@ -9,5 +9,14 @@ assume_rc_present = true
 rc_required = false
 rc_lost_ms = 1500
 
+# Preflight EKF readiness gate (real-flight GUIDED bring-up).
+# ArduCopter accepts GUIDED only when the EKF horizontal-position and velocity
+# innovation ratios are below ~1.0. The onboard gate enforces the same bound so
+# it predicts GUIDED acceptance instead of passing on flag bits alone. Only
+# enforced when the FC reports the ratios in EKF_STATUS_REPORT.
+[preflight]
+ekf_pos_horiz_variance_max = 1.0
+ekf_velocity_variance_max = 1.0
+
 [battery]
 low_voltage_v = 10.5

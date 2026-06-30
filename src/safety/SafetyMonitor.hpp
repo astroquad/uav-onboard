@@ -18,6 +18,12 @@ struct SafetyConfig {
     bool rc_required = false;
     bool assume_rc_present = true;
     int rc_lost_ms = 1500;
+    // Preflight EKF readiness gate. ArduCopter accepts GUIDED only when the EKF
+    // horizontal-position and velocity innovation ratios are below ~1.0, so the
+    // onboard gate enforces the same bound to predict GUIDED acceptance rather
+    // than passing on flag bits alone. Only enforced when the FC reports them.
+    double ekf_pos_horiz_variance_max = 1.0;
+    double ekf_velocity_variance_max = 1.0;
 };
 
 struct SafetyInput {
