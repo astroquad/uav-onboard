@@ -43,6 +43,13 @@ target_include_directories(test_guided_velocity_controller PRIVATE ../src)
 target_link_libraries(test_guided_velocity_controller PRIVATE onboard_core)
 add_test(NAME guided_velocity_controller COMMAND test_guided_velocity_controller)
 
+add_executable(test_grid_control_mapper_pi
+    test_grid_control_mapper_pi.cpp
+)
+target_include_directories(test_grid_control_mapper_pi PRIVATE ../src)
+target_link_libraries(test_grid_control_mapper_pi PRIVATE onboard_core)
+add_test(NAME grid_control_mapper_pi COMMAND test_grid_control_mapper_pi)
+
 add_executable(test_line_follow_mission
     test_line_follow_mission.cpp
 )

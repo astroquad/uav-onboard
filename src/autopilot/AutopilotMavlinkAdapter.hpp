@@ -11,6 +11,11 @@
 
 namespace onboard::autopilot {
 
+// Owns the MAVLink link to the flight controller: waits for heartbeat, sets
+// flight modes, arms/takes off/lands, streams body-velocity setpoints, and
+// decodes incoming telemetry into AutopilotState. The only ArduPilot-specific
+// coupling is the custom flight-mode numbers (COPTER_MODE_*); the commands and
+// telemetry are generic MAVLink.
 class AutopilotMavlinkAdapter {
 public:
     AutopilotMavlinkAdapter(std::unique_ptr<MavlinkTransport> transport, MavlinkIds ids);

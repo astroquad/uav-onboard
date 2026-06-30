@@ -40,6 +40,9 @@ struct SnakePlannerOutput {
     bool boundary_terminated = false;
 };
 
+// Decides snake-search turns at grid boundaries: it latches the first turn
+// direction, then enforces strict left/right alternation at each subsequent
+// boundary, reporting Complete when the expected alternation branch is absent.
 class SnakePlanner {
 public:
     explicit SnakePlanner(SnakePlannerConfig config);

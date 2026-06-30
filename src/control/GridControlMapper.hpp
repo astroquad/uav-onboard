@@ -28,10 +28,12 @@ struct GridControlMapperConfig {
     double forward_speed_advance_mps = 0.18;  // post-turn slow re-acquire
     double max_yaw_rate_rad_s = 0.6;
     double yaw_align_kp = 1.2;
+    double yaw_align_ki = 0.0;                 // integral gain w/ anti-windup; 0 = pure P
     double yaw_align_deadband_rad = 0.0349;   // ~2°
     double altitude_max_vz_mps = 0.35;
     double altitude_kp = 0.4;
-    // Cycle 12 B: cy-feedback deceleration for StopAndCenter intent.
+    double altitude_ki = 0.0;                  // integral gain w/ anti-windup; 0 = pure P
+    // Cy-feedback deceleration for StopAndCenter intent.
     double stop_center_target_cy = 0.55;
     double stop_center_max_vx_mps = 0.10;
     double stop_center_taper_gap = 0.30;
@@ -69,12 +71,16 @@ struct GridControlMapperInput {
     double marker_center_error_x_norm = 0.0;
     double marker_center_error_y_norm = 0.0;
 
-    // Cycle 12 B: cy-feedback deceleration in StopAndCenter intent.
+    // Cy-feedback deceleration in StopAndCenter intent.
     bool intersection_valid = false;
     double intersection_center_x_norm = 0.0;
     double intersection_center_y_norm = 0.0;
 };
 
+// Translates an abstract GridControlIntent into a body-frame velocity setpoint
+// (ControlSetpoint). Holds the P-control laws for altitude and yaw and for
+// intersection/marker centering, and delegates line-following lateral/yaw
+// correction to GuidedVelocityController.
 class GridControlMapper {
 public:
     GridControlMapper(GridControlMapperConfig config,
@@ -83,12 +89,19 @@ public:
     ControlSetpoint compute(const GridControlMapperInput& input);
 
 private:
-    double computeAltitudeVz(bool available, double current, double target) const;
-    double computeYawRate(double current_yaw_rad, double target_yaw_rad) const;
+    // Non-const: both hold an integral accumulator across ticks.
+    double computeAltitudeVz(bool available, double current, double target);
+    double computeYawRate(double current_yaw_rad, double target_yaw_rad);
     double wrapAngle(double a) const;
 
     GridControlMapperConfig config_;
     GuidedVelocityController* line_controller_; // not owned
+
+    // PI integral state (only active when the matching *_ki gain is > 0).
+    double altitude_integral_ = 0.0;
+    double yaw_integral_ = 0.0;
+    double prev_yaw_target_rad_ = 0.0;
+    bool   yaw_target_initialized_ = false;
 };
 
 const char* gridControlIntentName(GridControlIntent intent);

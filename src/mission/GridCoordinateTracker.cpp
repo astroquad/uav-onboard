@@ -94,7 +94,7 @@ GridNodeEvent GridCoordinateTracker::update(
         return event;
     }
 
-    // Cycle 9: peek-only. Compute what the next node WOULD be — its coord
+    // Peek-only. Compute what the next node WOULD be — its coord
     // (one cell forward of current_coord_ in current_heading_), topology,
     // and branches — but do NOT mutate current_coord_/current_heading_/nodes_.
     // GridMission gates the decision and calls commitAdvance to finalize.
@@ -243,10 +243,10 @@ const std::map<GridCoord, GridNodeEvent, GridCoordLess>& GridCoordinateTracker::
 
 GridCoord GridCoordinateTracker::advance(GridCoord coord, GridHeading heading) const
 {
-    // Cycle 13: reverted to screen convention — north = -y, south = +y. The
-    // first grid node is (0,0), then (0,-1), (0,-2)... as the drone proceeds
-    // north up the column; vertiport sits at (0,+1). GCS canvasRow uses
-    // (y - min_y) * 2 so smaller y still renders at the top of the canvas.
+    // Screen convention: north = -y, south = +y. The first grid node is (0,0),
+    // then (0,-1), (0,-2)... as the drone proceeds north up the column;
+    // vertiport sits at (0,+1). GCS canvasRow uses (y - min_y) * 2 so smaller y
+    // still renders at the top of the canvas.
     switch (heading) {
     case GridHeading::North:
         --coord.y;

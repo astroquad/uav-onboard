@@ -10,6 +10,21 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 constexpr int kMaxPollDrainMessages = 128;
+constexpr std::size_t kMaxStatusTexts = 16;
+
+// Join the most recent autopilot STATUSTEXT lines (newest first) into one
+// string so a failed mode change can report the FC's own rejection reason.
+std::string recentStatusTextSummary(const std::deque<StatusTextEntry>& texts,
+                                    std::size_t max_lines = 3)
+{
+    std::string out;
+    std::size_t shown = 0;
+    for (auto it = texts.rbegin(); it != texts.rend() && shown < max_lines; ++it, ++shown) {
+        if (!out.empty()) out += " | ";
+        out += it->text;
+    }
+    return out;
+}
 
 bool heartbeatArmed(const mavlink_heartbeat_t& heartbeat)
 {
@@ -452,7 +467,14 @@ void AutopilotMavlinkAdapter::setMode(
             return;
         }
     }
-    throw std::runtime_error("timed out waiting for mode " + name);
+    // Attach the autopilot's own STATUSTEXT (e.g. "GUIDED requires position
+    // estimate") so the caller sees why the mode was refused, not just a timeout.
+    std::string reason = recentStatusTextSummary(state_.recent_statustexts);
+    std::string message_text = "timed out waiting for mode " + name;
+    if (!reason.empty()) {
+        message_text += " (autopilot: " + reason + ")";
+    }
+    throw std::runtime_error(message_text);
 }
 
 void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
@@ -561,10 +583,40 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
     } else if (message.msgid == MAVLINK_MSG_ID_EKF_STATUS_REPORT) {
         mavlink_ekf_status_report_t ekf {};
         mavlink_msg_ekf_status_report_decode(&message, &ekf);
+        // Copy packed struct fields into locals before assigning: the MAVLink
+        // message is __attribute__((packed)), so its members cannot be bound to
+        // references (which std::optional::operator= would do).
         const std::uint16_t flags = ekf.flags;
+        const float velocity_variance = ekf.velocity_variance;
+        const float pos_horiz_variance = ekf.pos_horiz_variance;
+        const float pos_vert_variance = ekf.pos_vert_variance;
+        const float compass_variance = ekf.compass_variance;
+        const float terrain_alt_variance = ekf.terrain_alt_variance;
         state_.ekf_flags = flags;
+        // Keep the innovation test ratios alongside the flags: ArduCopter's
+        // GUIDED acceptance depends on the position/velocity variances being
+        // below ~1.0, which the flag bits alone do not capture.
+        state_.ekf_velocity_variance = velocity_variance;
+        state_.ekf_pos_horiz_variance = pos_horiz_variance;
+        state_.ekf_pos_vert_variance = pos_vert_variance;
+        state_.ekf_compass_variance = compass_variance;
+        state_.ekf_terrain_alt_variance = terrain_alt_variance;
         state_.last_ekf_status_time = Clock::now();
 #endif
+    } else if (message.msgid == MAVLINK_MSG_ID_STATUSTEXT) {
+        mavlink_statustext_t status {};
+        mavlink_msg_statustext_decode(&message, &status);
+        // STATUSTEXT.text is a fixed char[50] that is not guaranteed to be
+        // null-terminated, so bound the length explicitly.
+        const std::size_t len = strnlen(status.text, sizeof(status.text));
+        StatusTextEntry entry;
+        entry.severity = status.severity;
+        entry.text.assign(status.text, len);
+        entry.time = Clock::now();
+        state_.recent_statustexts.push_back(std::move(entry));
+        while (state_.recent_statustexts.size() > kMaxStatusTexts) {
+            state_.recent_statustexts.pop_front();
+        }
 #ifdef MAVLINK_MSG_ID_RC_CHANNELS
     } else if (message.msgid == MAVLINK_MSG_ID_RC_CHANNELS) {
         mavlink_rc_channels_t channels {};

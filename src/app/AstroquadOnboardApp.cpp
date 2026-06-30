@@ -43,11 +43,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -330,6 +332,17 @@ void applySafetyRc(const toml::node_view<toml::node> rc, Configs& cfg)
         rc["rc_lost_ms"].value_or(cfg.safety.rc_lost_ms);
 }
 
+void applySafetyPreflight(const toml::node_view<toml::node> preflight, Configs& cfg)
+{
+    if (!preflight) return;
+    cfg.safety.ekf_pos_horiz_variance_max =
+        preflight["ekf_pos_horiz_variance_max"].value_or(
+            cfg.safety.ekf_pos_horiz_variance_max);
+    cfg.safety.ekf_velocity_variance_max =
+        preflight["ekf_velocity_variance_max"].value_or(
+            cfg.safety.ekf_velocity_variance_max);
+}
+
 void applyDebugVideoConfig(const toml::node_view<toml::node> debug_video, Configs& cfg)
 {
     if (!debug_video) return;
@@ -352,6 +365,8 @@ void applyLineControllerConfig(const toml::node_view<toml::node> line_controller
     if (!line_controller) return;
     cfg.controller.offset_kp =
         line_controller["offset_kp"].value_or(cfg.controller.offset_kp);
+    cfg.controller.offset_ki =
+        line_controller["offset_ki"].value_or(cfg.controller.offset_ki);
     cfg.controller.angle_yaw_kp =
         line_controller["angle_yaw_kp"].value_or(cfg.controller.angle_yaw_kp);
     cfg.controller.offset_yaw_kp =
@@ -505,6 +520,7 @@ void loadConfigs(const Options& opt, Configs& cfg)
         auto s = toml::parse_file(joinPath(opt.config_dir, "safety.toml"));
         applySafetyTimeouts(s["timeouts"], cfg);
         applySafetyRc(s["rc"], cfg);
+        applySafetyPreflight(s["preflight"], cfg);
     } catch (const toml::parse_error& e) {
         std::cerr << "[config] safety.toml parse warning: " << e.what() << "\n";
     }
@@ -622,13 +638,19 @@ void loadConfigs(const Options& opt, Configs& cfg)
                 gm["entry_center_max_reverse_mps"].value_or(cfg.mapper.intersection_center_max_reverse_mps);
             cfg.mapper.intersection_center_max_lateral_mps =
                 gm["entry_center_max_lateral_mps"].value_or(cfg.mapper.intersection_center_max_lateral_mps);
-            // Cycle 13: expose forward_speed_advance_mps so the slow speed
+            // Expose forward_speed_advance_mps so the slow speed
             // applied during SnakeAdvanceOneCell's line-follow phase can be
             // tuned without recompiling.
             cfg.mapper.forward_speed_blind_mps =
                 gm["forward_speed_blind_mps"].value_or(cfg.mapper.forward_speed_blind_mps);
             cfg.mapper.forward_speed_advance_mps =
                 gm["forward_speed_advance_mps"].value_or(cfg.mapper.forward_speed_advance_mps);
+            // Optional integral gains for altitude/yaw hold (anti-windup PI);
+            // default 0.0 keeps the pure-P behaviour.
+            cfg.mapper.altitude_ki =
+                gm["altitude_ki"].value_or(cfg.mapper.altitude_ki);
+            cfg.mapper.yaw_align_ki =
+                gm["yaw_align_ki"].value_or(cfg.mapper.yaw_align_ki);
             const double yaw_deg = gm["vertiport_yaw_tolerance_deg"].value_or(5.0);
             g.vertiport_yaw_tolerance_rad = yaw_deg * M_PI / 180.0;
         }
@@ -686,6 +708,7 @@ void loadConfigs(const Options& opt, Configs& cfg)
         applyMavlinkConfig(rt["mavlink"], cfg);
         applySafetyTimeouts(rt["safety"]["timeouts"], cfg);
         applySafetyRc(rt["safety"]["rc"], cfg);
+        applySafetyPreflight(rt["safety"]["preflight"], cfg);
         applyDebugVideoConfig(rt["debug_video"], cfg);
         applyLineControllerConfig(rt["line_controller"], cfg);
         applyAltitudeHoldConfig(rt["altitude_hold"], cfg);
@@ -836,9 +859,18 @@ bool waitRcReady(
     return false;
 }
 
+// Returns true when the EKF reports it is aiding horizontal position/velocity
+// well enough for ArduCopter to accept a GUIDED request. Checks both the
+// EKF_STATUS_REPORT flag bits AND the innovation test ratios: the flags can be
+// set while ArduCopter still refuses GUIDED because pos/vel variance is above
+// its position_ok bound. The variance gate is only enforced when the FC
+// actually reports the ratios, so a firmware that omits them falls back to the
+// flags-only behaviour instead of being blocked.
 bool ekfRelativeAidingReady(
     const oautopilot::AutopilotState& state,
-    Clock::time_point now)
+    Clock::time_point now,
+    double pos_horiz_variance_max,
+    double velocity_variance_max)
 {
     constexpr std::uint16_t kEkfAttitude = 1u << 0;
     constexpr std::uint16_t kEkfVelocityHoriz = 1u << 1;
@@ -849,10 +881,23 @@ bool ekfRelativeAidingReady(
         return false;
     }
     const auto flags = *state.ekf_flags;
-    return (flags & kEkfAttitude) != 0 &&
-           (flags & kEkfVelocityHoriz) != 0 &&
-           ((flags & kEkfPosHorizRel) != 0 ||
-            (flags & kEkfPredPosHorizRel) != 0);
+    const bool flags_ready =
+        (flags & kEkfAttitude) != 0 &&
+        (flags & kEkfVelocityHoriz) != 0 &&
+        ((flags & kEkfPosHorizRel) != 0 ||
+         (flags & kEkfPredPosHorizRel) != 0);
+    if (!flags_ready) {
+        return false;
+    }
+    if (state.ekf_pos_horiz_variance &&
+        *state.ekf_pos_horiz_variance > pos_horiz_variance_max) {
+        return false;
+    }
+    if (state.ekf_velocity_variance &&
+        *state.ekf_velocity_variance > velocity_variance_max) {
+        return false;
+    }
+    return true;
 }
 
 bool opticalFlowReady(
@@ -868,7 +913,9 @@ bool opticalFlowReady(
 
 bool localHoldEstimateReady(
     const oautopilot::AutopilotState& state,
-    Clock::time_point now)
+    Clock::time_point now,
+    double ekf_pos_horiz_variance_max,
+    double ekf_velocity_variance_max)
 {
     const bool local_position_ready =
         state.local_x_m.has_value() &&
@@ -884,7 +931,9 @@ bool localHoldEstimateReady(
     return local_position_ready &&
            range_ready &&
            opticalFlowReady(state, now) &&
-           ekfRelativeAidingReady(state, now);
+           ekfRelativeAidingReady(state, now,
+                                  ekf_pos_horiz_variance_max,
+                                  ekf_velocity_variance_max);
 }
 
 void printLocalEstimateStatus(const oautopilot::AutopilotState& state)
@@ -898,13 +947,24 @@ void printLocalEstimateStatus(const oautopilot::AutopilotState& state)
               << " range=" << state.distance_sensor_m.value_or(-1.0)
               << " flow_q=" << state.optical_flow_quality.value_or(-1)
               << " flow_dist=" << state.optical_flow_ground_distance_m.value_or(-1.0)
-              << " ekf_flags=0x" << std::hex << state.ekf_flags.value_or(0)
-              << std::dec << "\n";
+              << " ekf_flags=0x" << std::hex << state.ekf_flags.value_or(0) << std::dec
+              // Variances are the gate ArduCopter actually uses for GUIDED; show
+              // them so a stuck preflight points at the real culprit.
+              << " ekf_var(posH/vel/posV)="
+              << state.ekf_pos_horiz_variance.value_or(-1.0) << '/'
+              << state.ekf_velocity_variance.value_or(-1.0) << '/'
+              << state.ekf_pos_vert_variance.value_or(-1.0);
+    if (!state.recent_statustexts.empty()) {
+        std::cout << " last_statustext=\"" << state.recent_statustexts.back().text << '"';
+    }
+    std::cout << "\n";
 }
 
 bool waitLocalHoldEstimateReady(
     oautopilot::AutopilotMavlinkAdapter& autopilot,
-    std::chrono::seconds timeout)
+    std::chrono::seconds timeout,
+    double ekf_pos_horiz_variance_max,
+    double ekf_velocity_variance_max)
 {
     std::cout << "[preflight] waiting for local XY hold estimate: local position, range, optical flow, EKF\n";
     const auto deadline = Clock::now() + timeout;
@@ -913,7 +973,9 @@ bool waitLocalHoldEstimateReady(
     while (Clock::now() < deadline) {
         autopilot.poll(100);
         const auto now = Clock::now();
-        const bool ready = localHoldEstimateReady(autopilot.state(), now);
+        const bool ready = localHoldEstimateReady(autopilot.state(), now,
+                                                  ekf_pos_horiz_variance_max,
+                                                  ekf_velocity_variance_max);
         if (ready) {
             if (ready_since.time_since_epoch().count() == 0) {
                 ready_since = now;
@@ -970,7 +1032,7 @@ void logState(const omission::GridMissionOutput& out,
         snprintf(mkx_buf, sizeof(mkx_buf), "-");
         snprintf(mky_buf, sizeof(mky_buf), "-");
     }
-    // Cycle 10: registry ID list (committed markers).
+    // Registry ID list (committed markers).
     std::string regids;
     {
         std::vector<int> ids(registry.seenIds().begin(), registry.seenIds().end());
@@ -1131,6 +1193,11 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
                                   cfg.vision.intersection_decision.node_record_y_max,
                                   /*node_record_y_min_line_enter=*/0.30);
     ocontrol::GridControlMapper mapper(cfg.mapper, &line_controller);
+    // Independent safety watchdog. Its main job for the grid mission is to abort
+    // if the flight controller leaves GUIDED (operator/RC takeover or an FC-side
+    // mode drop); heartbeat/timeout overlap GridMission::isHardFailsafe and both
+    // route to EMERGENCY_LAND, which is harmless.
+    osafety::SafetyMonitor safety(cfg.safety);
 
     if (!opt.no_arm) {
         if (!waitRcReady(autopilot, cfg.safety, std::chrono::seconds(10))) {
@@ -1138,7 +1205,9 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             return 2;
         }
         if (real_serial_target &&
-            !waitLocalHoldEstimateReady(autopilot, std::chrono::seconds(15))) {
+            !waitLocalHoldEstimateReady(autopilot, std::chrono::seconds(15),
+                                        cfg.safety.ekf_pos_horiz_variance_max,
+                                        cfg.safety.ekf_velocity_variance_max)) {
             std::cerr << "[safety] refusing GUIDED/arm/takeoff until optical-flow local hold is ready\n";
             return 2;
         }
@@ -1155,36 +1224,118 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         return std::chrono::duration<double>(Clock::now() - start_time).count();
     };
     mission.start(now_s());
+    safety.startMission(Clock::now());
 
     const auto period = std::chrono::milliseconds(1000 / std::max(1, cfg.setpoint_rate_hz));
     bool first_frame = true;
-    // Cycle 10: latch the last committed node event so we can keep retransmitting
+    std::string last_safety_abort_reason;
+    // Latch the last committed node event so we can keep retransmitting
     // it to the GCS each frame (UDP loss redundancy + no peek-stage ghost nodes).
     omission::GridNodeEvent last_committed_event;
+
+    // Vision capture + processing runs on its own thread so a slow frame never
+    // stalls the control loop. The thread reads and processes frames as fast as
+    // the camera allows and publishes only the latest result; the control loop
+    // consumes that latest result at the fixed setpoint rate. The heavy OpenCV
+    // work (capture + process) is the producer's; the stateful decision engine,
+    // tracker, and mission run in the consumer so per-frame ordering is kept.
+    struct VisionSlot {
+        ovision::Frame frame;
+        ovision::VisionProcessingOutput vp_out;
+        double latency_ms = 0.0;
+        std::uint64_t seq = 0;
+        bool valid = false;
+    };
+    std::mutex vision_mtx;
+    std::condition_variable vision_cv;
+    VisionSlot vision_latest;          // guarded by vision_mtx
+    std::string vision_error;          // guarded by vision_mtx
+    std::atomic_bool vision_stop{false};
+
+    std::thread vision_thread([&]() {
+        std::uint64_t seq = 0;
+        while (!vision_stop.load() && !g_shutdown_requested.load()) {
+            ovision::Frame f;
+            try {
+                if (!frame_source->read(f)) {
+                    {
+                        std::lock_guard<std::mutex> lk(vision_mtx);
+                        vision_error = "read failed: " + frame_source->lastError();
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    continue;
+                }
+            } catch (const std::exception& e) {
+                {
+                    std::lock_guard<std::mutex> lk(vision_mtx);
+                    vision_error = std::string("exception: ") + e.what();
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            const auto t0 = Clock::now();
+            auto out = processor.process(f.image_bgr,
+                ovision::VisionFrameMetadata{f.frame_id, f.timestamp_ms, f.width, f.height});
+            const double latency = std::chrono::duration<double, std::milli>(
+                Clock::now() - t0).count();
+            {
+                std::lock_guard<std::mutex> lk(vision_mtx);
+                vision_latest.frame = std::move(f);
+                vision_latest.vp_out = std::move(out);
+                vision_latest.latency_ms = latency;
+                vision_latest.seq = ++seq;
+                vision_latest.valid = true;
+            }
+            vision_cv.notify_one();
+        }
+    });
+
+    // Control-output state retained between frames so idle ticks (no new vision)
+    // can re-send the last velocity command and hold the setpoint cadence.
+    std::uint64_t last_processed_seq = 0;
+    oautopilot::BodyVelocityCommand last_cmd{};
+    bool have_control_output = false;
+    bool last_cmd_sendable = false;
 
     while (!g_shutdown_requested.load() && mission.state() != omission::GridState::Done) {
         const auto loop_start = Clock::now();
         autopilot.poll(1);
 
-        // Read + process a frame
+        // Grab the latest processed frame from the vision thread.
         ovision::Frame frame;
-        try {
-            if (!frame_source->read(frame)) {
-                std::cerr << "[vision] read failed: " << frame_source->lastError() << "\n";
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                continue;
+        ovision::VisionProcessingOutput vp_out;
+        double processing_latency_ms = 0.0;
+        std::uint64_t vision_seq = 0;
+        bool vision_valid = false;
+        {
+            std::unique_lock<std::mutex> lk(vision_mtx);
+            if (!vision_latest.valid) {
+                vision_cv.wait_for(lk, std::chrono::milliseconds(50));
             }
-        } catch (const std::exception& e) {
-            std::cerr << "[vision] exception: " << e.what() << "\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (!vision_error.empty()) {
+                std::cerr << "[vision] " << vision_error << "\n";
+                vision_error.clear();
+            }
+            vision_valid = vision_latest.valid;
+            if (vision_valid) {
+                frame = vision_latest.frame;          // refcounted cv::Mat copy
+                vp_out = vision_latest.vp_out;
+                processing_latency_ms = vision_latest.latency_ms;
+                vision_seq = vision_latest.seq;
+            }
+        }
+
+        // No new frame this tick: re-send the last command to keep the setpoint
+        // cadence steady, then wait for the next tick.
+        const bool new_frame = vision_valid && (vision_seq != last_processed_seq);
+        if (!new_frame) {
+            if (have_control_output && last_cmd_sendable) {
+                autopilot.sendBodyVelocity(last_cmd);
+            }
+            std::this_thread::sleep_until(loop_start + period);
             continue;
         }
-        const auto vp_started = Clock::now();
-        auto vp_out = processor.process(frame.image_bgr,
-            ovision::VisionFrameMetadata{frame.frame_id, frame.timestamp_ms, frame.width, frame.height});
-        const auto vp_finished = Clock::now();
-        const double processing_latency_ms = std::chrono::duration<double, std::milli>(
-            vp_finished - vp_started).count();
+        last_processed_seq = vision_seq;
 
         // Intersection + tracker
         auto idec = decision_engine.update(
@@ -1236,14 +1387,48 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         min.intersection_decision = idec;
         min.node_event = node_event;
         min.land_requested = false;
-        min.abort_requested = false;
+
+        // Safety watchdog. The grid mission flies long blind-forward / yaw-turn
+        // phases with no line in view, so the line-lost check is disabled here
+        // (line_detected held true). The mode-from-GUIDED check is only enforced
+        // while the mission still expects GUIDED: skip it before commanding
+        // (no_arm) and once the mission has entered a landing/terminal state, so
+        // the controller switching to LAND at mission end is not flagged as a
+        // takeover. Any Abort/Land routes through abort_requested into the same
+        // centralized EMERGENCY_LAND path GridMission already uses.
+        const bool mission_expects_guided =
+            !opt.no_arm &&
+            cur_state != omission::GridState::Idle &&
+            cur_state != omission::GridState::Land &&
+            cur_state != omission::GridState::EmergencyLand &&
+            cur_state != omission::GridState::MissionComplete &&
+            cur_state != omission::GridState::Done;
+        osafety::SafetyInput safety_in;
+        safety_in.heartbeat_seen = apst.heartbeat_seen;
+        safety_in.line_detected = true;
+        safety_in.now = loop_start;
+        safety_in.last_heartbeat_time = apst.last_heartbeat_time;
+        safety_in.rc_channels_seen = apst.rc_channel_count.has_value();
+        safety_in.rc_channel_count = apst.rc_channel_count.value_or(0);
+        safety_in.last_rc_channels_time = apst.last_rc_channels_time;
+        safety_in.mode_known = mission_expects_guided;
+        safety_in.mode_guided = min.guided_mode;
+        const auto safety_decision = safety.update(safety_in);
+        min.abort_requested =
+            safety_decision.action != osafety::SafetyAction::None;
+        if (min.abort_requested &&
+            safety_decision.reason != last_safety_abort_reason) {
+            std::cerr << "[safety] " << safety_decision.reason
+                      << " -> EMERGENCY_LAND\n";
+            last_safety_abort_reason = safety_decision.reason;
+        }
 
         // Mission update
         auto mout = mission.update(min);
 
-        // Cycle 9: tracker advances only when GridMission says so (post all
+        // Tracker advances only when GridMission says so (post all
         // gates). The earlier tracker.update call above was peek-only.
-        // Cycle 23: GridMission may attach a synthetic event for boundary
+        // GridMission may attach a synthetic event for boundary
         // commits where idec skipped NodeRecord and tracker peek returned
         // valid=false. Prefer the synthetic event when present.
         if (mout.commit_tracker_advance) {
@@ -1257,7 +1442,7 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             }
         }
 
-        // Cycle 12 A: one-shot synthetic origin event from GRID_ORIGIN_LOCK so
+        // One-shot synthetic origin event from GRID_ORIGIN_LOCK so
         // the GCS map gets the (0,0) node + start-marker placement before any
         // real commit fires.
         if (mout.origin_publish_event.has_value()) {
@@ -1282,7 +1467,7 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         cmin.marker_detected = mout.marker_detected;
         cmin.marker_center_error_x_norm = mout.marker_center_error_x_norm;
         cmin.marker_center_error_y_norm = mout.marker_center_error_y_norm;
-        // Cycle 12 B: forward intersection cy for StopAndCenter cy-feedback decel.
+        // Forward intersection cy for StopAndCenter cy-feedback decel.
         cmin.intersection_valid = mout.intersection_valid;
         cmin.intersection_center_x_norm = mout.intersection_center_x_norm;
         cmin.intersection_center_y_norm = mout.intersection_center_y_norm;
@@ -1290,7 +1475,9 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         const auto sp = mapper.compute(cmin);
 
         // Land request
+        have_control_output = true;
         if (!opt.no_arm && mout.request_land_mode) {
+            last_cmd_sendable = false;   // LAND mode owns the descent; stop velocity
             try {
                 autopilot.setLandMode(std::chrono::seconds(5));
             } catch (const std::exception& e) {
@@ -1305,6 +1492,12 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             cmd.vz_down_mps = sp.vz_down_mps;
             cmd.yaw_rate_rad_s = sp.yaw_rate_rad_s;
             autopilot.sendBodyVelocity(cmd);
+            // Remember it so idle ticks (no new frame) can re-send and keep the
+            // setpoint cadence steady at the configured rate.
+            last_cmd = cmd;
+            last_cmd_sendable = true;
+        } else {
+            last_cmd_sendable = false;
         }
 
         // Publish telemetry / video
@@ -1314,21 +1507,21 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             pin.image_bgr = frame.image_bgr;
             pin.vision_output = vp_out;
             pin.intersection_decision = idec;
-            // Cycle 10: send the last committed node every frame (not the peek
+            // Send the last committed node every frame (not the peek
             // event). Peek events would leak an uncommitted "ghost" node ahead
             // of the drone into the GCS map; resending the last commit gives
             // UDP loss redundancy so GCS edges never have gaps.
             pin.grid_node = mout.grid_map_finalized
                 ? omission::GridNodeEvent {}
                 : last_committed_event;
-            // Cycle 13: forward drone fractional position so the GCS can
+            // Forward drone fractional position so the GCS can
             // render the heading arrow at a sub-cell position between commits.
             pin.drone_position_valid =
                 mout.grid_pose_visible && mout.drone_position_valid;
             pin.drone_cell_progress = mout.drone_cell_progress;
             pin.drone_grid_offset_x = mout.drone_grid_offset_x;
             pin.drone_grid_offset_y = mout.drone_grid_offset_y;
-            // Cycle 23: populate mission telemetry so the GCS sees the
+            // Populate mission telemetry so the GCS sees the
             // discovered-marker registry + mission state. Without this the
             // mission JSON block stayed empty and GCS could not render the
             // markers panel.
@@ -1345,7 +1538,7 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
                 mout.grid_pose_visible &&
                 mout.current_heading != omission::GridHeading::Unknown;
             pin.mission.vertiport.verified = mout.vertiport_verified;
-            // Cycle 24: report the marker id MarkerLockYaw actually latched
+            // Report the marker id MarkerLockYaw actually latched
             // (which may differ from cfg default if the dynamic-id path
             // picked a different first marker).
             pin.mission.vertiport.marker_id = mission.activeVertiportMarkerId();
@@ -1385,7 +1578,7 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             pin.mission.markers_found.clear();
             const double mission_now_s = now_s();
             for (const auto& m : registry.records()) {
-                // Cycle 24: skip records without a valid grid coord. Vertiport
+                // Skip records without a valid grid coord. Vertiport
                 // (and any other pre-grid sighting) is recorded with
                 // grid_coord_valid=false; including those here would inflate
                 // markers_found count past markers_expected on GCS.
@@ -1420,6 +1613,12 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         logState(mout, apst, vp_out.result, idec, mission, registry, now_s());
 
         std::this_thread::sleep_until(loop_start + period);
+    }
+
+    // Stop the vision thread before tearing down the frame source it uses.
+    vision_stop.store(true);
+    if (vision_thread.joinable()) {
+        vision_thread.join();
     }
 
     std::cout << "[grid-mission] shutdown requested or mission DONE. waiting disarm...\n";

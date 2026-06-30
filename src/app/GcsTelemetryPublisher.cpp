@@ -515,7 +515,7 @@ GcsTelemetryPublishStats GcsTelemetryPublisher::publish(GcsTelemetryPublishInput
         telemetry.vision.drone_position.cell_progress = input.drone_cell_progress;
         telemetry.vision.drone_position.grid_offset_x = input.drone_grid_offset_x;
         telemetry.vision.drone_position.grid_offset_y = input.drone_grid_offset_y;
-        // Cycle 23: forward MissionTelemetry (state + markers_found registry)
+        // Forward MissionTelemetry (state + markers_found registry)
         // verbatim. The TelemetryMessage JSON serialiser only emits the
         // mission block when input.mission.present == true.
         telemetry.mission = input.mission;

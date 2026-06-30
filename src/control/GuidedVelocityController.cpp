@@ -40,6 +40,7 @@ void GuidedVelocityController::resetSmoothing()
     has_prev_marker_output_ = false;
     prev_marker_forward_ = 0.0;
     prev_marker_lateral_ = 0.0;
+    offset_integral_ = 0.0;
 }
 
 void GuidedVelocityController::smoothOutput(double& lateral, double& yaw_rate)
@@ -100,6 +101,7 @@ ControlSetpoint GuidedVelocityController::updateLine(
         double zero_lat = 0.0;
         double zero_yaw = 0.0;
         smoothOutput(zero_lat, zero_yaw);
+        offset_integral_ = 0.0;   // drop wind-up while the line is not visible
         return output;
     }
 
@@ -108,8 +110,15 @@ ControlSetpoint GuidedVelocityController::updateLine(
     const double angle_error =
         applyDeadband(line.angle_error_rad, config_.angle_deadband_rad);
 
+    // Lateral integral term with clamp-based anti-windup. Skipped when ki == 0,
+    // so the controller stays bit-for-bit the pure-P version by default.
+    if (config_.offset_ki > 0.0) {
+        offset_integral_ += offset_error;
+        const double i_clamp = config_.max_lateral_mps / config_.offset_ki;
+        offset_integral_ = std::clamp(offset_integral_, -i_clamp, i_clamp);
+    }
     double lateral = std::clamp(
-        config_.offset_kp * offset_error,
+        config_.offset_kp * offset_error + config_.offset_ki * offset_integral_,
         -config_.max_lateral_mps,
         config_.max_lateral_mps);
     double yaw_rate = std::clamp(

@@ -178,11 +178,11 @@ void GridMission::reset()
 
 std::size_t GridMission::stableMarkerCandidateCount() const
 {
-    // Cycle 16: 1 when the sliding window has a stable id, else 0.
+    // 1 when the sliding window has a stable id, else 0.
     return marker_window_.bestStableId() >= 0 ? 1u : 0u;
 }
 
-// Cycle 16: sliding-window marker detector implementation.
+// Sliding-window marker detector implementation.
 void MarkerWindow::configure(int frames, int count)
 {
     if (frames > 0) max_frames = frames;
@@ -555,7 +555,7 @@ bool GridMission::isHardFailsafe(const GridMissionInput& in, std::string& reason
         reason = "heartbeat_lost";
         return true;
     }
-    // Cycle 8: prefer rangefinder (AGL) for ceiling check. LOCAL_NED z is in
+    // Prefer rangefinder (AGL) for ceiling check. LOCAL_NED z is in
     // takeoff-origin frame which jumps when the drone leaves the vertiport
     // pad, producing false ceiling trips. rangefinder is the actual height
     // above the surface below.
@@ -612,7 +612,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     AltitudePolicyInput alt_in;
     alt_in.now_s = input.now_s;
     alt_in.rangefinder_m = input.rangefinder_m;
-    // Cycle 16: distance_from_pad is not used for state decisions any more.
+    // Distance_from_pad is not used for state decisions any more.
     // Leave it at the default — EntryForward is bounded by intersection
     // detection + an explicit timeout, not by LOCAL_NED displacement.
     alt_in.off_pad_requested =
@@ -625,7 +625,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
 
     populateLineInputs(input, out);
 
-    // Cycle 16: sliding-window marker stability. Push the most prominent
+    // Sliding-window marker stability. Push the most prominent
     // non-vertiport marker ID seen this frame (or -1 if none) into the
     // window. The window flushes itself when two distinct IDs appear inside
     // it, so transient mis-identifications never accumulate.
@@ -693,7 +693,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
         out.snake_dir = snake_->currentSnakeDir();
     }
     out.intersections_recorded = intersections_recorded_;
-    // Cycle 12 B: expose the fresh intersection center for the cy-feedback
+    // Expose the fresh intersection center for the cy-feedback
     // deceleration in StopAndCenter intent.
     out.intersection_center_x_norm = intersectionCenterXNorm(input);
     out.intersection_center_y_norm = input.intersection_decision.center_y_norm;
@@ -702,7 +702,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
         input.intersection_decision.accepted_type != onboard::vision::IntersectionType::None;
     out.hop_distance_m = hopDistance(input);
 
-    // Cycle 13: compute drone fractional position from last committed node
+    // Compute drone fractional position from last committed node
     // using LOCAL_NED displacement. The composition root forwards this to
     // telemetry so the GCS can render the heading arrow at a sub-cell position.
     // The displacement is projected onto the current grid heading because the
@@ -720,7 +720,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
         double hx = 0.0;
         double hy = 0.0;
         switch (tracker_->currentHeading()) {
-        case GridHeading::North: hy = -1.0; break;  // Cycle 13 revert: north = -y
+        case GridHeading::North: hy = -1.0; break;  // screen convention: north = -y
         case GridHeading::South: hy = +1.0; break;
         case GridHeading::East:  hx = +1.0; break;
         case GridHeading::West:  hx = -1.0; break;
@@ -740,7 +740,7 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     return out;
 }
 
-// Cycle 16: hop-to-hop helpers.
+// Hop-to-hop helpers.
 void GridMission::armHopStart(const GridMissionInput& in)
 {
     if (in.local_x_m.has_value() && in.local_y_m.has_value()) {
@@ -759,6 +759,17 @@ double GridMission::hopDistance(const GridMissionInput& in) const
     const double dx = *in.local_x_m - *hop_start_local_x_;
     const double dy = *in.local_y_m - *hop_start_local_y_;
     return std::sqrt(dx * dx + dy * dy);
+}
+
+void GridMission::checkHopFailsafe(const GridMissionInput& in, GridMissionOutput& out,
+                                   double distance, bool check_timeout, const char* reason)
+{
+    if (distance > config_.hop_max_distance_m ||
+        (check_timeout && in.now_s - state_entry_s_ > config_.snake_advance_timeout_s)) {
+        last_safety_event_ = reason;
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, reason);
+    }
 }
 
 bool GridMission::isRevisitState() const
@@ -1171,7 +1182,7 @@ void GridMission::handleArmTakeoff(const GridMissionInput& in, GridMissionOutput
     const bool rng_ok = in.rangefinder_m.has_value() && *in.rangefinder_m >= trigger;
     const bool alt_ok = in.local_altitude_m.has_value() && *in.local_altitude_m >= trigger;
     if (rng_ok || alt_ok) {
-        // Cycle 16: latch the takeoff yaw and pre-compute the
+        // Latch the takeoff yaw and pre-compute the
         // right-90° target so MarkerLockYaw uses a fixed reference frame.
         if (in.attitude_yaw_rad.has_value()) {
             yaw_align_target_rad_ =
@@ -1187,7 +1198,7 @@ void GridMission::handleArmTakeoff(const GridMissionInput& in, GridMissionOutput
 
 void GridMission::handleMarkerLockYaw(const GridMissionInput& in, GridMissionOutput& out)
 {
-    // Cycle 16: combined "marker centered + yaw +90°" pre-flight. Hovers on
+    // Combined "marker centered + yaw +90°" pre-flight. Hovers on
     // top of the vertiport ArUco marker while rotating the body yaw by
     // marker_lock_yaw_delta_rad (default +π/2 = right 90°). Hands off to
     // EntryForward only when BOTH the marker is centered (|err| < tol) and
@@ -1196,7 +1207,7 @@ void GridMission::handleMarkerLockYaw(const GridMissionInput& in, GridMissionOut
     out.target_yaw_rad = yaw_align_target_rad_;
     out.target_altitude_m = config_.vertiport_altitude_m;
 
-    // Cycle 24: dynamic vertiport id. Until a stable candidate is latched
+    // Dynamic vertiport id. Until a stable candidate is latched
     // into `active_vertiport_marker_id_`, accept any marker as the vertiport
     // candidate. Once latched, the rest of the mission keys off that id via
     // effectiveVertiportMarkerId().
@@ -1258,7 +1269,7 @@ void GridMission::handleMarkerLockYaw(const GridMissionInput& in, GridMissionOut
         std::abs(out.marker_center_error_y_norm) <= config_.marker_lock_center_tol_norm;
 
     if (marker_centered && yaw_ok) {
-        // Cycle 16: enter the free-flight forward phase with yaw frozen at
+        // Enter the free-flight forward phase with yaw frozen at
         // the post-rotation target. Latch hop_start so EntryForward can use
         // LOCAL_NED distance as a safety bound if needed.
         armHopStart(in);
@@ -1279,7 +1290,7 @@ void GridMission::handleMarkerLockYaw(const GridMissionInput& in, GridMissionOut
 
 void GridMission::handleEntryForward(const GridMissionInput& in, GridMissionOutput& out)
 {
-    // Cycle 16: yaw-frozen forward scoot from the vertiport toward the grid.
+    // Yaw-frozen forward scoot from the vertiport toward the grid.
     // There is no line between vertiport and the first grid intersection, so
     // this phase starts by intentionally ignoring vision: while still over
     // the vertiport texture, the ArUco pattern and pad artwork produce
@@ -1449,7 +1460,7 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
     const double since_last_record_s = (last_node_record_s_ > 0.0)
         ? (in.now_s - last_node_record_s_)
         : config_.snake_post_record_grace_s + 1.0;
-    // Cycle 16: also require a minimum hop distance before the watchdog can
+    // Also require a minimum hop distance before the watchdog can
     // fire. Without this, the vertiport texture's residual cross artwork can
     // trip TurnReady the moment we enter SnakeForward and immediately
     // promote to SnakeStopAtCenter -> SnakeComplete -> LAND.
@@ -1464,7 +1475,7 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         last_node_grid_branch_mask_ = rotateCameraBranchMaskToGrid(
             in.intersection_decision.accepted_branch_mask, current_heading);
 
-        // Cycle 23: also commit the boundary node here so the last node of
+        // Also commit the boundary node here so the last node of
         // every column reaches the GCS map. IntersectionDecision routes
         // required_turn intersections directly to TurnConfirm/TurnReady,
         // skipping NodeRecord, so the regular arrival path below is gated
@@ -1493,7 +1504,7 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         }
         last_node_record_s_ = in.now_s;
 
-        // Cycle 25: register a marker stable in marker_window_ against the
+        // Register a marker stable in marker_window_ against the
         // boundary cell coord. handleSnakeRecordNode (which normally handles
         // marker hover + registration) is skipped on the boundary watchdog
         // path; without this, any marker placed on a column-end cell would
@@ -1504,7 +1515,7 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         const int hover_id = tryRegisterCurrentCellMarker(boundary_coord, in);
 
         out.last_safety_event = "";
-        // Cycle 26: if a new marker was registered at this boundary cell,
+        // If a new marker was registered at this boundary cell,
         // route through TurnNodeMarkerHover for the full marker dwell before
         // continuing to SnakeStopAtCenter. Plain turn nodes without markers
         // still go straight to turn-direction settling.
@@ -1521,8 +1532,7 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         return;
     }
 
-    // Cycle 16: next-node arrival. The hop distance gate replaces the old
-    // 0.5×cell_size LOCAL_NED gate from Cycle 8.
+    // Next-node arrival, gated on hop distance from the last committed node.
     const bool arrival_distance_ok = distance >= config_.hop_intersection_min_distance_m;
 
     if (!post_turn_blind && !lockout_active && !turn_lockout_active && arrival_distance_ok &&
@@ -1561,17 +1571,13 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
 
     // Distance failsafe — if we have gone well past one cell length without
     // seeing the next intersection, hand off to the EmergencyLand path.
-    if (distance > config_.hop_max_distance_m) {
-        last_safety_event_ = "hop_distance_exceeded";
-        out.last_safety_event = last_safety_event_;
-        transition(GridState::EmergencyLand, in.now_s, "hop_distance_exceeded");
-    }
+    checkHopFailsafe(in, out, distance, /*check_timeout=*/false, "hop_distance_exceeded");
 }
 
 void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionOutput& out)
 {
-    // Default: line-follow with deceleration through the node (Cycle 9 Option C).
-    // Cycle 16: hold position during the short dwell so vision has clean
+    // Default: line-follow with deceleration through the node.
+    // Hold position during the short dwell so vision has clean
     // frames to settle the branch classification. Marker nodes override to
     // MarkerHover further down.
     out.intent = control::GridControlIntent::HoldPosition;
@@ -1579,7 +1585,7 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
     out.target_altitude_m = config_.cruise_altitude_m;
     out.advance_phase = false;
 
-    // Cycle 16: pick the marker focus from the sliding window. If a stable
+    // Pick the marker focus from the sliding window. If a stable
     // ID was latched on a previous tick we keep it for the rest of the dwell
     // even when the camera momentarily loses the marker.
     int focus_marker_id = -1;
@@ -1629,7 +1635,7 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
             ? last_recorded_marker_id_
             : -1;
         clearMarkerHover();
-        // Cycle 10: re-evaluate branches with the FRESH idec at dwell end.
+        // Re-evaluate branches with the FRESH idec at dwell end.
         // The branch topology can resolve during the dwell (e.g. T -> L as the
         // drone closes in on a corner), and we must not stick with the
         // commit-time cached classification.
@@ -1645,7 +1651,7 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
             registry_->gridMarkerCount() >= static_cast<std::size_t>(config_.markers_expected);
         if (all_markers_found) {
             completion_hover_marker_id_ = hover_marker_id;
-            // Cycle 24: close out the rest of the current column so the grid
+            // Close out the rest of the current column so the grid
             // model onboard (and the GCS render) is a complete rectangle.
             synthesizeRemainingColumnNodes();
             transition(GridState::SnakeComplete, in.now_s, "all_markers");
@@ -1714,7 +1720,7 @@ void GridMission::handleSnakeLaunchAlign(const GridMissionInput& in, GridMission
         }
     }
 
-    // Cycle 17: removed `yaw_align_target_rad_ = wrap(*attitude_yaw_rad)`
+    // Removed `yaw_align_target_rad_ = wrap(*attitude_yaw_rad)`
     // here. Re-latching attitude into yaw_align_target_rad_ at LaunchAlign
     // exit froze any per-cell LaunchAlign yaw jitter (driven by the
     // line_controller's angle_yaw_kp) into the next hop's reference,
@@ -1737,7 +1743,7 @@ void GridMission::handleSnakeStopAtCenter(const GridMissionInput& in, GridMissio
         snake_stop_stable_count_ = 0;
     }
 
-    // Cycle 21: while we decelerate AND during the post-settle window, keep
+    // While we decelerate AND during the post-settle window, keep
     // overwriting last_node_grid_branch_mask_ with the freshest "node-like"
     // idec frame. The watchdog-fire frame can be a transient (e.g. a 1-frame
     // 0x07 in camera that excludes the real boundary's side branch). A T
@@ -1775,7 +1781,7 @@ void GridMission::handleSnakeStopAtCenter(const GridMissionInput& in, GridMissio
     snake_stop_settle_entry_s_ = -1.0;
     {
         // Ask SnakePlanner for direction at this boundary.
-        // Cycle 11: in.node_event.grid_branch_mask is 0 in subsequent ticks
+        // In.node_event.grid_branch_mask is 0 in subsequent ticks
         // because peek returns valid=false once idec lockout is active. Use
         // the cached mask latched by the boundary watchdog (or SnakeRecordNode
         // dwell-end) which reflects the actual branches at the node.
@@ -1792,7 +1798,7 @@ void GridMission::handleSnakeStopAtCenter(const GridMissionInput& in, GridMissio
         }
         pending_turn_dir_ = sp_out.plan_turn_dir;
         pending_post_turn_heading_ = sp_out.next_heading;
-        // Cycle 17: compute the first-turn target from the latched
+        // Compute the first-turn target from the latched
         // yaw_align_target_rad_ (column reference) rather than the live
         // attitude_yaw_rad. Otherwise any per-cell drift propagates into
         // the post-turn heading and accumulates across columns.
@@ -1827,11 +1833,11 @@ void GridMission::handleSnakeTurn90(const GridMissionInput& in, GridMissionOutpu
             if (snake_) snake_->notifyFirstTurnCompleted();
             last_turn_complete_s_ = in.now_s;
             snake_turn_first_done_ = true;
-            // Cycle 12 C: arm blind forward so the next state starts by driving
+            // Arm blind forward so the next state starts by driving
             // into the new corridor before re-engaging line tracking.
             snake_post_turn_blind_until_s_ =
                 in.now_s + config_.snake_post_turn_blind_s;
-            // Cycle 16: arm a fresh hop anchor — the column-transition cell
+            // Arm a fresh hop anchor — the column-transition cell
             // starts here, not at the boundary node.
             armHopStart(in);
             transition(GridState::SnakeAdvanceOneCell, in.now_s, "turn1_done");
@@ -1872,7 +1878,7 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
         ++intersections_recorded_;
         last_node_record_s_ = in.now_s;
 
-        // Cycle 15: commit the column-transition cell to the tracker so the
+        // Commit the column-transition cell to the tracker so the
         // subsequent SnakeForward starts from the new column's first row, not
         // from the old column's last row.
         out.commit_tracker_advance = true;
@@ -1881,7 +1887,7 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
             last_node_local_y_ = *in.local_y_m;
         }
 
-        // Cycle 25: register marker at the column-transition cell so markers
+        // Register marker at the column-transition cell so markers
         // placed on second-turn cells are not silently missed. The
         // all_markers check intentionally waits until SnakeTurn90Again has
         // completed; the synthesize pass that closes the current column only
@@ -1890,7 +1896,7 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
 
         const double connector_yaw_target_rad = yaw_target_rad_;
 
-        // Cycle 17: second-turn target also derives from yaw_target_rad_
+        // Second-turn target also derives from yaw_target_rad_
         // (which itself is yaw_align_target_rad_ + first dir·π/2), so the
         // new column's reference is exactly the original ± π — drift-free.
         {
@@ -1898,7 +1904,7 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
             yaw_target_rad_ = wrap(yaw_target_rad_ + dir * (M_PI / 2.0));
         }
         snake_yaw_stable_count_ = 0;
-        // Cycle 26: hover for the full marker dwell first if this cell had a
+        // Hover for the full marker dwell first if this cell had a
         // marker. pending_post_hover_state_ + yaw_target_rad_ are latched
         // before the hover so TurnNodeMarkerHover can resume the second turn.
         if (hover_id >= 0) {
@@ -1913,12 +1919,7 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
         return;
     }
 
-    if (in.now_s - state_entry_s_ > config_.snake_advance_timeout_s ||
-        distance > config_.hop_max_distance_m) {
-        last_safety_event_ = "advance_timeout";
-        out.last_safety_event = last_safety_event_;
-        transition(GridState::EmergencyLand, in.now_s, "advance_timeout");
-    }
+    checkHopFailsafe(in, out, distance, /*check_timeout=*/true, "advance_timeout");
 }
 
 void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMissionOutput& out)
@@ -1943,14 +1944,14 @@ void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMission
             last_turn_complete_s_ = in.now_s;
             snake_turn_first_done_ = false;
             consecutive_boundary_failures_ = 0;
-            // Cycle 12 C: blind forward into the new column before SnakeForward
+            // Blind forward into the new column before SnakeForward
             // re-engages line tracking.
             snake_post_turn_blind_until_s_ =
                 in.now_s + config_.snake_post_turn_blind_s;
             yaw_align_target_rad_ = yaw_target_rad_;
             snake_launch_align_stable_count_ = 0;
 
-            // Cycle 28: if the final marker was discovered on the second
+            // If the final marker was discovered on the second
             // turn-cell, finish the required second 90-degree turn first so the
             // tracker is back on a N/S column heading. Only then synthesize the
             // remaining column nodes and enter SnakeComplete. Completing earlier
@@ -1974,7 +1975,7 @@ void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMission
 void GridMission::handleTurnNodeMarkerHover(const GridMissionInput& in,
                                              GridMissionOutput& out)
 {
-    // Cycle 26: 3-second marker hover at a turn cell before continuing into
+    // 3-second marker hover at a turn cell before continuing into
     // the boundary stop (first turn) or the second 90° rotation. Matches
     // SnakeRecordNode's marker hover for regular cells. pending_post_hover_
     // state_ controls where to go after hover. yaw_target_rad_ (for the
@@ -2035,7 +2036,7 @@ void GridMission::handleSnakeComplete(const GridMissionInput& in, GridMissionOut
         out.intent = control::GridControlIntent::MarkerHover;
     }
 
-    // Cycle 24: drain one synthetic completion node per tick. Each drained
+    // Drain one synthetic completion node per tick. Each drained
     // event is committed to tracker.nodes_ (so the onboard grid model is
     // closed for future Manhattan revisit planning) AND shipped to the GCS
     // via last_committed_event so the map renders as a closed rectangle.
@@ -2093,12 +2094,7 @@ void GridMission::handleRevisitForward(const GridMissionInput& in,
         return;
     }
 
-    if (distance > config_.hop_max_distance_m ||
-        in.now_s - state_entry_s_ > config_.snake_advance_timeout_s) {
-        last_safety_event_ = "revisit_hop_timeout";
-        out.last_safety_event = last_safety_event_;
-        transition(GridState::EmergencyLand, in.now_s, "revisit_hop_timeout");
-    }
+    checkHopFailsafe(in, out, distance, /*check_timeout=*/true, "revisit_hop_timeout");
 }
 
 void GridMission::handleRevisitStopAtTurn(const GridMissionInput& in,
@@ -2274,12 +2270,7 @@ void GridMission::handleReturnHomeForward(const GridMissionInput& in,
         return;
     }
 
-    if (distance > config_.hop_max_distance_m ||
-        in.now_s - state_entry_s_ > config_.snake_advance_timeout_s) {
-        last_safety_event_ = "return_hop_timeout";
-        out.last_safety_event = last_safety_event_;
-        transition(GridState::EmergencyLand, in.now_s, "return_hop_timeout");
-    }
+    checkHopFailsafe(in, out, distance, /*check_timeout=*/true, "return_hop_timeout");
 }
 
 void GridMission::handleReturnHomeStopAtTurn(const GridMissionInput& in,

@@ -3,10 +3,21 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 
 namespace onboard::autopilot {
+
+// One autopilot STATUSTEXT line. ArduPilot reports the reason a mode change or
+// arming attempt was rejected here (e.g. "Mode change failed: GUIDED requires
+// position estimate"), so we retain the most recent lines to surface the cause
+// of a setMode timeout instead of an opaque "timed out" error.
+struct StatusTextEntry {
+    std::uint8_t severity = 6;   // MAV_SEVERITY (0 = emergency .. 7 = debug)
+    std::string  text;
+    std::chrono::steady_clock::time_point time {};
+};
 
 struct AutopilotState {
     bool heartbeat_seen = false;
@@ -27,6 +38,14 @@ struct AutopilotState {
     std::optional<int> optical_flow_quality;
     std::optional<double> optical_flow_ground_distance_m;
     std::optional<std::uint16_t> ekf_flags;
+    // EKF normalised innovation test ratios from EKF_STATUS_REPORT. ArduCopter
+    // gates position-controller modes (GUIDED/LOITER) on these being below ~1.0,
+    // so we track them to predict whether a GUIDED request will be accepted.
+    std::optional<double> ekf_velocity_variance;
+    std::optional<double> ekf_pos_horiz_variance;
+    std::optional<double> ekf_pos_vert_variance;
+    std::optional<double> ekf_compass_variance;
+    std::optional<double> ekf_terrain_alt_variance;
     std::optional<int> rc_channel_count;
     std::optional<int> rc_rssi;
     std::array<std::uint16_t, 18> rc_channels_pwm {};
@@ -36,6 +55,10 @@ struct AutopilotState {
     std::optional<double> attitude_pitch_rad;
     std::optional<double> attitude_yaw_rad;
     std::optional<double> attitude_yawspeed_rad_s;
+    // Most recent autopilot STATUSTEXT lines, newest at the back. Capped to a
+    // small window; used to attach the FC's own rejection reason to a failed
+    // mode change. See kMaxStatusTexts in the adapter.
+    std::deque<StatusTextEntry> recent_statustexts;
     std::chrono::steady_clock::time_point last_heartbeat_time {};
     std::chrono::steady_clock::time_point last_optical_flow_time {};
     std::chrono::steady_clock::time_point last_ekf_status_time {};

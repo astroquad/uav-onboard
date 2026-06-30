@@ -30,6 +30,9 @@ struct RevisitLeg {
     std::vector<RevisitSegment> segments;
 };
 
+// Builds the post-snake revisit route: orders the discovered markers (ascending
+// or descending by id) and produces one leg per marker, each a list of
+// heading + cell-count segments across the now-known grid.
 class MarkerRevisitPlanner {
 public:
     RevisitLeg buildLeg(GridCoord start_coord,
