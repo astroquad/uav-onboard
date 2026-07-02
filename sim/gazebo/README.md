@@ -18,8 +18,8 @@ bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh
 ```
 
 The line-tracing world uses `iris_with_downward_camera` and
-`line_tracing_course`. It provides a white ground plane, a 10cm black line, and
-50cm ArUco marker textures for detector and line-follow smoke tests.
+`line_tracing_course`. It provides a grass-textured ground plane, a 10cm white
+line, and 50cm ArUco marker textures for detector and line-follow smoke tests.
 
 Default camera topic:
 
@@ -45,8 +45,8 @@ The grid arena is the current full mission SITL course:
 
 - 3m x 3m x 0.7m vertiport box centered at world origin.
 - Vertiport top texture with ArUco ID 23.
-- 5 x 8 grid cells, 3m cell size, black 10cm grid lines on white ground.
-- 50cm ArUco grid markers on 60cm white pads:
+- 5 x 8 grid cells, 3m cell size, white 10cm grid lines on grass.
+- 50cm ArUco grid markers:
   ID 1 at world `(11.5, 3.0)`, ID 2 at `(17.5, 9.0)`,
   ID 3 at `(23.5, 6.0)`, ID 4 at `(26.5, 12.0)`.
 - Iris starts on the vertiport top with yaw 90deg.
@@ -68,7 +68,7 @@ cd ~/astroquad/uav-onboard
   --target sitl \
   --vision gazebo \
   --world grid \
-  --line-mode dark_on_light \
+  --line-mode light_on_dark \
   --marker-count 4 \
   --video \
   --gcs-ip "$WINDOWS_GCS_IP"

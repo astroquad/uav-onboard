@@ -4,7 +4,7 @@
     <static>true</static>
 
     <link name="course_link">
-      <!-- White ground box covering the vertiport and 5x8 grid
+      <!-- Grass-textured ground box covering the vertiport and 5x8 grid
            with a 4m margin on every outer side of the grid.
            Footprint: X in [-1.5, 29.5], Y in [0, 15]; with 4m margin
            the ground covers X in [-5.5, 33.5] and Y in [-4, 19],
@@ -26,9 +26,16 @@
           </box>
         </geometry>
         <material>
-          <ambient>1 1 1 1</ambient>
-          <diffuse>1 1 1 1</diffuse>
-          <specular>0.03 0.03 0.03 1</specular>
+          <ambient>0.8 0.8 0.8 1</ambient>
+          <diffuse>0.8 0.8 0.8 1</diffuse>
+          <specular>0.02 0.02 0.02 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>materials/textures/Grass004_2K_Color_tiled3x.jpg</albedo_map>
+              <roughness>0.95</roughness>
+              <metalness>0.0</metalness>
+            </metal>
+          </pbr>
         </material>
       </visual>
 
@@ -82,127 +89,116 @@
       </visual>
 
       <!-- 5x8 grid: cells of 3m, X intersections at 5.5..29.5, Y intersections at 0..15. -->
-      <!-- Horizontal grid lines (constant Y, span X in [5.5, 29.5], length 24m) -->
+      <!-- White horizontal grid lines (constant Y, span X in [5.5, 29.5], length 24m) -->
       <visual name="grid_line_y0">
         <pose>17.5 0.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_y3">
         <pose>17.5 3.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_y6">
         <pose>17.5 6.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_y9">
         <pose>17.5 9.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_y12">
         <pose>17.5 12.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_y15">
         <pose>17.5 15.0 0.006 0 0 0</pose>
         <geometry><box><size>24.0 0.10 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
 
-      <!-- Vertical grid lines (constant X, span Y in [0, 15], length 15m) -->
+      <!-- White vertical grid lines (constant X, span Y in [0, 15], length 15m) -->
       <visual name="grid_line_x5_5">
         <pose>5.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_x8_5">
         <pose>8.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_x11_5">
         <pose>11.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_x14_5">
         <pose>14.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_x17_5">
         <pose>17.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_x20_5">
         <pose>20.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_x23_5">
         <pose>23.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_x26_5">
         <pose>26.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
       <visual name="grid_line_x29_5">
         <pose>29.5 7.5 0.006 0 0 0</pose>
         <geometry><box><size>0.10 15.0 0.008</size></box></geometry>
         <material>
-          <ambient>0 0 0 1</ambient><diffuse>0 0 0 1</diffuse><emissive>0 0 0 1</emissive>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><emissive>0 0 0 1</emissive><specular>0.05 0.05 0.05 1</specular>
         </material>
       </visual>
 
-      <!-- ArUco markers (50cm x 50cm) at fixed pseudo-random intersections.
-           Cycle 19: each marker now sits on a 60cm x 60cm pure-white pad so
-           the marker's black quiet zone is clearly separated from the black
-           grid lines. The pad sits 1mm below the marker so it's z-ordered
-           under it. -->
-      <visual name="marker_id1_white_pad">
-        <pose>26.5 12.0 0.011 0 0 0</pose>
-        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
-        <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
-        </material>
-      </visual>
+      <!-- ArUco markers (50cm x 50cm) at fixed pseudo-random intersections. -->
       <visual name="marker_id1_texture">
         <pose>26.5 12.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -215,13 +211,6 @@
         </material>
       </visual>
 
-      <visual name="marker_id2_white_pad">
-        <pose>23.5 6.0 0.011 0 0 0</pose>
-        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
-        <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
-        </material>
-      </visual>
       <visual name="marker_id2_texture">
         <pose>23.5 6.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -234,13 +223,6 @@
         </material>
       </visual>
 
-      <visual name="marker_id3_white_pad">
-        <pose>17.5 9.0 0.011 0 0 0</pose>
-        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
-        <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
-        </material>
-      </visual>
       <visual name="marker_id3_texture">
         <pose>17.5 9.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -253,13 +235,6 @@
         </material>
       </visual>
 
-      <visual name="marker_id4_white_pad">
-        <pose>11.5 3.0 0.011 0 0 0</pose>
-        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
-        <material>
-          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
-        </material>
-      </visual>
       <visual name="marker_id4_texture">
         <pose>11.5 3.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>

@@ -90,7 +90,7 @@ struct Options {
     std::string autopilot_uri;
     std::string vision;
     std::string world = "grid";
-    std::string line_mode_override = "dark_on_light";
+    std::string line_mode_override = "light_on_dark";
     std::string gcs_ip_override;
     std::string gazebo_topic_override;
     int marker_count = -1;

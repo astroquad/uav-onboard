@@ -102,7 +102,7 @@ Start `astroquad-gcs` on the laptop first, then run:
 
 ```bash
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark
-./build/vision_debug_node --config config --line-only --line-mode dark_on_light --video --fps 12
+./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video --fps 12
 ```
 
 Onboard sends raw camera JPEG only when `--video` is enabled. Marker boxes,
@@ -129,16 +129,64 @@ Current vision path:
 Line mode guide:
 
 - `light_on_dark`: bright/white line on darker floor.
-- `dark_on_light`: black/dark line on bright floor or Gazebo grid arena.
+- `dark_on_light`: black/dark line on bright floor.
 - `auto`: evaluate both polarities and pick the best line-shaped candidate.
 
 ## Gazebo SITL
+
+Clone-only is not enough on a fresh WSL machine. The launchers also need:
+
+- Gazebo Harmonic (`gz sim`, Gazebo Sim 8) and Gazebo dev libraries.
+- ArduPilot SITL (`sim_vehicle.py`, MAVProxy, ArduCopter build tree).
+- The `ardupilot_gazebo` plugin built locally and exposed through
+  `GZ_SIM_SYSTEM_PLUGIN_PATH` / `GZ_SIM_RESOURCE_PATH`.
+- Windows-side `uav-gcs` cloned, built, and running separately.
+
+Fresh WSL setup:
+
+```bash
+cd ~/astroquad/uav-onboard
+bash scripts/setup_gazebo_sitl.sh
+source ~/.bashrc
+```
+
+The setup script installs Gazebo Harmonic and Linux build dependencies, clones
+`~/ardupilot` and `~/ardupilot_gazebo` if they are missing, runs the ArduPilot
+Ubuntu prerequisite installer, builds the Gazebo plugin, writes the required
+environment variables to `~/.bashrc`, and builds `uav-onboard`.
+
+Useful overrides:
+
+```bash
+ONBOARD_DIR=~/astroquad/uav-onboard \
+ARDUPILOT_DIR=~/ardupilot \
+ARDUPILOT_GAZEBO_DIR=~/ardupilot_gazebo \
+BUILD_ONBOARD=1 \
+bash scripts/setup_gazebo_sitl.sh
+```
+
+Set `UPDATE_EXISTING=1` only when you want the script to `git pull --ff-only`
+existing `ardupilot` / `ardupilot_gazebo` checkouts.
+
+Primary upstream references:
+
+- Gazebo Ubuntu packages: <https://gazebosim.org/docs/latest/install_ubuntu/>
+- ArduPilot SITL with Gazebo: <https://ardupilot.org/dev/docs/sitl-with-gazebo.html>
+- ArduPilot Gazebo plugin: <https://github.com/ArduPilot/ardupilot_gazebo>
 
 Run Windows GCS:
 
 ```powershell
 cd astroquad\uav-gcs
+cmake -S . -B build
+cmake --build build --config Release
 .\build\astroquad-gcs.exe --config config
+```
+
+If the generator places executables under `build\Release`, run:
+
+```powershell
+.\build\Release\astroquad-gcs.exe --config config
 ```
 
 ### Line-Tracing World
@@ -149,7 +197,7 @@ bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh
 WINDOWS_GCS_IP="$(ip route | awk '/default/ {print $3; exit}')"
 cd ~/astroquad/uav-onboard
 ./build/line_follow_node --config config --target sitl --vision gazebo \
-  --line-mode dark_on_light --video --gcs-ip "$WINDOWS_GCS_IP"
+  --line-mode light_on_dark --video --gcs-ip "$WINDOWS_GCS_IP"
 ```
 
 ### Grid Arena World
@@ -158,8 +206,8 @@ The grid arena is the current full-mission SITL course:
 
 - 3m x 3m vertiport box at the origin.
 - Vertiport ArUco marker ID 23.
-- 5 x 8 grid cells, 3m cell size, black lines on white ground.
-- Four 50cm ArUco markers on white pads:
+- 5 x 8 grid cells, 3m cell size, white lines on grass.
+- Four 50cm ArUco markers:
   ID 1 at `(11.5, 3.0)`, ID 2 at `(17.5, 9.0)`,
   ID 3 at `(23.5, 6.0)`, ID 4 at `(26.5, 12.0)`.
 
@@ -180,7 +228,7 @@ cd ~/astroquad/uav-onboard
   --target sitl \
   --vision gazebo \
   --world grid \
-  --line-mode dark_on_light \
+  --line-mode light_on_dark \
   --marker-count 4 \
   --revisit-order desc \
   --video \
@@ -192,7 +240,7 @@ be omitted. Use this only when you want ascending order:
 
 ```bash
 ./build/astroquad-onboard --config config --target sitl --vision gazebo --world grid \
-  --line-mode dark_on_light --marker-count 4 --revisit-order asc --video \
+  --line-mode light_on_dark --marker-count 4 --revisit-order asc --video \
   --gcs-ip "$WINDOWS_GCS_IP"
 ```
 
@@ -285,7 +333,7 @@ Line-follow default GUIDED + body-NED velocity path:
 
 ```bash
 ./build/line_follow_node --config config --target ardupilot_serial \
-  --vision rpicam --line-mode dark_on_light --video \
+  --vision rpicam --line-mode light_on_dark --video \
   --control-backend guided_velocity \
   --allow-arm-takeoff
 ```
@@ -299,7 +347,7 @@ Line-follow only ALT_HOLD + RC override experiment path:
 
 ```bash
 ./build/line_follow_node --config config --target ardupilot_serial \
-  --vision rpicam --line-mode dark_on_light --video \
+  --vision rpicam --line-mode light_on_dark --video \
   --control-backend alt_hold_rc_override --alt-hold-auto-takeoff \
   --allow-rc-override --allow-arm-takeoff \
   --unsafe-assume-rc-present
@@ -330,7 +378,7 @@ not pass `--alt-hold-auto-takeoff`; stop with Ctrl+C after confirming frames:
 
 ```bash
 ./build/line_follow_node --config config --target ardupilot_serial \
-  --vision rpicam --line-mode dark_on_light --video --fps 12 \
+  --vision rpicam --line-mode light_on_dark --video --fps 12 \
   --control-backend alt_hold_rc_override \
   --allow-rc-override --unsafe-assume-rc-present
 ```
@@ -347,7 +395,7 @@ serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:
 
 ```bash
 ./build/astroquad-onboard --config config --target ardupilot_serial \
-  --line-mode dark_on_light --marker-count 4 --revisit-order asc \
+  --line-mode light_on_dark --marker-count 4 --revisit-order asc \
   --video --allow-arm-takeoff
 ```
 

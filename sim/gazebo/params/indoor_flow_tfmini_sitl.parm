@@ -1,0 +1,39 @@
+# SITL approximation of the GPS-denied indoor stack:
+# optical-flow XY velocity + downward rangefinder Z + compass yaw.
+
+# Disable GPS as an EKF/navigation source for indoor testing.
+GPS1_TYPE 0
+GPS2_TYPE 0
+
+# EKF3 source set: no XY position source, optical-flow XY velocity,
+# rangefinder Z position, compass yaw.
+EK3_SRC1_POSXY 0
+EK3_SRC1_VELXY 5
+EK3_SRC1_POSZ 2
+EK3_SRC1_VELZ 0
+EK3_SRC1_YAW 1
+EK3_OGN_HGT_MASK 0
+EK3_RNG_USE_HGT 70
+EK3_FLOW_USE 1
+
+# SITL optical flow backend.
+FLOW_TYPE 10
+SIM_FLOW_ENABLE 1
+
+# SITL rangefinder simulation. SIM_SONAR avoids WSL/Gazebo gpu_lidar
+# rendering issues seen on some machines.
+RNGFND1_TYPE 1
+RNGFND1_MIN 0.10
+RNGFND1_MAX 12.00
+RNGFND1_GNDCLEAR 0.19
+RNGFND1_ORIENT 25
+RNGFND1_PIN 0
+RNGFND1_SCALING 10
+SIM_SONAR_SCALE 10
+SIM_SONAR_RND 0
+SIM_SONAR_GLITCH 0
+RNGFND_LANDING 1
+
+# Keep compass yaw available.
+COMPASS_ENABLE 1
+COMPASS_USE 1

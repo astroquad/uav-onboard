@@ -9,7 +9,7 @@ ARDUCOPTER_DIR="${ARDUCOPTER_DIR:-$HOME/ardupilot/ArduCopter}"
 ARDUPILOT_GAZEBO_DIR="${ARDUPILOT_GAZEBO_DIR:-$HOME/ardupilot_gazebo}"
 ASTROQUAD_WORLD="${ASTROQUAD_WORLD:-$ONBOARD_DIR/sim/gazebo/worlds/line_tracing_test_world.sdf}"
 GZ_LOG="${GZ_LOG:-/tmp/gz_line_tracing_test_world.log}"
-INDOOR_PARAM_FILE="${INDOOR_PARAM_FILE:-$HOME/mavlink_control_lab/params/indoor_flow_tfmini_sitl.parm}"
+INDOOR_PARAM_FILE="${INDOOR_PARAM_FILE:-$ONBOARD_DIR/sim/gazebo/params/indoor_flow_tfmini_sitl.parm}"
 WSL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 WINDOWS_GCS_IP="$(ip route 2>/dev/null | awk '/default/ {print $3; exit}')"
 CLEANED_UP=0
@@ -116,11 +116,11 @@ fi
 echo
 echo "Astroquad vision-only smoke:"
 echo "    cd $ONBOARD_DIR"
-echo "    ./build/vision_debug_node --config config --target sitl --vision gazebo --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
+echo "    ./build/vision_debug_node --config config --target sitl --vision gazebo --line-mode light_on_dark --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Astroquad line-follow smoke:"
 echo "    cd $ONBOARD_DIR"
-echo "    ./build/line_follow_node --config config --target sitl --vision gazebo --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>"
+echo "    ./build/line_follow_node --config config --target sitl --vision gazebo --line-mode light_on_dark --video --gcs-ip <windows-gcs-ip>"
 echo
 echo "Mission Planner 미러 권장 설정:"
 if [[ -n "$WSL_IP" ]]; then

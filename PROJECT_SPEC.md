@@ -134,8 +134,9 @@ Library targets:
 
 현재 line path는 `LineMaskBuilder -> LineDetector -> LineStabilizer`다.
 
-- `mask_strategy = "white_fill"` 기본. `dark_on_light`에서는 dark fill path를
-  사용해 검은 격자선을 흰 바닥에서 잡는다.
+- `mask_strategy = "white_fill"` 기본. 현재 잔디 바닥의 흰색 격자선은
+  `light_on_dark`/bright fill path로 잡는다. `dark_on_light`는 검은 선을 밝은
+  바닥에서 잡는 호환 경로로 유지한다.
 - ROI는 `roi_top_ratio` 아래만 처리하고 `process_width`로 축소한다.
 - 후보 contour는 면적순으로 제한하고, anchor/lookahead band projection으로
   tracking X를 측정한다.
@@ -469,21 +470,21 @@ ctest --test-dir build --output-on-failure
 Vision debug:
 
 ```bash
-./build/vision_debug_node --config config --line-only --line-mode dark_on_light --video
+./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video
 ```
 
 Line-follow SITL:
 
 ```bash
 ./build/line_follow_node --config config --target sitl --vision gazebo \
-  --line-mode dark_on_light --video --gcs-ip <windows-gcs-ip>
+  --line-mode light_on_dark --video --gcs-ip <windows-gcs-ip>
 ```
 
 Grid mission SITL (진입→snake→재방문→복귀→착륙 풀-미션):
 
 ```bash
 ./build/astroquad-onboard --config config --target sitl --vision gazebo \
-  --world grid --line-mode dark_on_light --marker-count 4 \
+  --world grid --line-mode light_on_dark --marker-count 4 \
   --revisit-order desc \
   --video --gcs-ip <windows-gcs-ip>
 ```
