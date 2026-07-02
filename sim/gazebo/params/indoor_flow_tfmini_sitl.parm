@@ -1,6 +1,11 @@
 # SITL approximation of the GPS-denied indoor stack:
 # optical-flow XY velocity + downward rangefinder Z + compass yaw.
 
+# Required motor layout for the Gazebo Iris quad-X model. Keep these explicit
+# so an external JSON model plus --wipe-eeprom cannot start with an unset frame.
+FRAME_CLASS 1
+FRAME_TYPE 1
+
 # Disable GPS as an EKF/navigation source for indoor testing.
 GPS1_TYPE 0
 GPS2_TYPE 0

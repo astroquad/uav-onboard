@@ -8,8 +8,15 @@
 
 set -euo pipefail
 
-ONBOARD_DIR="${ONBOARD_DIR:-$HOME/astroquad/uav-onboard}"
-ARDUCOPTER_DIR="${ARDUCOPTER_DIR:-$HOME/ardupilot/ArduCopter}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/gazebo_rendering.sh
+source "$SCRIPT_DIR/lib/gazebo_rendering.sh"
+ONBOARD_DIR="${ONBOARD_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+ARDUPILOT_DIR="${ARDUPILOT_DIR:-$HOME/ardupilot}"
+ARDUCOPTER_DIR="${ARDUCOPTER_DIR:-$ARDUPILOT_DIR/ArduCopter}"
+SIM_VEHICLE="${SIM_VEHICLE:-$ARDUPILOT_DIR/Tools/autotest/sim_vehicle.py}"
+ARDUPILOT_VENV="${ARDUPILOT_VENV:-}"
+ARDUPILOT_PYTHON="${ARDUPILOT_PYTHON:-}"
 ARDUPILOT_GAZEBO_DIR="${ARDUPILOT_GAZEBO_DIR:-$HOME/ardupilot_gazebo}"
 ASTROQUAD_WORLD="${ASTROQUAD_WORLD:-$ONBOARD_DIR/sim/gazebo/worlds/grid_arena_test_world.sdf}"
 GZ_LOG="${GZ_LOG:-/tmp/gz_grid_arena_test_world.log}"
@@ -17,6 +24,22 @@ INDOOR_PARAM_FILE="${INDOOR_PARAM_FILE:-$ONBOARD_DIR/sim/gazebo/params/indoor_fl
 WSL_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 WINDOWS_GCS_IP="$(ip route 2>/dev/null | awk '/default/ {print $3; exit}')"
 CLEANED_UP=0
+
+if [[ -z "$ARDUPILOT_VENV" ]]; then
+    for candidate in "$ARDUPILOT_DIR/venv-ardupilot" "$ARDUPILOT_DIR/venv" "$ARDUPILOT_DIR/.venv" "$HOME/venv-ardupilot"; do
+        if [[ -x "$candidate/bin/python3" ]]; then
+            ARDUPILOT_VENV="$candidate"
+            break
+        fi
+    done
+fi
+if [[ -z "$ARDUPILOT_PYTHON" ]]; then
+    if [[ -n "$ARDUPILOT_VENV" ]]; then
+        ARDUPILOT_PYTHON="$ARDUPILOT_VENV/bin/python3"
+    else
+        ARDUPILOT_PYTHON="$(command -v python3 || true)"
+    fi
+fi
 MAVPROXY_ARGS=("--console")
 if [[ "${MAVPROXY_MAP:-0}" == "1" ]]; then
     MAVPROXY_ARGS+=("--map")
@@ -56,6 +79,26 @@ if [[ ! -d "$ARDUCOPTER_DIR" ]]; then
     exit 1
 fi
 
+if [[ ! -x "$SIM_VEHICLE" ]]; then
+    echo "오류: sim_vehicle.py를 찾거나 실행할 수 없습니다: $SIM_VEHICLE" >&2
+    echo "      ARDUPILOT_DIR=/path/to/ardupilot 로 설치 위치를 지정하세요." >&2
+    exit 1
+fi
+
+command -v gz >/dev/null || { echo "오류: gz 명령을 찾을 수 없습니다." >&2; exit 1; }
+command -v setsid >/dev/null || { echo "오류: setsid 명령을 찾을 수 없습니다." >&2; exit 1; }
+
+if [[ -z "$ARDUPILOT_PYTHON" || ! -x "$ARDUPILOT_PYTHON" ]]; then
+    echo "오류: ArduPilot용 Python을 찾을 수 없습니다." >&2
+    echo "      setup_gazebo_sitl.sh를 다시 실행하거나 ARDUPILOT_PYTHON을 지정하세요." >&2
+    exit 1
+fi
+if ! "$ARDUPILOT_PYTHON" -c 'import em; assert em.__version__ == "3.3.4"' 2>/dev/null; then
+    echo "오류: $ARDUPILOT_PYTHON에 empy==3.3.4가 설치되지 않았습니다." >&2
+    echo "      $ARDUPILOT_PYTHON -m pip install empy==3.3.4" >&2
+    exit 1
+fi
+
 if [[ ! -d "$ARDUPILOT_GAZEBO_DIR" ]]; then
     echo "오류: ardupilot_gazebo 디렉터리를 찾을 수 없습니다: $ARDUPILOT_GAZEBO_DIR" >&2
     exit 1
@@ -73,6 +116,10 @@ fi
 
 export GZ_SIM_SYSTEM_PLUGIN_PATH="$ARDUPILOT_GAZEBO_DIR/build:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}"
 export GZ_SIM_RESOURCE_PATH="$ARDUPILOT_GAZEBO_DIR/models:$ARDUPILOT_GAZEBO_DIR/worlds:$ONBOARD_DIR/sim/gazebo/models:$ONBOARD_DIR/sim/gazebo/worlds:${GZ_SIM_RESOURCE_PATH:-}"
+export PATH="$ARDUPILOT_DIR/Tools/autotest:$(dirname "$ARDUPILOT_PYTHON"):$HOME/.local/bin:$PATH"
+
+echo "[GPU] Gazebo 렌더러 확인..."
+configure_gazebo_rendering
 
 echo "[1] 기존 Gazebo / ArduPilot SITL 프로세스 정리..."
 pkill -f "gz sim.*grid_arena_test_world" 2>/dev/null || true
@@ -101,7 +148,7 @@ fi
 
 echo "[3] ArduCopter SITL + MAVProxy 콘솔 실행"
 echo "    cd $ARDUCOPTER_DIR"
-echo "    sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON ${MAVPROXY_ARGS[*]} --out 127.0.0.1:14550 --add-param-file \"$INDOOR_PARAM_FILE\" --wipe-eeprom"
+echo "    $SIM_VEHICLE -v ArduCopter -f gazebo-iris --model JSON --no-extra-ports ${MAVPROXY_ARGS[*]} --out 127.0.0.1:14550 --add-param-file \"$INDOOR_PARAM_FILE\" --wipe-eeprom"
 echo
 echo "포트 구분:"
 echo "    MAVLink SITL -> onboard astroquad-onboard/line_follow_node: UDP 127.0.0.1:14550"
@@ -152,4 +199,4 @@ fi
 echo "======================================"
 
 cd "$ARDUCOPTER_DIR"
-sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON "${MAVPROXY_ARGS[@]}" --out 127.0.0.1:14550 --add-param-file "$INDOOR_PARAM_FILE" --wipe-eeprom
+"$SIM_VEHICLE" -v ArduCopter -f gazebo-iris --model JSON --no-extra-ports "${MAVPROXY_ARGS[@]}" --out 127.0.0.1:14550 --add-param-file "$INDOOR_PARAM_FILE" --wipe-eeprom

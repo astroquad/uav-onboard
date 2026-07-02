@@ -23,6 +23,8 @@ ARDUPILOT_GAZEBO_DIR="${ARDUPILOT_GAZEBO_DIR:-$HOME/ardupilot_gazebo}"
 UPDATE_EXISTING="${UPDATE_EXISTING:-0}"
 BUILD_ONBOARD="${BUILD_ONBOARD:-1}"
 JOBS="${JOBS:-$(nproc)}"
+ARDUPILOT_VENV="${ARDUPILOT_VENV:-}"
+ARDUPILOT_PYTHON="${ARDUPILOT_PYTHON:-}"
 
 ARDUPILOT_REPO="${ARDUPILOT_REPO:-https://github.com/ArduPilot/ardupilot.git}"
 ARDUPILOT_GAZEBO_REPO="${ARDUPILOT_GAZEBO_REPO:-https://github.com/ArduPilot/ardupilot_gazebo.git}"
@@ -91,6 +93,7 @@ install_packages() {
         libgz-transport13-dev \
         libopencv-dev \
         make \
+        mesa-utils \
         ninja-build \
         pkg-config \
         python3 \
@@ -100,6 +103,19 @@ install_packages() {
         python3-venv \
         python3-wheel \
         rapidjson-dev
+}
+
+validate_opencv() {
+    info "Checking OpenCV ArUco development files"
+    command -v pkg-config >/dev/null || die "pkg-config was not installed"
+    pkg-config --exists opencv4 \
+        || die "OpenCV development metadata was not found (expected pkg-config opencv4)"
+
+    local opencv_version
+    opencv_version="$(pkg-config --modversion opencv4)"
+    [[ -f /usr/include/opencv4/opencv2/aruco.hpp ]] \
+        || die "OpenCV was installed without the ArUco headers; install libopencv-contrib-dev"
+    echo "OpenCV $opencv_version with ArUco headers detected."
 }
 
 clone_or_update() {
@@ -134,6 +150,23 @@ install_ardupilot_prereqs() {
     )
 }
 
+find_ardupilot_venv() {
+    local candidate
+    if [[ -n "$ARDUPILOT_VENV" && -x "$ARDUPILOT_VENV/bin/python3" ]]; then
+        ARDUPILOT_PYTHON="$ARDUPILOT_VENV/bin/python3"
+        return
+    fi
+    for candidate in "$ARDUPILOT_DIR/venv-ardupilot" "$ARDUPILOT_DIR/venv" "$ARDUPILOT_DIR/.venv" "$HOME/venv-ardupilot"; do
+        if [[ -x "$candidate/bin/python3" ]]; then
+            ARDUPILOT_VENV="$candidate"
+            ARDUPILOT_PYTHON="$candidate/bin/python3"
+            return
+        fi
+    done
+    ARDUPILOT_PYTHON="$(command -v python3 || true)"
+    [[ -x "$ARDUPILOT_PYTHON" ]] || die "ArduPilot prerequisite installer did not provide usable Python"
+}
+
 build_ardupilot_gazebo() {
     info "Building ardupilot_gazebo plugin"
     export GZ_VERSION=harmonic
@@ -164,7 +197,9 @@ write_bashrc_block() {
         echo "export ARDUPILOT_DIR=\"$ARDUPILOT_DIR\""
         echo "export ARDUCOPTER_DIR=\"$ARDUCOPTER_DIR\""
         echo "export ARDUPILOT_GAZEBO_DIR=\"$ARDUPILOT_GAZEBO_DIR\""
-        echo "export PATH=\"\$ARDUPILOT_DIR/Tools/autotest:\$HOME/.local/bin:\$PATH\""
+        echo "export ARDUPILOT_VENV=\"$ARDUPILOT_VENV\""
+        echo "export ARDUPILOT_PYTHON=\"$ARDUPILOT_PYTHON\""
+        echo "export PATH=\"\$ARDUPILOT_DIR/Tools/autotest:$(dirname "$ARDUPILOT_PYTHON"):\$HOME/.local/bin:\$PATH\""
         echo "export GZ_SIM_SYSTEM_PLUGIN_PATH=\"\$ARDUPILOT_GAZEBO_DIR/build:\${GZ_SIM_SYSTEM_PLUGIN_PATH:-}\""
         echo "export GZ_SIM_RESOURCE_PATH=\"\$ARDUPILOT_GAZEBO_DIR/models:\$ARDUPILOT_GAZEBO_DIR/worlds:\${GZ_SIM_RESOURCE_PATH:-}\""
         echo "export SDF_PATH=\"$ONBOARD_DIR/sim/gazebo/models:$ONBOARD_DIR/sim/gazebo/worlds:\$ARDUPILOT_GAZEBO_DIR/models:\$ARDUPILOT_GAZEBO_DIR/worlds:\${SDF_PATH:-}\""
@@ -190,18 +225,25 @@ build_onboard() {
 
 validate_setup() {
     info "Validating setup"
-    export PATH="$ARDUPILOT_DIR/Tools/autotest:$HOME/.local/bin:$PATH"
+    export PATH="$ARDUPILOT_DIR/Tools/autotest:$(dirname "$ARDUPILOT_PYTHON"):$HOME/.local/bin:$PATH"
     export GZ_SIM_SYSTEM_PLUGIN_PATH="$ARDUPILOT_GAZEBO_DIR/build:${GZ_SIM_SYSTEM_PLUGIN_PATH:-}"
     export GZ_SIM_RESOURCE_PATH="$ARDUPILOT_GAZEBO_DIR/models:$ARDUPILOT_GAZEBO_DIR/worlds:${GZ_SIM_RESOURCE_PATH:-}"
     export SDF_PATH="$ONBOARD_DIR/sim/gazebo/models:$ONBOARD_DIR/sim/gazebo/worlds:$ARDUPILOT_GAZEBO_DIR/models:$ARDUPILOT_GAZEBO_DIR/worlds:${SDF_PATH:-}"
 
     command -v gz >/dev/null || die "gz command was not found"
-    command -v sim_vehicle.py >/dev/null || die "sim_vehicle.py was not found in PATH"
+    command -v glxinfo >/dev/null || die "glxinfo was not found (mesa-utils is required)"
+    [[ -x "$ARDUPILOT_DIR/Tools/autotest/sim_vehicle.py" ]] \
+        || die "sim_vehicle.py was not found under $ARDUPILOT_DIR/Tools/autotest"
+    "$ARDUPILOT_PYTHON" -c 'import em; assert em.__version__ == "3.3.4"' \
+        || die "ArduPilot Python is missing empy==3.3.4: $ARDUPILOT_PYTHON"
     [[ -d "$ARDUCOPTER_DIR" ]] || die "ArduCopter directory was not found: $ARDUCOPTER_DIR"
     [[ -f "$ONBOARD_DIR/sim/gazebo/params/indoor_flow_tfmini_sitl.parm" ]] \
         || die "repo-local SITL param file is missing"
 
     gz sim --versions
+    # shellcheck source=scripts/lib/gazebo_rendering.sh
+    source "$ONBOARD_DIR/scripts/lib/gazebo_rendering.sh"
+    configure_gazebo_rendering || die "Gazebo renderer validation failed"
     gz sdf --check "$ONBOARD_DIR/sim/gazebo/worlds/grid_arena_test_world.sdf"
     gz sdf --check "$ONBOARD_DIR/sim/gazebo/worlds/line_tracing_test_world.sdf"
 }
@@ -210,8 +252,10 @@ main() {
     require_ubuntu
     install_osrf_repo
     install_packages
+    validate_opencv
     clone_or_update "$ARDUPILOT_REPO" "$ARDUPILOT_DIR" "ArduPilot"
     install_ardupilot_prereqs
+    find_ardupilot_venv
     clone_or_update "$ARDUPILOT_GAZEBO_REPO" "$ARDUPILOT_GAZEBO_DIR" "ardupilot_gazebo"
     build_ardupilot_gazebo
     write_bashrc_block

@@ -32,9 +32,9 @@ constexpr float kLivePartialMarkerSideRatio = 0.08f;
 constexpr float kLiveMinPlausibleMarkerSideRatio = 0.08f;
 constexpr float kRecordedMinPlausibleMarkerSideRatio = 0.030f;
 
-cv::aruco::PredefinedDictionaryType dictionaryFromName(const std::string& name)
+cv::aruco::PREDEFINED_DICTIONARY_NAME dictionaryFromName(const std::string& name)
 {
-    static const std::map<std::string, cv::aruco::PredefinedDictionaryType> dictionaries = {
+    static const std::map<std::string, cv::aruco::PREDEFINED_DICTIONARY_NAME> dictionaries = {
         {"DICT_4X4_50", cv::aruco::DICT_4X4_50},
         {"DICT_4X4_100", cv::aruco::DICT_4X4_100},
         {"DICT_4X4_250", cv::aruco::DICT_4X4_250},
@@ -60,6 +60,46 @@ cv::aruco::PredefinedDictionaryType dictionaryFromName(const std::string& name)
     }
     return it->second;
 }
+
+// Ubuntu 22.04/24.04 may provide the legacy ArUco API while newer OpenCV
+// releases provide cv::aruco::ArucoDetector. Keep that difference local so the
+// rest of the vision pipeline builds against either system package.
+class OpenCvArucoDetector {
+public:
+    OpenCvArucoDetector(
+        cv::aruco::PREDEFINED_DICTIONARY_NAME dictionary_name,
+        const cv::aruco::DetectorParameters& parameters)
+#if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
+        : dictionary_(cv::aruco::getPredefinedDictionary(dictionary_name))
+        , detector_(dictionary_, parameters)
+#else
+        : dictionary_(cv::aruco::getPredefinedDictionary(dictionary_name))
+        , parameters_(cv::makePtr<cv::aruco::DetectorParameters>(parameters))
+#endif
+    {
+    }
+
+    void detectMarkers(
+        const cv::Mat& image,
+        std::vector<std::vector<cv::Point2f>>& corners,
+        std::vector<int>& ids)
+    {
+#if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
+        detector_.detectMarkers(image, corners, ids);
+#else
+        cv::aruco::detectMarkers(image, dictionary_, corners, ids, parameters_);
+#endif
+    }
+
+private:
+#if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
+    cv::aruco::Dictionary dictionary_;
+    cv::aruco::ArucoDetector detector_;
+#else
+    cv::Ptr<cv::aruco::Dictionary> dictionary_;
+    cv::Ptr<cv::aruco::DetectorParameters> parameters_;
+#endif
+};
 
 Point2f toPoint(const cv::Point2f& point)
 {
@@ -247,9 +287,12 @@ const std::vector<TemplateEntry>& markerTemplates(const std::string& dictionary_
         return cached->second;
     }
 
-    const cv::aruco::Dictionary dictionary =
-        cv::aruco::getPredefinedDictionary(dictionaryFromName(dictionary_name));
+    const auto dictionary = cv::aruco::getPredefinedDictionary(dictionaryFromName(dictionary_name));
+#if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
     const int dictionary_marker_count = std::max(0, dictionary.bytesList.rows);
+#else
+    const int dictionary_marker_count = std::max(0, dictionary->bytesList.rows);
+#endif
     const int marker_count = dictionary_name == "DICT_4X4_50"
         ? std::min(dictionary_marker_count, 10)
         : dictionary_marker_count;
@@ -257,7 +300,11 @@ const std::vector<TemplateEntry>& markerTemplates(const std::string& dictionary_
     entries.reserve(static_cast<std::size_t>(marker_count * 4));
     for (int id = 0; id < marker_count; ++id) {
         cv::Mat marker;
+#if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
         cv::aruco::generateImageMarker(dictionary, id, kTemplateSide, marker, 1);
+#else
+        cv::aruco::drawMarker(dictionary, id, kTemplateSide, marker, 1);
+#endif
         cv::threshold(marker, marker, 127, 255, cv::THRESH_BINARY);
         for (int rotation = 0; rotation < 4; ++rotation) {
             cv::Mat rotated;
@@ -435,7 +482,7 @@ std::vector<int> fallbackRoiSizes(int frame_min, int component_width, int compon
 
 void detectInPaddedRoi(
     const cv::Mat& gray,
-    cv::aruco::ArucoDetector& detector,
+    OpenCvArucoDetector& detector,
     const cv::Rect& source_rect,
     int pad,
     bool allow_upscale,
@@ -493,7 +540,7 @@ void detectInPaddedRoi(
 void appendRoiFallbackMarkers(
     const cv::Mat& image,
     const cv::Mat& gray,
-    cv::aruco::ArucoDetector& detector,
+    OpenCvArucoDetector& detector,
     int max_components,
     int max_rois,
     bool allow_upscale,
@@ -603,7 +650,7 @@ void appendRoiFallbackMarkers(
 void appendTargetedFallbackMarkers(
     const cv::Mat& image,
     const cv::Mat& gray,
-    cv::aruco::ArucoDetector& detector,
+    OpenCvArucoDetector& detector,
     const std::vector<MarkerObservation>& seed_markers,
     int max_rois,
     VisionResult& result)
@@ -700,8 +747,7 @@ VisionResult ArucoDetector::detect(
     parameters.adaptiveThreshWinSizeMax = config_.adaptive_thresh_win_size_max;
     parameters.adaptiveThreshWinSizeStep = config_.adaptive_thresh_win_size_step;
 
-    const auto dictionary = cv::aruco::getPredefinedDictionary(dictionaryFromName(config_.dictionary));
-    cv::aruco::ArucoDetector detector(dictionary, parameters);
+    OpenCvArucoDetector detector(dictionaryFromName(config_.dictionary), parameters);
 
     std::vector<int> ids;
     std::vector<std::vector<cv::Point2f>> marker_corners;
