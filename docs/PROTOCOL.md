@@ -1,6 +1,6 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.9
+Version: v1.10
 Last updated: 2026-07-04
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
@@ -272,6 +272,7 @@ Reserved richer shape:
     "state": "SNAKE_FORWARD",
     "control_intent": "fwd_blind",
     "phase_elapsed_ms": 1250,
+    "mission_elapsed_ms": 18400,
     "target_altitude_m": 2.0,
     "altitude_off_pad_confirmed": true,
     "grid": {
@@ -305,6 +306,8 @@ Reserved richer shape:
 | Field | Meaning |
 |---|---|
 | `camera.frame_seq` | Matches the MJPEG video `frame_id` for the same camera frame. |
+| `mission.mission_elapsed_ms` | Monotonic mission-elapsed time (steady_clock) since mission start. Drives the GCS mission timer; independent of vision processing latency. |
+| `mission.markers_found[].first_seen_s` / `revisited_s` | Mission-elapsed seconds when the marker was first committed / revisited. Frozen at the moment of the event (derived from the frame capture clock vs a mission-start anchor), so it does not drift on later frames. |
 | `vision.line.*` | Filtered line-tracking result. `tracking_point_px.x` is the lateral control reference. |
 | `vision.line.contour_px` | Simplified selected contour. Intersections may appear as cross-shaped contours. |
 | `vision.intersection.*` | Stabilized per-frame topology from the line mask. `straight` is valid but not a turn node. |
@@ -417,3 +420,4 @@ receive a `CMD_ACK` telemetry response when implemented.
 | v1.7 | 2026-05-14 | No schema change; documented runtime source profiles. |
 | v1.8 | 2026-05-21 | Added `vision.drone_position`, clarified committed-node resend semantics, documented grid mission staging and current mission telemetry limits. |
 | v1.9 | 2026-07-04 | No schema change; hardware examples updated to the upgraded platform (Raspberry Pi 5 + IMX296 mono global-shutter, frames grayscale end-to-end), command channel marked explicitly as documented-only/future work. |
+| v1.10 | 2026-07-05 | Added `mission.mission_elapsed_ms`; documented that `markers_found[].first_seen_s`/`revisited_s` are frozen mission-elapsed snapshots (fixed drift where they crept upward over the mission). Backward compatible: `protocol_version` stays integer `1`. |

@@ -65,8 +65,13 @@ bool MarkerRegistry::markRevisited(int aruco_id, std::int64_t timestamp_ms)
 {
     for (auto& record : records_) {
         if (record.aruco_id == aruco_id) {
-            record.revisited = true;
-            record.revisited_ms = timestamp_ms;
+            // Freeze the revisit timestamp on the first successful mark so a
+            // marker's revisit time cannot drift if this is called on more than
+            // one frame.
+            if (!record.revisited) {
+                record.revisited = true;
+                record.revisited_ms = timestamp_ms;
+            }
             return true;
         }
     }

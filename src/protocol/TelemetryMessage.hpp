@@ -191,6 +191,9 @@ struct MissionTelemetry {
     std::string state = "idle";
     std::string control_intent = "idle";
     std::int64_t phase_elapsed_ms = 0;
+    // Monotonic mission-elapsed time (steady_clock) since mission start. Drives
+    // the GCS mission timer; independent of vision processing latency.
+    std::int64_t mission_elapsed_ms = 0;
     double target_altitude_m = 0.0;
     bool altitude_off_pad_confirmed = false;
     MissionGridTelemetry grid;

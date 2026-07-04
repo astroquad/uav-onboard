@@ -19,6 +19,7 @@
 
 #include <mavlink/v2.0/ardupilotmega/mavlink.h>
 #include "common/NetworkConfig.hpp"
+#include "common/Time.hpp"
 #include "common/VisionConfig.hpp"
 #include "control/GridControlMapper.hpp"
 #include "control/GuidedVelocityController.hpp"
@@ -1215,6 +1216,12 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
     auto now_s = [&]() {
         return std::chrono::duration<double>(Clock::now() - start_time).count();
     };
+    // Wall-clock (system_clock) anchor captured at mission start, used to turn a
+    // marker's frozen capture timestamp (frame.timestamp_ms, also system_clock)
+    // into mission-elapsed seconds. Both operands share the camera/system clock,
+    // so the reported found/revisit time stays fixed and does not drift with
+    // vision processing backlog (unlike anchoring against the live frame clock).
+    const std::int64_t mission_start_unix_ms = common::unixTimestampMs();
     mission.start(now_s());
     safety.startMission(Clock::now());
 
@@ -1526,6 +1533,8 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             // mission JSON block stayed empty and GCS could not render the
             // markers panel.
             pin.mission.present = true;
+            pin.mission.mission_elapsed_ms =
+                static_cast<std::int64_t>(now_s() * 1000.0);
             pin.mission.state = omission::gridStateName(mout.state);
             pin.mission.control_intent = ocontrol::gridControlIntentName(mout.intent);
             pin.mission.target_altitude_m = mout.target_altitude_m;
@@ -1576,7 +1585,6 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             pin.mission.revisit_remaining = mout.revisit_remaining;
             pin.mission.last_safety_event = mout.last_safety_event;
             pin.mission.markers_found.clear();
-            const double mission_now_s = now_s();
             for (const auto& m : registry.records()) {
                 // Skip records without a valid grid coord. Vertiport
                 // (and any other pre-grid sighting) is recorded with
@@ -1589,14 +1597,17 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
                 e.grid_y = m.grid_coord.y;
                 e.grid_valid = m.grid_coord_valid;
                 e.orientation_deg = static_cast<double>(m.orientation_deg);
-                // Convert absolute first_seen_ms (camera frame clock) into
-                // mission elapsed seconds by anchoring against the current
-                // frame's timestamp_ms and now_s(). first_seen <= now_s.
-                e.first_seen_s = mission_now_s +
-                    (m.first_seen_ms - frame.timestamp_ms) / 1000.0;
+                // Convert the frozen absolute capture timestamp (system_clock
+                // ms, set once when the marker was first committed) into mission
+                // elapsed seconds by subtracting the mission-start anchor on the
+                // same clock. This is a difference of two constants, so the
+                // reported time is fixed the moment the marker is found and does
+                // not creep upward as vision processing latency drifts.
+                e.first_seen_s =
+                    (m.first_seen_ms - mission_start_unix_ms) / 1000.0;
                 e.revisited = m.revisited;
                 e.revisited_s = m.revisited
-                    ? mission_now_s + (m.revisited_ms - frame.timestamp_ms) / 1000.0
+                    ? (m.revisited_ms - mission_start_unix_ms) / 1000.0
                     : 0.0;
                 pin.mission.markers_found.push_back(e);
             }

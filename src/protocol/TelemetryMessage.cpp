@@ -242,6 +242,7 @@ std::string buildTelemetryJson(const BringupTelemetry& telemetry)
             {"state", telemetry.mission.state},
             {"control_intent", telemetry.mission.control_intent},
             {"phase_elapsed_ms", telemetry.mission.phase_elapsed_ms},
+            {"mission_elapsed_ms", telemetry.mission.mission_elapsed_ms},
             {"target_altitude_m", telemetry.mission.target_altitude_m},
             {"altitude_off_pad_confirmed", telemetry.mission.altitude_off_pad_confirmed},
             {"grid", {
