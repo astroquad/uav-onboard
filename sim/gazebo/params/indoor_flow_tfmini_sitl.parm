@@ -42,3 +42,15 @@ RNGFND_LANDING 1
 # Keep compass yaw available.
 COMPASS_ENABLE 1
 COMPASS_USE 1
+
+# 4S battery model aligned with the real airframe
+# (config/pixhawk6c_indoor_flow.params). Failsafe ACTIONS stay at warn-only
+# in SITL: the simulated battery sags over a long mission and a LAND action
+# here would nondeterministically abort SITL regressions. Real-flight params
+# keep BATT_FS_LOW_ACT/BATT_FS_CRT_ACT = 1 (Land).
+SIM_BATT_VOLTAGE 16.8
+BATT_ARM_VOLT 14.8
+BATT_LOW_VOLT 14.0
+BATT_CRT_VOLT 13.6
+BATT_FS_LOW_ACT 0
+BATT_FS_CRT_ACT 0

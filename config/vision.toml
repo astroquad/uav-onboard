@@ -1,31 +1,28 @@
 [camera]
 index = 0
 device = 0
-sensor_model = "imx519"
-width = 960
-height = 720
+# Raspberry Pi Global Shutter Camera (IMX296 mono, fixed-focus CS-mount).
+# Single native sensor mode 1456x1088@10bit; frames are decoded grayscale.
+# No autofocus/AWB/chroma controls — those were IMX519-era settings.
+sensor_model = "imx296"
+width = 1456
+height = 1088
 fps = 12
 codec = "mjpeg"
-mode = "2328:1748:10:P"
 jpeg_quality = 45
-autofocus_mode = ""
-autofocus_range = ""
-autofocus_speed = ""
-lens_position = -1.0
-focus_absolute = 1984
-focus_device = "/dev/v4l-subdev1"
+# 'sport' biases short shutter times (less motion blur at mission speed).
+# AT THE VENUE: lock auto-exposure by setting shutter_us/gain to values
+# measured over the actual grass — AE hunting across alternating grass /
+# white-line scenes modulates brightness and destabilizes the line mask.
 exposure = "sport"
-shutter_us = 0
-gain = 0.0
+shutter_us = 0    # >0 fixes shutter in microseconds (venue-measured)
+gain = 0.0        # >0 fixes analog gain (set together with shutter_us)
 ev = 0.0
-awb = "auto"
-awbgains = ""
 metering = ""
-denoise = "cdn_fast"
+denoise = ""      # cdn_* is chroma denoise; meaningless on a mono sensor
 sharpness = 0.0
 contrast = 0.0
 brightness = 0.0
-saturation = 0.0
 roi = ""
 tuning_file = ""
 hflip = false
@@ -101,6 +98,11 @@ filter_reacquire_frames = 3
 intersection_threshold = 0.8
 marker_mask_enabled = true
 marker_mask_detect_candidates = true
+# Occlusion polygons are scaled about the marker centroid so the WHITE PAD /
+# quiet zone around the 0.5m marker (real pad ~0.6m+) is erased from the line
+# mask too — the un-erased pad ring was the source of false line/intersection
+# contours around markers. Re-measure the real pad at the field and retune.
+marker_occlusion_scale = 1.7
 
 [intersection_decision]
 enabled = true
@@ -130,17 +132,26 @@ node_record_y_max = 0.65
 
 [aruco]
 dictionary = "DICT_4X4_50"
-marker_size_mm = 80.0
+# Competition markers are 50cm (0.5m) squares on white pads at grid
+# intersections. Currently informational only (no pose estimation consumes
+# it); the previous 80.0 was a bench-marker leftover.
+marker_size_mm = 500.0
 # Cycle 11: raised 0.03 -> 0.05 to reject small candidate quads that the
 # ArUco detector picks up at grid intersections (cross / T) and misclassifies
-# as real markers. 80mm marker at 2m altitude is comfortably above 5% of the
-# image perimeter.
+# as real markers. A 50cm marker at ~2m altitude is far above 5% of the
+# image perimeter; re-validate min/max against the real-field corpus.
 min_marker_perimeter_rate = 0.05
 max_marker_perimeter_rate = 4.0
 adaptive_thresh_win_size_min = 3
 adaptive_thresh_win_size_max = 23
 adaptive_thresh_win_size_step = 10
+# Targeted re-detection around partial primary detections (safe: seeded by a
+# real detection). The blind bright-blob sweep and synthetic-template matcher
+# below are the main grass false-positive sources — OPT-IN only; re-enable
+# only if the real-field corpus shows the primary detector missing markers.
 roi_fallback_enabled = true
+bright_roi_fallback_enabled = false
+template_fallback_enabled = false
 detect_interval_frames = 3
 fallback_max_components = 12
 fallback_max_rois = 120

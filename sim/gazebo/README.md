@@ -3,6 +3,24 @@
 This directory contains Astroquad-owned Gazebo worlds, models, and textures for
 vision, line-follow, and grid-mission SITL testing.
 
+## Fidelity Caveat (2026-07 hardware upgrade)
+
+The real platform is a Holybro S500 V2 (~2.1 kg, 4S, Pixhawk 6C Mini, IMX296
+mono global-shutter camera). The simulated vehicle wraps **ArduPilot's Iris
+JSON model, which lives outside this repo** — its mass, inertia, and motor
+dynamics are NOT the S500's. Consequences:
+
+- SITL validates **mission logic, vision flow, and state transitions**, not
+  controller tuning, hover throttle, or battery behaviour.
+- Gains proven in SITL are a starting point only; real-flight gains live in
+  `config/runtime.ardupilot_serial.toml` and must be tuned on the vehicle.
+- Building a custom S500 dynamics model was considered and rejected for the
+  competition timeline (see `ARCHITECTURE_OVERVIEW.md` decision record).
+
+The simulated downward camera in `models/iris_with_downward_camera/model.sdf`
+should track the real camera config (mono, resolution, FOV). The lens FOV of
+the real CS-mount camera must be measured before locking `<horizontal_fov>`.
+
 ## Line-Tracing Test World
 
 World:

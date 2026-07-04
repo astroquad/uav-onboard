@@ -133,7 +133,12 @@ float markerApproxSidePx(const MarkerObservation& marker)
 
 bool isLiveFrameSize(const cv::Size& size)
 {
-    return std::min(size.width, size.height) <= 1000;
+    // Live camera frames: Gazebo 640x480 and IMX296 mono native 1456x1088.
+    // Anything larger is treated as a recorded high-res still (old IMX519
+    // 2328x1748 captures), where the expensive unlimited fallback sweeps are
+    // acceptable. Keep this above 1088 or the real camera gets misclassified
+    // as "recorded" and runs the full fallback every frame on the Pi.
+    return std::min(size.width, size.height) <= 1200;
 }
 
 bool isLikelyPartialLiveMarker(const MarkerObservation& marker, const cv::Size& frame_size)
@@ -182,7 +187,12 @@ void appendMarkerIfUnique(VisionResult& result, const MarkerObservation& marker)
     result.markers.push_back(marker);
 }
 
+bool markerContrastLooksPlausible(
+    const cv::Mat& gray,
+    const std::vector<cv::Point2f>& source_corners);
+
 void appendDetectedMarkers(
+    const cv::Mat& gray,
     const std::vector<std::vector<cv::Point2f>>& marker_corners,
     const std::vector<int>& ids,
     const cv::Size& frame_size,
@@ -196,6 +206,12 @@ void appendDetectedMarkers(
         const auto marker = makeMarkerObservation(ids[marker_index], marker_corners[marker_index]);
         if (isLikelyPartialLiveMarker(marker, frame_size)) {
             partial_markers.push_back(marker);
+            continue;
+        }
+        // Contrast/aspect gate on the primary path: rejects bright quads the
+        // detector hallucinates on grass texture and grid crossings while
+        // never size-limiting a genuine (possibly frame-filling) marker.
+        if (!markerContrastLooksPlausible(gray, marker_corners[marker_index])) {
             continue;
         }
         appendMarkerIfUnique(result, marker);
@@ -228,6 +244,32 @@ double darkRatioInRect(const cv::Mat& gray, const cv::Rect& rect)
     return cv::countNonZero(dark) / static_cast<double>(std::max(1, clipped.area()));
 }
 
+// Aspect + dark-content check without any size band. Safe for the primary
+// detector path: it rejects bright grass/grid-line quads (dark ratio < 0.35)
+// but never rejects a genuine marker for being large in frame (the vertiport
+// marker fills most of the image at hover altitude).
+bool markerContrastLooksPlausible(
+    const cv::Mat& gray,
+    const std::vector<cv::Point2f>& source_corners)
+{
+    const cv::Rect2f bounds = boundingRectForCorners(source_corners);
+    if (bounds.width <= 0.0f || bounds.height <= 0.0f) {
+        return false;
+    }
+    const float side_ratio = bounds.width / bounds.height;
+    if (side_ratio < 0.65f || side_ratio > 1.55f) {
+        return false;
+    }
+    const float min_side = std::min(bounds.width, bounds.height);
+    const int pad = std::max(1, static_cast<int>(std::lround(min_side * 0.08f)));
+    const cv::Rect rect(
+        static_cast<int>(std::floor(bounds.x)) - pad,
+        static_cast<int>(std::floor(bounds.y)) - pad,
+        static_cast<int>(std::ceil(bounds.width)) + pad * 2,
+        static_cast<int>(std::ceil(bounds.height)) + pad * 2);
+    return darkRatioInRect(gray, rect) >= 0.35;
+}
+
 bool markerShapeLooksPlausible(
     const cv::Mat& gray,
     const std::vector<cv::Point2f>& source_corners)
@@ -237,7 +279,6 @@ bool markerShapeLooksPlausible(
         return false;
     }
 
-    const float side_ratio = bounds.width / bounds.height;
     const float min_side = std::min(bounds.width, bounds.height);
     const float max_side = std::max(bounds.width, bounds.height);
     const float frame_min = static_cast<float>(std::max(1, std::min(gray.cols, gray.rows)));
@@ -246,19 +287,12 @@ bool markerShapeLooksPlausible(
         ? kLiveMinPlausibleMarkerSideRatio
         : kRecordedMinPlausibleMarkerSideRatio;
     const float max_side_ratio = live_frame ? 0.42f : 0.36f;
-    if (side_ratio < 0.65f || side_ratio > 1.55f ||
-        min_side < std::max(16.0f, frame_min * min_side_ratio) ||
+    if (min_side < std::max(16.0f, frame_min * min_side_ratio) ||
         max_side > frame_min * max_side_ratio) {
         return false;
     }
 
-    const int pad = std::max(1, static_cast<int>(std::lround(min_side * 0.08f)));
-    const cv::Rect rect(
-        static_cast<int>(std::floor(bounds.x)) - pad,
-        static_cast<int>(std::floor(bounds.y)) - pad,
-        static_cast<int>(std::ceil(bounds.width)) + pad * 2,
-        static_cast<int>(std::ceil(bounds.height)) + pad * 2);
-    return darkRatioInRect(gray, rect) >= 0.35;
+    return markerContrastLooksPlausible(gray, source_corners);
 }
 
 bool shouldRunFullFallback(
@@ -427,6 +461,9 @@ void appendTemplateFallbackMarker(
         cv::Point2f(static_cast<float>(best_match.rect.x + best_match.rect.width), static_cast<float>(best_match.rect.y + best_match.rect.height)),
         cv::Point2f(static_cast<float>(best_match.rect.x), static_cast<float>(best_match.rect.y + best_match.rect.height)),
     };
+    if (!markerContrastLooksPlausible(gray, corners)) {
+        return;
+    }
     appendMarkerIfUnique(result, makeMarkerObservation(best_match.id, corners));
 }
 
@@ -754,9 +791,12 @@ VisionResult ArucoDetector::detect(
     detector.detectMarkers(gray, marker_corners, ids);
 
     std::vector<MarkerObservation> partial_markers;
-    appendDetectedMarkers(marker_corners, ids, image.size(), partial_markers, result);
+    appendDetectedMarkers(gray, marker_corners, ids, image.size(), partial_markers, result);
 
     if (config_.roi_fallback_enabled && (!partial_markers.empty() || result.markers.empty())) {
+        // Targeted fallback only: re-detect around actual partial detections.
+        // The blind bright-blob sweep and the template matcher are the main
+        // false-positive sources on grass texture, so they are opt-in.
         if (!partial_markers.empty()) {
             appendTargetedFallbackMarkers(
                 image,
@@ -767,18 +807,21 @@ VisionResult ArucoDetector::detect(
                 result);
         }
         if (result.markers.empty() && shouldRunFullFallback(config_, frame_seq, image.size())) {
-            const int fallback_max_rois = isLiveFrameSize(image.size())
-                ? config_.full_fallback_max_rois
-                : config_.fallback_max_rois;
-            appendRoiFallbackMarkers(
-                image,
-                gray,
-                detector,
-                config_.fallback_max_components,
-                fallback_max_rois,
-                !isLiveFrameSize(image.size()),
-                result);
-            if (result.markers.empty() && isLiveFrameSize(image.size())) {
+            if (config_.bright_roi_fallback_enabled) {
+                const int fallback_max_rois = isLiveFrameSize(image.size())
+                    ? config_.full_fallback_max_rois
+                    : config_.fallback_max_rois;
+                appendRoiFallbackMarkers(
+                    image,
+                    gray,
+                    detector,
+                    config_.fallback_max_components,
+                    fallback_max_rois,
+                    !isLiveFrameSize(image.size()),
+                    result);
+            }
+            if (config_.template_fallback_enabled &&
+                result.markers.empty() && isLiveFrameSize(image.size())) {
                 appendTemplateFallbackMarker(gray, config_.dictionary, result);
             }
         }

@@ -240,23 +240,18 @@ if(BUILD_TOOLS)
         target_link_libraries(vision_debug_node PRIVATE onboard_core onboard_video onboard_vision)
 
         if(TARGET onboard_autopilot)
-            foreach(runtime
-                astroquad-onboard
-                grid_mission_node
+            # grid_mission_node (byte-identical compatibility alias) was
+            # removed 2026-07; astroquad-onboard is the single mission runtime.
+            add_executable(astroquad-onboard
+                src/main.cpp
+                src/app/AstroquadOnboardApp.cpp
+                src/app/GcsTelemetryPublisher.cpp
             )
-                add_executable(${runtime}
-                    src/main.cpp
-                    src/app/AstroquadOnboardApp.cpp
-                    src/app/GcsTelemetryPublisher.cpp
-                )
-                target_include_directories(${runtime} PRIVATE src)
-                target_link_libraries(${runtime} PRIVATE
-                    onboard_core onboard_autopilot onboard_video onboard_vision)
-            endforeach()
+            target_include_directories(astroquad-onboard PRIVATE src)
+            target_link_libraries(astroquad-onboard PRIVATE
+                onboard_core onboard_autopilot onboard_video onboard_vision)
             target_compile_definitions(astroquad-onboard PRIVATE
                 ONBOARD_PROGRAM_NAME="astroquad-onboard")
-            target_compile_definitions(grid_mission_node PRIVATE
-                ONBOARD_PROGRAM_NAME="grid_mission_node")
         endif()
     else()
         message(WARNING "OpenCV with aruco was not found; camera_preview, aruco_detector_tester, and vision_debug_node will not be built.")

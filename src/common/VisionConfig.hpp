@@ -6,28 +6,31 @@ namespace onboard::common {
 
 struct CameraConfig {
     int device = 0;
-    int width = 960;
-    int height = 720;
+    // Raspberry Pi Global Shutter Camera (IMX296 mono): single native
+    // 1456x1088 mode, fixed-focus CS-mount lens — all focus/AWB/chroma
+    // controls default to inert so no unsupported rpicam flags are emitted.
+    int width = 1456;
+    int height = 1088;
     int fps = 12;
     int jpeg_quality = 45;
-    std::string sensor_model = "imx519";
+    std::string sensor_model = "imx296";
     std::string codec = "mjpeg";
     std::string mode;
-    std::string autofocus_mode = "manual";
-    std::string autofocus_range = "normal";
-    std::string autofocus_speed = "normal";
+    std::string autofocus_mode;
+    std::string autofocus_range;
+    std::string autofocus_speed;
     std::string autofocus_window;
-    double lens_position = 0.67;
+    double lens_position = -1.0;
     int focus_absolute = -1;
-    std::string focus_device = "/dev/v4l-subdev1";
+    std::string focus_device;
     std::string exposure = "sport";
     int shutter_us = 0;
     double gain = 0.0;
     double ev = 0.0;
-    std::string awb = "auto";
+    std::string awb;
     std::string awbgains;
     std::string metering;
-    std::string denoise = "cdn_fast";
+    std::string denoise;
     double sharpness = 0.0;
     double contrast = 0.0;
     double brightness = 0.0;
@@ -66,7 +69,15 @@ struct ArucoConfig {
     int adaptive_thresh_win_size_min = 3;
     int adaptive_thresh_win_size_max = 23;
     int adaptive_thresh_win_size_step = 10;
+    // Targeted re-detection around partial primary detections. Seeded by a
+    // real (partial) marker, so comparatively safe — stays on by default.
     bool roi_fallback_enabled = true;
+    // Blind bright-blob ROI sweep and synthetic-template center matcher.
+    // Both hallucinate markers on grass texture (weak accept gates), so they
+    // are OPT-IN: enable only if the real-field corpus shows the primary
+    // detector missing genuine markers.
+    bool bright_roi_fallback_enabled = false;
+    bool template_fallback_enabled = false;
     int detect_interval_frames = 3;
     int fallback_max_components = 12;
     int fallback_max_rois = 120;
@@ -118,6 +129,11 @@ struct LineConfig {
     double intersection_threshold = 0.8;
     bool marker_mask_enabled = true;
     bool marker_mask_detect_candidates = true;
+    // Marker occlusion polygons are scaled about their centroid so the white
+    // pad / quiet zone AROUND the marker is erased from the line mask too,
+    // not just the marker body (real pad ~0.6m vs 0.5m marker => >=1.2;
+    // extra margin covers stabilizer-held stale corners).
+    double marker_occlusion_scale = 1.7;
 };
 
 struct IntersectionDecisionConfig {

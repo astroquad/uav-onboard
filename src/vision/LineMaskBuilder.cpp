@@ -246,12 +246,14 @@ cv::Point markerCornerToWorkPoint(const Point2f& point, const LineMaskGeometry& 
 void addMarkerPolygonOccluders(
     cv::Mat& occlusion_mask,
     const std::vector<MarkerObservation>& markers,
-    const LineMaskGeometry& geometry)
+    const LineMaskGeometry& geometry,
+    double occlusion_scale)
 {
     if (markers.empty() || occlusion_mask.empty()) {
         return;
     }
 
+    const double scale = std::max(1.0, occlusion_scale);
     for (const auto& marker : markers) {
         if (marker.id < 0) {
             continue;
@@ -260,6 +262,23 @@ void addMarkerPolygonOccluders(
         polygon.reserve(marker.corners_px.size());
         for (const auto& corner : marker.corners_px) {
             polygon.push_back(markerCornerToWorkPoint(corner, geometry));
+        }
+        // Expand the polygon about its centroid: the marker sits on a white
+        // pad / quiet zone larger than the marker itself, and the un-erased
+        // pad ring otherwise survives as false line/intersection contours.
+        if (scale > 1.0 && !polygon.empty()) {
+            double cx = 0.0;
+            double cy = 0.0;
+            for (const auto& p : polygon) {
+                cx += p.x;
+                cy += p.y;
+            }
+            cx /= static_cast<double>(polygon.size());
+            cy /= static_cast<double>(polygon.size());
+            for (auto& p : polygon) {
+                p.x = static_cast<int>(std::lround(cx + (p.x - cx) * scale));
+                p.y = static_cast<int>(std::lround(cy + (p.y - cy) * scale));
+            }
         }
         const std::vector<std::vector<cv::Point>> polygons {polygon};
         cv::fillPoly(occlusion_mask, polygons, cv::Scalar(255), cv::LINE_8);
@@ -342,7 +361,8 @@ cv::Mat buildMarkerOcclusionMask(
     const cv::Mat& hsv,
     const LineMaskGeometry& geometry,
     const std::vector<MarkerObservation>& markers,
-    bool detect_marker_like_occluders)
+    bool detect_marker_like_occluders,
+    double occlusion_scale)
 {
     cv::Mat occlusion_mask(
         geometry.work_height,
@@ -350,7 +370,7 @@ cv::Mat buildMarkerOcclusionMask(
         CV_8UC1,
         cv::Scalar(0));
 
-    addMarkerPolygonOccluders(occlusion_mask, markers, geometry);
+    addMarkerPolygonOccluders(occlusion_mask, markers, geometry, occlusion_scale);
     if (detect_marker_like_occluders) {
         addMarkerLikeSquareOccluders(occlusion_mask, work_image, gray, hsv);
     }
@@ -452,10 +472,18 @@ LineMaskFrame LineMaskBuilder::build(
     const bool use_local_contrast = usesLocalContrast(config_.mask_strategy);
     const bool use_white_fill = usesWhiteFill(config_.mask_strategy);
     const bool use_dark_fill = usesDarkFill(config_.mask_strategy);
+    // Polygon occlusion from actually-detected markers applies in every
+    // polarity mode (the dark marker body pollutes dark masks exactly like
+    // the white pad pollutes light masks). Only the heuristic marker-like
+    // candidate detector stays disabled in dark_on_light, where dark line
+    // junctions could be misread as marker squares.
+    const bool marker_candidates_active =
+        detect_marker_like_occluders &&
+        config_.marker_mask_detect_candidates &&
+        config_.mode != "dark_on_light";
     const bool marker_mask_active =
         config_.marker_mask_enabled &&
-        config_.mode != "dark_on_light" &&
-        (!markers.empty() || (detect_marker_like_occluders && config_.marker_mask_detect_candidates));
+        (!markers.empty() || marker_candidates_active);
 
     // Lazily compute HSV once and share between absolute-color masks and the
     // marker-like dark detector. In auto mode plus marker masking this saved
@@ -477,7 +505,8 @@ LineMaskFrame LineMaskBuilder::build(
             ensure_hsv(),
             geometry,
             markers,
-            detect_marker_like_occluders && config_.marker_mask_detect_candidates);
+            marker_candidates_active,
+            config_.marker_occlusion_scale);
         if (!output.marker_occlusion_mask.empty()) {
             cv::Mat labels;
             output.marker_occlusion_count = cv::connectedComponents(
@@ -504,6 +533,7 @@ LineMaskFrame LineMaskBuilder::build(
                 cv::Mat contrast = localContrastMask(gray, false, config_);
                 cv::bitwise_or(mask, contrast, mask);
             }
+            eraseMarkerOcclusion(mask, output.marker_occlusion_mask);
             fillDarkMask(mask, config_, geometry);
             clearThinBorderArtifacts(mask);
             return mask;
@@ -516,9 +546,9 @@ LineMaskFrame LineMaskBuilder::build(
     const auto add_mask = [&](bool light_line) {
         LineMaskCandidate candidate;
         candidate.mask = make_mask(light_line);
-        if (light_line) {
-            eraseMarkerOcclusion(candidate.mask, output.marker_occlusion_mask);
-        }
+        // Both polarities: the dark marker body is dark-mask content just as
+        // the white pad is light-mask content.
+        eraseMarkerOcclusion(candidate.mask, output.marker_occlusion_mask);
         candidate.polarity = light_line ? LinePolarity::LightOnDark : LinePolarity::DarkOnLight;
         cleanMask(candidate.mask, config_, geometry);
         output.masks.push_back(std::move(candidate));

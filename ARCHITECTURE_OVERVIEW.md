@@ -17,7 +17,7 @@
 ```text
                               ┌──────────────────────────────────────────┐
                               │              astroquad-onboard            │
-                              │     (Raspberry Pi 4에서 도는 프로세스)     │
+                              │     (Raspberry Pi 5에서 도는 프로세스)     │
                               └──────────────────────────────────────────┘
 
   ┌───────────┐   JPEG 프레임      ┌───────────────────┐    VisionResult
@@ -302,3 +302,35 @@ frame_source->close()
 
 이 순서가 머릿속에 들어오면, 각 모듈 헤더 파일을 펼쳐 세부를 읽기 시작해도
 어디쯤에서 호출되는 코드인지 잃지 않을 수 있다.
+
+---
+
+## 아키텍처 결정 기록 (2026-07)
+
+### 제어 경로: GUIDED body-frame velocity 단일화
+
+유일하게 지원되는 제어 경로는 **GUIDED 모드 + `SET_POSITION_TARGET_LOCAL_NED`
+(BODY_NED, 20Hz)** 이다. 과거 실험했던 ALT_HOLD + `RC_CHANNELS_OVERRIDE`
+백엔드(`tools/line_follow_node.cpp`)는 공식 폐기됐다:
+
+- EKF 위치 안정화를 우회해 광류 홀드의 요동을 그대로 물려받는다.
+- RC 페일세이프 및 ELRS RC 경로와 충돌한다.
+- 기체별 수동 PWM 상수(`takeoff_throttle_pwm` 등)에 의존하며, 해당 상수는
+  구 1.5kg/3S 기체 기준이라 현 2.1kg/4S 기체에서 무효다.
+
+### 스택 마이그레이션 판정 (PX4 / ROS 2 / Behavior Tree)
+
+2026-07 검토 결과 셋 모두 **채택하지 않는다**. 근거:
+
+- **PX4**: 이 임무에서 결정적 이점이 없고, 현장에서 이미 검증된
+  ArduPilot EK3 + MTF-01(MAVLink) 조합과 파라미터 검증 도구를 폐기하는
+  비용만 발생한다.
+- **ROS 2**: ROS가 제공하는 핵심 가치(리플레이, 모듈 경계)는 이미 자체
+  구현돼 있고(`replay_vision` 등, FrameSource/VisionProcessor/GridMission/
+  Adapter 경계), 메시지 버스가 필요한 두 번째 노드가 존재하지 않는다.
+- **BT-in-FSM**: SITL 검증이 끝난 상태머신을 재작성하는 것보다 상태
+  핸들러 추출(파일 분할)이 같은 문제(크기)를 더 싸게 해결한다.
+
+다음 조건이 생기면 재검토한다: 멀티기체/군집 규정, 필수 VIO/SLAM(그리드
+없는 특징 부족 지면), 동적 재계획이 필요한 50+ 상태 임무, 대회 압박 없는
+3개월 이상의 여유, ROS 표준 인터페이스가 필요한 팀 확장.

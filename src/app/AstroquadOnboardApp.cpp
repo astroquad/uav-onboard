@@ -1,8 +1,5 @@
 // astroquad-onboard — composition root for the full grid snake mission.
 //
-// grid_mission_node is kept as a compatibility target that builds this same
-// source while the team transitions scripts and habits to astroquad-onboard.
-//
 // Composition root that wires VisionRuntime + AutopilotMavlinkAdapter +
 // GridMission state machine + GridControlMapper. Reuses line_follow_node
 // helpers in spirit but lives in its own translation unit so the MVP
@@ -654,6 +651,12 @@ void loadConfigs(const Options& opt, Configs& cfg)
             const double yaw_deg = gm["vertiport_yaw_tolerance_deg"].value_or(5.0);
             g.vertiport_yaw_tolerance_rad = yaw_deg * M_PI / 180.0;
         }
+        // Controller defaults ship in mission.toml. Precedence:
+        // compiled defaults < mission.toml < runtime profile < CLI.
+        applyLineControllerConfig(m["line_controller"], cfg);
+        applyAltitudeHoldConfig(m["altitude_hold"], cfg);
+        cfg.controller.forward_mps =
+            m["line_follow"]["forward_mps"].value_or(cfg.controller.forward_mps);
     } catch (const toml::parse_error& e) {
         std::cerr << "[config] mission.toml parse warning: " << e.what() << "\n";
     }
@@ -676,17 +679,6 @@ void loadConfigs(const Options& opt, Configs& cfg)
 
     cfg.altitude.vertiport_altitude_m = cfg.mission.vertiport_altitude_m;
     cfg.altitude.cruise_altitude_m = cfg.mission.cruise_altitude_m;
-
-    // Reasonable controller defaults for grid mission (lower yaw rate to settle in turns)
-    cfg.controller.forward_mps = 0.25;
-    cfg.controller.offset_kp = 0.35;
-    cfg.controller.angle_yaw_kp = 0.5;
-    cfg.controller.offset_yaw_kp = 0.0;
-    cfg.controller.max_lateral_mps = 0.35;
-    cfg.controller.max_yaw_rate_rad_s = 0.6;
-    cfg.controller.output_ema_alpha = 0.4;
-    cfg.controller.altitude_kp = 0.4;
-    cfg.controller.max_vz_down_mps = 0.35;
 
     // Marker hover settings from mission.toml apply before runtime overrides.
     applyMarkerHoverConfigFile(joinPath(opt.config_dir, "mission.toml"), cfg);
@@ -1388,14 +1380,22 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         min.node_event = node_event;
         min.land_requested = false;
 
-        // Safety watchdog. The grid mission flies long blind-forward / yaw-turn
-        // phases with no line in view, so the line-lost check is disabled here
-        // (line_detected held true). The mode-from-GUIDED check is only enforced
-        // while the mission still expects GUIDED: skip it before commanding
-        // (no_arm) and once the mission has entered a landing/terminal state, so
-        // the controller switching to LAND at mission end is not flagged as a
-        // takeover. Any Abort/Land routes through abort_requested into the same
-        // centralized EMERGENCY_LAND path GridMission already uses.
+        // Safety watchdog. The line-lost timeout is DELIBERATELY not enforced
+        // for the grid mission (line_detected held true): hops fly as
+        // fwd_blind by design — yaw locked, forward velocity blind, lateral
+        // centering only opportunistic — so multi-second no-line windows are
+        // normal, including right after leaving a node. (Verified 2026-07 in
+        // SITL: enforcing a 2s line-lost timeout in SNAKE_FORWARD
+        // deterministically aborted the first hop.) Line loss is instead
+        // bounded by the hop-distance failsafe (hop_max_distance_m) and the
+        // per-state timeouts inside GridMission; the line-lost timeout stays
+        // meaningful only for the continuous line-follow mission.
+        // The mode-from-GUIDED check is only enforced while the mission still
+        // expects GUIDED: skip it before commanding (no_arm) and once the
+        // mission has entered a landing/terminal state, so the controller
+        // switching to LAND at mission end is not flagged as a takeover. Any
+        // Abort/Land routes through abort_requested into the same centralized
+        // EMERGENCY_LAND path GridMission already uses.
         const bool mission_expects_guided =
             !opt.no_arm &&
             cur_state != omission::GridState::Idle &&

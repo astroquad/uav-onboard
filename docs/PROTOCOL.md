@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.8
-Last updated: 2026-05-21
+Version: v1.9
+Last updated: 2026-07-04
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 `protocol_version` in JSON remains integer `1`. The document version changes
@@ -12,7 +12,7 @@ when fields or operating rules are clarified.
 | Channel | Direction | Transport | Default port | Status |
 |---|---|---|---:|---|
 | Telemetry | onboard -> GCS | UDP JSON | 14550 | implemented |
-| Command | GCS -> onboard | TCP JSON | 14551 | planned |
+| Command | GCS -> onboard | TCP JSON | 14551 | documented only — no onboard receiver exists; future work |
 | Video stream | onboard -> GCS | UDP MJPEG chunks | 5600 | implemented |
 | GCS discovery | GCS -> LAN broadcast | UDP text beacon | 5601 | implemented |
 
@@ -31,9 +31,8 @@ not block onboard mission logic.
   continue processing the latest camera frame.
 - GCS overlay rendering uses only onboard metadata. GCS does not run marker,
   line, or intersection detection locally.
-- `vision.grid_node` is an event-style field, but `astroquad-onboard` and its
-  `grid_mission_node` compatibility target resend the latest committed node
-  every frame for UDP-loss tolerance. GCS deduplicates by node id and coordinate.
+- `vision.grid_node` is an event-style field, but `astroquad-onboard` resends
+  the latest committed node every frame for UDP-loss tolerance. GCS deduplicates by node id and coordinate.
 - `vision.drone_position` carries fractional progress from the last committed
   grid node. The current GCS parser accepts it; the current ASCII grid map still
   renders the heading arrow at the latest committed node.
@@ -68,7 +67,7 @@ Required top-level fields:
     "elapsed_ms": 0
   },
   "system": {
-    "board_model": "Raspberry Pi 4 Model B Rev 1.5",
+    "board_model": "Raspberry Pi 5 Model B Rev 1.0",
     "os_release": "Raspberry Pi OS GNU/Linux 12 (bookworm)",
     "uptime_s": 1234.0,
     "cpu_temp_c": 58.2,
@@ -80,20 +79,20 @@ Required top-level fields:
   },
   "camera": {
     "status": "streaming",
-    "sensor_model": "imx519",
+    "sensor_model": "imx296",
     "camera_index": 0,
-    "width": 960,
-    "height": 720,
+    "width": 1456,
+    "height": 1088,
     "fps": 12.0,
     "configured_fps": 12.0,
     "measured_capture_fps": 11.8,
     "frame_seq": 358,
-    "autofocus_mode": "manual",
+    "autofocus_mode": "",
     "lens_position": -1.0,
     "exposure_mode": "sport",
     "shutter_us": 0,
     "gain": 0.0,
-    "awb": "auto"
+    "awb": ""
   },
   "vision": {
     "line_detected": true,
@@ -261,7 +260,7 @@ Required top-level fields:
 
 The serializer supports a richer `mission` object, but the current
 `GcsTelemetryPublisher` path used by `vision_debug_node`, `line_follow_node`,
-`astroquad-onboard`, and `grid_mission_node` does not yet populate it. For
+and `astroquad-onboard` does not yet populate it. For
 those executables, the console log and `debug.note` identify the active
 runtime, while GCS mission state remains minimal.
 
@@ -310,7 +309,7 @@ Reserved richer shape:
 | `vision.line.contour_px` | Simplified selected contour. Intersections may appear as cross-shaped contours. |
 | `vision.intersection.*` | Stabilized per-frame topology from the line mask. `straight` is valid but not a turn node. |
 | `vision.intersection_decision.*` | Sliding-window decision layer over intersection classification. It emits node/turn readiness hints, not autopilot commands. |
-| `vision.grid_node` | Latest committed grid node event. In `astroquad-onboard`/`grid_mission_node`, this is intentionally resent every frame. |
+| `vision.grid_node` | Latest committed grid node event. In `astroquad-onboard`, this is intentionally resent every frame. |
 | `vision.grid_node.local_coord` | Local exploration coordinates only; official competition origin conversion is not implemented. |
 | `vision.drone_position` | Fractional progress from the last committed node, derived from short-window local estimate displacement. |
 | `vision.markers[]` | ArUco observations in the current frame. Marker commitment/stability is onboard mission logic, not a GCS decision. |
@@ -369,9 +368,8 @@ Current boundaries:
 
 - `line_follow_node` supports SITL UDP and guarded real ArduPilot serial paths.
 - `mavlink_probe` and `mavlink_motor_test` are no-arm/props-removed bench tools.
-- `astroquad-onboard` supports SITL UDP and guarded real ArduPilot serial paths;
-  `grid_mission_node` builds the same entrypoint as a compatibility/staging
-  alias. Real arm/takeoff requires `--allow-arm-takeoff`.
+- `astroquad-onboard` supports SITL UDP and guarded real ArduPilot serial paths.
+  Real arm/takeoff requires `--allow-arm-takeoff`.
 - Command channel fields for GCS-originated mission control remain planned.
 
 ## 8. Command Channel
@@ -394,7 +392,6 @@ receive a `CMD_ACK` telemetry response when implemented.
 | Executable | Repo | Purpose |
 |---|---|---|
 | `astroquad-onboard` | onboard | Current grid arena snake-mission SITL and guarded serial runtime. |
-| `grid_mission_node` | onboard | Compatibility/staging alias for `astroquad-onboard`. |
 | `uav-onboard-telem` | onboard | Basic telemetry bring-up sender / development probe. |
 | `vision_debug_node` | onboard | Camera/vision telemetry and optional raw MJPEG debug video. |
 | `line_follow_node` | onboard | Short line-follow mission staging for SITL and guarded ArduPilot serial tests. |
@@ -419,3 +416,4 @@ receive a `CMD_ACK` telemetry response when implemented.
 | v1.7 | 2026-05-01 | Added intersection decision and local grid-node telemetry. |
 | v1.7 | 2026-05-14 | No schema change; documented runtime source profiles. |
 | v1.8 | 2026-05-21 | Added `vision.drone_position`, clarified committed-node resend semantics, documented grid mission staging and current mission telemetry limits. |
+| v1.9 | 2026-07-04 | No schema change; hardware examples updated to the upgraded platform (Raspberry Pi 5 + IMX296 mono global-shutter, frames grayscale end-to-end), command channel marked explicitly as documented-only/future work. |

@@ -69,7 +69,9 @@ bool RpicamFrameSource::read(Frame& frame)
         static_cast<int>(camera_frame.jpeg_data.size()),
         CV_8UC1,
         camera_frame.jpeg_data.data());
-    cv::Mat image = cv::imdecode(encoded, cv::IMREAD_COLOR);
+    // IMX296 is a mono sensor: decode the luma plane directly instead of
+    // expanding to BGR. All downstream detectors accept 1-channel frames.
+    cv::Mat image = cv::imdecode(encoded, cv::IMREAD_GRAYSCALE);
     if (image.empty()) {
         last_error_ = "failed to decode rpicam MJPEG frame";
         return false;

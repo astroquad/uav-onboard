@@ -60,12 +60,18 @@ VisionProcessingOutput VisionProcessor::process(
                 result.timestamp_ms);
             const auto aruco_finished = Clock::now();
             fresh_markers = aruco_result.markers;
-            marker_mask_input = fresh_markers;
             output.metrics.aruco_latency_ms = elapsedMs(aruco_started, aruco_finished);
         }
         result.markers = marker_stabilizer_.update(fresh_markers);
         if (marker_stabilizer_.ageFrames() <= aruco_interval) {
             marker_tracking_input = result.markers;
+        }
+        // Line-mask occlusion uses stabilizer-held markers so the pad stays
+        // erased on frames where ArUco is skipped (interval) and briefly
+        // after the marker leaves detection at the frame edge. The age bound
+        // keeps a stale polygon from erasing live line far from the pad.
+        if (marker_stabilizer_.ageFrames() <= aruco_interval * 2) {
+            marker_mask_input = result.markers;
         }
     }
 

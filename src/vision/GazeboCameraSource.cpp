@@ -51,9 +51,10 @@ bool convertImageMessage(const gz::msgs::Image& message, cv::Mat& image_bgr)
         conversion = cv::COLOR_BGRA2BGR;
         break;
     case gz::msgs::L_INT8:
+        // Keep mono frames single-channel so an L8 sim camera matches the
+        // real IMX296 grayscale path instead of masking it behind GRAY2BGR.
         channels = 1;
         type = CV_8UC1;
-        conversion = cv::COLOR_GRAY2BGR;
         break;
     default:
         return false;

@@ -6,7 +6,11 @@ vision = "rpicam"
 kind = "serial"
 
 [serial]
-device = "/dev/serial/by-id/usb-ArduPilot_fmuv2_260034001451373037353835-if00"
+# Pixhawk 6C Mini over USB (Pi 5 companion). BENCH-VERIFY: fill in from
+# `ls /dev/serial/by-id/` with the FC connected; keep in sync with
+# config/pixhawk6c_indoor_flow.expected.toml. The previous value was the
+# retired Pixhawk 1 (fmuv2) device.
+device = "/dev/serial/by-id/usb-ArduPilot_Pixhawk6C_CHANGE-ME-if00"
 baudrate = 115200
 
 [safety.timeouts]
@@ -50,8 +54,12 @@ duration_s = 60.0
 lost_timeout_s = 5.0
 
 [rc_override]
-# ArduPilot accepts RC_CHANNELS_OVERRIDE from the configured GCS system id.
-# 255 is the Mission Planner/default SYSID_MYGCS value.
+# DEPRECATED (2026-07): the ALT_HOLD + RC_CHANNELS_OVERRIDE control backend
+# is retired. It bypasses EKF position stabilization, conflicts with RC
+# failsafes, and every PWM constant below was hand-tuned for the previous
+# 1.5kg/3S/T2212-920KV airframe — invalid on the 2.1kg/4S S500 V2. The only
+# supported control path is GUIDED body-frame velocity setpoints. Kept for
+# reference until tools/line_follow_node.cpp is retired; do not fly with it.
 sender_system_id = 255
 arm_throttle_pwm = 1000
 throttle_hold_pwm = 1500

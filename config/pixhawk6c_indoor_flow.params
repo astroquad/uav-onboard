@@ -1,0 +1,109 @@
+# Astroquad Pixhawk 6C Mini indoor no-GPS optical-flow parameter target.
+#
+# Platform: Holybro S500 V2 / ~2.1 kg TOW / 4S (PT-B8000-FX35) /
+#           Sunnysky X2212 980KV + Tarot 9450 / GT-Drone 35A BLHeli_S OPTO /
+#           Pixhawk 6C Mini (fmuv6c) / MTF-01 optical flow + TOF rangefinder /
+#           Raspberry Pi 5 companion.
+# Supersedes config/ardupilot_serial_usb.params (Pixhawk 1 / fmuv2 bench file).
+#
+# Apply only after a no-arm mavlink_probe run confirms heartbeat and the
+# operator is ready to change autopilot parameters:
+#
+#   ./build/mavlink_probe --config config --target ardupilot_serial \
+#     --param-file config/pixhawk6c_indoor_flow.params
+#
+#   ./build/mavlink_probe --config config --target ardupilot_serial \
+#     --param-file config/pixhawk6c_indoor_flow.params \
+#     --apply-params --i-understand-this-writes-autopilot-params
+#
+# BENCH-VERIFY markers below flag values that depend on physical wiring or
+# venue measurements and must be confirmed before first flight.
+
+# ---------------------------------------------------------------- frame
+FRAME_CLASS = 1
+FRAME_TYPE = 1
+
+# ---------------------------------------------------------------- EKF3
+AHRS_EKF_TYPE = 3
+EK3_ENABLE = 1
+
+# No-GPS optical-flow EKF source set (same intent as SITL
+# sim/gazebo/params/indoor_flow_tfmini_sitl.parm):
+# POSXY=0: no horizontal position source.
+# VELXY=5: optical-flow horizontal velocity.
+# POSZ=2:  rangefinder height (EK3_RNG_USE_HGT below). If TOF over grass
+#          proves noisy on the bench, fall back to POSZ=1 (baro).
+# VELZ=0:  no vertical velocity source.
+# YAW=1:   compass yaw. BENCH-VERIFY: internal compass sits next to the 4S
+#          PDB/ESC wiring — run COMPASS_MOT, prefer an external compass on a
+#          mast, and re-calibrate at the venue (indoor steel distorts yaw).
+EK3_SRC1_POSXY = 0
+EK3_SRC1_VELXY = 5
+EK3_SRC1_POSZ = 2
+EK3_SRC1_VELZ = 0
+EK3_SRC1_YAW = 1
+EK3_RNG_USE_HGT = 70
+
+# No GPS fitted. (Param is GPS_TYPE on ArduCopter <=4.4, GPS1_TYPE on 4.5+.)
+GPS1_TYPE = 0
+
+# ------------------------------------------------- MTF-01 flow + rangefinder
+# MTF-01 in MAVLink (MAVLINK_APM) mode on TELEM1 = SERIAL1.
+# BENCH-VERIFY: adjust SERIALn to the physically used port.
+SERIAL1_PROTOCOL = 2
+SERIAL1_BAUD = 115
+FLOW_TYPE = 5
+EK3_FLOW_USE = 1
+# BENCH-VERIFY: set to the MTF-01 mounting yaw (0 = flow X axis forward).
+FLOW_ORIENT_YAW = 0
+# FLOW_FXSCALER / FLOW_FYSCALER stay 0 until the flow-calibration flight
+# (flight-test ladder rung 4).
+RNGFND1_TYPE = 10
+RNGFND1_ORIENT = 25
+RNGFND1_MIN_CM = 1
+RNGFND1_MAX_CM = 800
+RNGFND1_GNDCLEAR = 10
+WPNAV_RFND_USE = 1
+
+# ------------------------------------------------------------ RC (ELRS CRSF)
+# BETAFPV Nano 2400 RX / ExpressLRS CRSF on TELEM2 = SERIAL2 so RC_CHANNELS
+# is populated natively (bench gate: mavlink_probe must show rc count > 0;
+# the old MAVLink-forwarded RC path that forced --unsafe-assume-rc-present
+# is retired).
+# RC_PROTOCOLS=512 restricts detection to CRSF; RC_OPTIONS bit 13 enables
+# ELRS 420K baud on top of previously observed bits 5 and 8.
+SERIAL2_PROTOCOL = 23
+BRD_SER2_RTSCTS = 0
+RC_PROTOCOLS = 512
+RC_OPTIONS = 8480
+RSSI_TYPE = 3
+
+# ------------------------------------------------------------ battery (4S)
+# BENCH-VERIFY: monitor type/pins for the 6C Mini power module wiring
+# (BATT_MONITOR=4 = analog voltage+current, per the working old-frame setup).
+BATT_MONITOR = 4
+BATT_ARM_VOLT = 14.8
+BATT_LOW_VOLT = 14.0
+BATT_CRT_VOLT = 13.6
+# Indoors / GPS-denied: both failsafe actions LAND (never RTL without GPS).
+BATT_FS_LOW_ACT = 1
+BATT_FS_CRT_ACT = 1
+MOT_BAT_VOLT_MAX = 16.8
+MOT_BAT_VOLT_MIN = 13.2
+
+# ------------------------------------------------------------ motors/tuning
+# Standard PWM for BLHeli_S OPTO ESCs. BENCH-VERIFY spin values with props
+# off (mavlink_motor_test), then learn hover throttle in early hovers.
+MOT_PWM_MIN = 1000
+MOT_PWM_MAX = 2000
+MOT_HOVER_LEARN = 2
+# Gyro filter default (20 Hz) suits a 9450-prop 500-class frame; harmonic
+# notch tuning waits for the first hover logs (no ESC telemetry on OPTO).
+INS_GYRO_FILTER = 20
+
+# ------------------------------------------------------------ safety/arming
+# Full arming checks for flight (bench sessions may relax deliberately, but
+# never fly with ARMING_CHECK=0).
+ARMING_CHECK = 1
+# No physical safety switch fitted on this build (no GPS mast).
+BRD_SAFETY_DEFLT = 0

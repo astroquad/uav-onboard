@@ -1,3 +1,7 @@
+# SUPERSEDED (2026-07): this file targeted the retired Pixhawk 1 (fmuv2)
+# platform. Use config/pixhawk6c_indoor_flow.params for the current
+# Pixhawk 6C Mini / S500 V2 / 4S build. Kept for historical reference.
+#
 # Astroquad ArduPilot serial + MTF-01 USB bench parameter target.
 #
 # Apply only after a no-arm mavlink_probe run confirms heartbeat and the

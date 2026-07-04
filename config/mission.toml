@@ -131,6 +131,8 @@ max_vz_mps = 0.35
 deadband_m = 0.08
 
 [line_follow]
+# forward_mps is also the grid app's base line-follow forward speed
+# (cfg.controller.forward_mps); the other keys apply to the line mission only.
 forward_mps = 0.25
 center_error_norm = 0.0
 line_angle_deg = 90.0
@@ -139,6 +141,10 @@ duration_s = 60.0
 lost_timeout_s = 3.0
 
 [line_controller]
+# Shipped controller defaults for BOTH the grid mission app and the line
+# mission. Precedence: compiled defaults < mission.toml < runtime profile
+# (runtime.sitl*.toml / runtime.ardupilot_serial.toml) < CLI. Field tuning of
+# a specific target belongs in that target's runtime profile.
 # Lateral-velocity P-gain on normalized horizontal center error.
 offset_kp = 0.35
 # Yaw-rate P-gain on detected-vs-desired line angle error.

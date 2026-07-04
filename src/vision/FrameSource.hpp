@@ -11,6 +11,8 @@
 namespace onboard::vision {
 
 struct Frame {
+    // 3-channel BGR (Gazebo RGB camera, fake source) or 1-channel grayscale
+    // (rpicam IMX296 mono, Gazebo L8 camera). Detectors handle both.
     cv::Mat image_bgr;
     std::uint32_t frame_id = 0;
     std::int64_t timestamp_ms = 0;

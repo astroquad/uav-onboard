@@ -19,4 +19,8 @@ ekf_pos_horiz_variance_max = 1.0
 ekf_velocity_variance_max = 1.0
 
 [battery]
-low_voltage_v = 10.5
+# 4S LiPo (PT-B8000-FX35, 14.8V nominal): 3.5V/cell advisory floor.
+# Not enforced by onboard code today — hard limits live in the FC params
+# (BATT_LOW_VOLT / BATT_CRT_VOLT in config/pixhawk6c_indoor_flow.params).
+# The previous 10.5 was a 3S-era value.
+low_voltage_v = 14.0

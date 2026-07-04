@@ -2,8 +2,21 @@
 
 Onboard software for the Astroquad indoor/grid UAV search mission.
 
-Current target hardware is Raspberry Pi 4 + IMX519 CSI camera + an
-ArduPilot-compatible serial flight controller.
+Current target hardware (2026-07 upgrade, ~2.1 kg TOW):
+
+- Airframe: Holybro S500 V2 frame kit + companion mounting plate
+- Flight controller: Holybro Pixhawk 6C Mini (ArduCopter)
+- Companion: Raspberry Pi 5 (4 GB) with Active Cooler
+- Camera: Raspberry Pi Global Shutter Camera (IMX296 mono, fixed-focus CS-mount)
+- Optical flow / rangefinder: MTF-01 (MAVLink mode)
+- Propulsion: Sunnysky X2212 980KV (CW/CCW) + Tarot 9450 folding props +
+  GT-Drone 35A BLHeli_S OPTO ESCs
+- Power: 4S LiPo (Pollyttronics PT-B8000-FX35, XT90S) + Matek BEC12S-PRO
+- RC: ExpressLRS CRSF (BETAFPV Nano 2400 RX)
+
+The previous platform (Raspberry Pi 4 + IMX519 + Pixhawk 1/fmuv2, 3S/1.5 kg)
+is retired; configs referencing it are marked SUPERSEDED. The FC parameter
+target for this build is `config/pixhawk6c_indoor_flow.params`.
 The codebase now has three practical runtime layers:
 
 - `vision_debug_node`: camera/vision/GCS telemetry bring-up.
@@ -12,9 +25,9 @@ The codebase now has three practical runtime layers:
 - `astroquad-onboard`: current grid-arena snake mission runtime for SITL and
   guarded ArduPilot serial tests.
 
-`grid_mission_node` remains as a compatibility/staging alias that builds the
-same mission entrypoint. The old telemetry bring-up sender is now
-`uav-onboard-telem`.
+`grid_mission_node`, the byte-identical compatibility alias, was removed in
+2026-07 — `astroquad-onboard` is the single mission runtime. The old
+telemetry bring-up sender is now `uav-onboard-telem`.
 
 ## Layout
 
@@ -32,7 +45,6 @@ same mission entrypoint. The old telemetry bring-up sender is now
 | Executable | Role |
 |---|---|
 | `astroquad-onboard` | Current full grid-arena snake mission runtime. Supports SITL UDP and guarded ArduPilot serial paths. |
-| `grid_mission_node` | Compatibility/staging alias for `astroquad-onboard`. |
 | `uav-onboard-telem` | Basic telemetry sender / development probe. |
 | `vision_debug_node` | Camera source + ArUco/line/intersection processing + GCS telemetry + optional MJPEG video. |
 | `line_follow_node` | Auto takeoff, short line follow, marker hover/landing staging. Supports SITL UDP and guarded ArduPilot serial paths. |
@@ -66,15 +78,14 @@ Current camera defaults live in `config/vision.toml`:
 
 ```toml
 [camera]
-sensor_model = "imx519"
-width = 960
-height = 720
+sensor_model = "imx296"
+width = 1456
+height = 1088
 fps = 12
-mode = "2328:1748:10:P"
 jpeg_quality = 45
-focus_absolute = 1984
-focus_device = "/dev/v4l-subdev1"
 exposure = "sport"
+shutter_us = 0    # lock at the venue (see vision.toml comments)
+gain = 0.0
 
 [debug_video]
 enabled = false
@@ -83,18 +94,19 @@ jpeg_quality = 40
 chunk_pacing_us = 150
 ```
 
+The IMX296 is a mono global-shutter sensor with a fixed-focus CS-mount lens:
+there are no autofocus/AWB controls, frames are decoded grayscale end-to-end,
+and the lens choice sets the field of view — measure the mounted lens FOV
+before tuning altitude- or pixel-width-dependent vision parameters.
+
 Validate the camera path before running mission code:
 
 ```bash
 rpicam-hello --version
 rpicam-hello --list-cameras
-rpicam-still -t 1000 --nopreview -o test_data/images/imx519_smoke.jpg
-rpicam-vid -t 5000 --nopreview --codec mjpeg --width 960 --height 720 --framerate 12 -o /tmp/imx519_test.mjpeg
+rpicam-still -t 1000 --nopreview -o test_data/images/imx296_smoke.jpg
+rpicam-vid -t 5000 --nopreview --codec mjpeg --width 1456 --height 1088 --framerate 12 -o /tmp/imx296_test.mjpeg
 ```
-
-The current IMX519 setup uses the V4L2 focus motor path
-`camera.focus_absolute`/`camera.focus_device`; `--lens-position` may be ignored
-if libcamera reports no AF algorithm for the module.
 
 ## Astroquad GCS
 
@@ -108,7 +120,7 @@ Start `astroquad-gcs` on the laptop first, then run:
 Onboard sends raw camera JPEG only when `--video` is enabled. Marker boxes,
 line contours, intersection labels, and grid-map text are drawn by GCS from
 telemetry metadata.
-`astroquad-onboard`, `grid_mission_node`, `line_follow_node`, and
+`astroquad-onboard`, `line_follow_node`, and
 `vision_debug_node` all accept `--fps <n>` to override raw debug-video send
 FPS; the publisher clamps it to the configured camera FPS.
 

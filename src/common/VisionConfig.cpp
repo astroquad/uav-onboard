@@ -130,6 +130,10 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             aruco["adaptive_thresh_win_size_step"].value_or(config.aruco.adaptive_thresh_win_size_step);
         config.aruco.roi_fallback_enabled =
             aruco["roi_fallback_enabled"].value_or(config.aruco.roi_fallback_enabled);
+        config.aruco.bright_roi_fallback_enabled =
+            aruco["bright_roi_fallback_enabled"].value_or(config.aruco.bright_roi_fallback_enabled);
+        config.aruco.template_fallback_enabled =
+            aruco["template_fallback_enabled"].value_or(config.aruco.template_fallback_enabled);
         config.aruco.detect_interval_frames =
             aruco["detect_interval_frames"].value_or(config.aruco.detect_interval_frames);
         config.aruco.fallback_max_components =
@@ -203,6 +207,8 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             line["marker_mask_enabled"].value_or(config.line.marker_mask_enabled);
         config.line.marker_mask_detect_candidates =
             line["marker_mask_detect_candidates"].value_or(config.line.marker_mask_detect_candidates);
+        config.line.marker_occlusion_scale =
+            line["marker_occlusion_scale"].value_or(config.line.marker_occlusion_scale);
     }
 
     if (const auto decision = table["intersection_decision"]) {

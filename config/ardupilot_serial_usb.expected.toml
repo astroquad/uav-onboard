@@ -1,3 +1,6 @@
+# SUPERSEDED (2026-07): targeted the retired Pixhawk 1 (fmuv2). Use
+# config/pixhawk6c_indoor_flow.expected.toml for the current platform.
+#
 # ArduPilot serial USB bench gate expectations for Astroquad.
 # This file is checked by humans and mavlink_probe output; it is not applied
 # directly. Use ardupilot_serial_usb.params for parameter writes.

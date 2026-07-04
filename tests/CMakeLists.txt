@@ -123,3 +123,12 @@ if(TARGET onboard_autopilot)
     target_link_libraries(test_serial_mavlink_transport PRIVATE onboard_autopilot onboard_core)
     add_test(NAME serial_mavlink_transport COMMAND test_serial_mavlink_transport)
 endif()
+
+if(TARGET onboard_vision)
+    add_executable(test_line_mask_strategies
+        test_line_mask_strategies.cpp
+    )
+    target_include_directories(test_line_mask_strategies PRIVATE ../src)
+    target_link_libraries(test_line_mask_strategies PRIVATE onboard_vision onboard_core)
+    add_test(NAME line_mask_strategies COMMAND test_line_mask_strategies)
+endif()

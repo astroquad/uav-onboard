@@ -1,0 +1,84 @@
+# Pixhawk 6C Mini bench gate expectations for Astroquad.
+# This file is checked by humans and mavlink_probe output; it is not applied
+# directly. Use pixhawk6c_indoor_flow.params for parameter writes.
+# Supersedes ardupilot_serial_usb.expected.toml (Pixhawk 1 / fmuv2).
+
+[identity]
+sysid = 1
+firmware_family = "ArduCopter"
+board = "Holybro Pixhawk 6C Mini (fmuv6c)"
+frame = "Holybro S500 V2, ~2.1 kg TOW, 4S"
+frame_class = 1
+frame_type = 1
+
+[mavlink]
+# BENCH-VERIFY: fill in from `ls /dev/serial/by-id/` with the FC connected.
+# Pixhawk 6C over USB enumerates as usb-ArduPilot_Pixhawk6C_<serial>-if00.
+# Pi 5 note: GPIO UART device naming differs from Pi 4 (RP1); if using the
+# GPIO UART instead of USB, verify the /dev path on the Pi 5 itself.
+device = "/dev/serial/by-id/usb-ArduPilot_Pixhawk6C_CHANGE-ME-if00"
+baudrate = 115200
+
+[optical_flow]
+flow_type = 5
+ek3_flow_use = 1
+serial_port = "TELEM1 (SERIAL1), MAVLink2 @115200 — bench-verify wiring"
+
+[rangefinder]
+rngfnd1_type = 10
+rngfnd1_orient = 25
+rngfnd1_min_cm = 1
+rngfnd1_max_cm = 800
+
+[ekf3_no_gps_optical_flow]
+ahrs_ekf_type = 3
+ek3_enable = 1
+ek3_src1_posxy = 0
+ek3_src1_velxy = 5
+# Rangefinder height (matches the .params file; if TOF over grass is noisy
+# on the bench, both files move together to posz = 1 / baro).
+ek3_src1_posz = 2
+ek3_src1_velz = 0
+ek3_src1_yaw = 1
+ek3_rng_use_hgt = 70
+gps1_type = 0
+
+[telemetry_gate]
+heartbeat_required = true
+local_position_ned_required = true
+range_required = true
+optical_flow_required = true
+# ELRS CRSF on a UART must populate RC_CHANNELS natively (count > 0);
+# the --unsafe-assume-rc-present bypass is retired on this platform.
+rc_channels_required = true
+
+[rc_receiver]
+receiver_model = "BETAFPV Nano 2400 RX"
+protocol = "ExpressLRS CRSF"
+port = "TELEM2 (SERIAL2) — bench-verify wiring"
+serial2_protocol = 23
+brd_ser2_rtscts = 0
+rc_protocols = 512
+rc_options = 8480
+rssi_type = 3
+
+[battery_4s]
+batt_monitor = 4
+batt_arm_volt = 14.8
+batt_low_volt = 14.0
+batt_crt_volt = 13.6
+batt_fs_low_act = 1
+batt_fs_crt_act = 1
+mot_bat_volt_max = 16.8
+mot_bat_volt_min = 13.2
+
+[safety_gate]
+# Never fly with ARMING_CHECK=0; bench-only relaxations must be reverted.
+arming_check = 1
+battery_monitor_must_not_be_zero = true
+# COMPASS_MOT interference calibration done (props on, frame strapped) and
+# compass re-calibrated at the venue before mission runs.
+compass_mot_calibrated = false
+venue_compass_calibrated = false
+# BEC12S-PRO 5V rail verified against Pi 5 + camera streaming peak load.
+pi5_power_budget_verified = false
