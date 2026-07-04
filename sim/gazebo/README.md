@@ -64,9 +64,11 @@ The grid arena is the current full mission SITL course:
 - 3m x 3m x 0.7m vertiport box centered at world origin.
 - Vertiport top texture with ArUco ID 23.
 - 5 x 8 grid cells, 3m cell size, white 10cm grid lines on grass.
-- 50cm ArUco grid markers:
-  ID 1 at world `(11.5, 3.0)`, ID 2 at `(17.5, 9.0)`,
-  ID 3 at `(23.5, 6.0)`, ID 4 at `(26.5, 12.0)`.
+- 50cm ArUco grid markers laid directly on grass as printed cards (no
+  separate white mounting platform), each with a thin 5cm-wide white ArUco
+  quiet zone (0.60m card) matching the physical printed marker sample:
+  ID 1 at world `(26.5, 12.0)`, ID 2 at `(23.5, 6.0)`,
+  ID 3 at `(17.5, 9.0)`, ID 4 at `(11.5, 3.0)`.
 - Iris starts on the vertiport top with yaw 90deg.
 
 Default grid camera topic from `config/runtime.sitl.grid.toml`:

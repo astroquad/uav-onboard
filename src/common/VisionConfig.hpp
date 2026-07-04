@@ -72,6 +72,12 @@ struct ArucoConfig {
     // Targeted re-detection around partial primary detections. Seeded by a
     // real (partial) marker, so comparatively safe — stays on by default.
     bool roi_fallback_enabled = true;
+    // Real-field markers are black squares laid directly on grass with NO
+    // white pad / quiet zone, which the stock ArUco candidate stage rarely
+    // segments. This path finds dark square components itself and re-runs
+    // detection inside a tight ROI padded with synthetic white.
+    bool dark_roi_fallback_enabled = true;
+    int dark_fallback_max_rois = 8;
     // Blind bright-blob ROI sweep and synthetic-template center matcher.
     // Both hallucinate markers on grass texture (weak accept gates), so they
     // are OPT-IN: enable only if the real-field corpus shows the primary
@@ -129,11 +135,11 @@ struct LineConfig {
     double intersection_threshold = 0.8;
     bool marker_mask_enabled = true;
     bool marker_mask_detect_candidates = true;
-    // Marker occlusion polygons are scaled about their centroid so the white
-    // pad / quiet zone AROUND the marker is erased from the line mask too,
-    // not just the marker body (real pad ~0.6m vs 0.5m marker => >=1.2;
-    // extra margin covers stabilizer-held stale corners).
-    double marker_occlusion_scale = 1.7;
+    // Marker occlusion polygons are scaled about their centroid so the
+    // printed card's thin 5cm-wide white ArUco quiet zone (no separate
+    // mounting platform) is erased from the line mask too, not just the
+    // marker body (see vision.toml for the derivation).
+    double marker_occlusion_scale = 1.3;
 };
 
 struct IntersectionDecisionConfig {

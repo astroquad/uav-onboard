@@ -27,10 +27,15 @@ entry_forward_speed_mps = 0.30
 # Cycle 17: ignore vision only until the vehicle has clearly left the 3m x 3m
 # vertiport pad. After this guard clears, wait for the actual first L/T/+
 # grid intersection instead of guessing the (0,0) position from distance.
-entry_blind_clear_distance_m = 1.80
+# The guard must clear the CAMERA footprint, not just the vehicle: pad edge is
+# 1.5m from center and the downward camera still sees ~1.3m behind the nadir
+# at 2m altitude, so the receding pad edge classifies as L/T until ~2.8m and
+# was being latched as a false grid (0,0). First real intersection is 5.5m out
+# in the SITL arena, so 3.0m keeps margin on both sides.
+entry_blind_clear_distance_m = 3.00
 entry_blind_min_s = 0.0
 entry_blind_min_frames = 0
-entry_intersection_min_distance_m = 1.80
+entry_intersection_min_distance_m = 3.00
 entry_center_timeout_s = 12.0
 entry_center_target_y_norm = 0.55
 entry_center_late_y_norm = 0.78

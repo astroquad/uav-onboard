@@ -263,9 +263,9 @@ void addMarkerPolygonOccluders(
         for (const auto& corner : marker.corners_px) {
             polygon.push_back(markerCornerToWorkPoint(corner, geometry));
         }
-        // Expand the polygon about its centroid: the marker sits on a white
-        // pad / quiet zone larger than the marker itself, and the un-erased
-        // pad ring otherwise survives as false line/intersection contours.
+        // Expand the polygon about its centroid: a small margin beyond the
+        // detected corners covers marker-edge bleed and stabilizer lag so the
+        // marker's white data cells don't survive as false line contours.
         if (scale > 1.0 && !polygon.empty()) {
             double cx = 0.0;
             double cy = 0.0;

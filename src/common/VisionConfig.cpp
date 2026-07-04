@@ -130,6 +130,10 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             aruco["adaptive_thresh_win_size_step"].value_or(config.aruco.adaptive_thresh_win_size_step);
         config.aruco.roi_fallback_enabled =
             aruco["roi_fallback_enabled"].value_or(config.aruco.roi_fallback_enabled);
+        config.aruco.dark_roi_fallback_enabled =
+            aruco["dark_roi_fallback_enabled"].value_or(config.aruco.dark_roi_fallback_enabled);
+        config.aruco.dark_fallback_max_rois =
+            aruco["dark_fallback_max_rois"].value_or(config.aruco.dark_fallback_max_rois);
         config.aruco.bright_roi_fallback_enabled =
             aruco["bright_roi_fallback_enabled"].value_or(config.aruco.bright_roi_fallback_enabled);
         config.aruco.template_fallback_enabled =

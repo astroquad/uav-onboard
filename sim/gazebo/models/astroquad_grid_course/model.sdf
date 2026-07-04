@@ -198,7 +198,19 @@
         </material>
       </visual>
 
-      <!-- ArUco markers (50cm x 50cm) at fixed pseudo-random intersections. -->
+      <!-- ArUco markers (50cm x 50cm) at fixed pseudo-random intersections.
+           Real-field geometry: printed marker card, laid directly on grass
+           with NO separate white mounting platform. The card itself carries
+           a thin white ArUco quiet zone around the black border, 5cm wide on
+           each side (card 0.60m vs 0.50m marker). Matches the physical
+           printed marker sample photographed for this project. -->
+      <visual name="marker_id1_quiet_zone">
+        <pose>26.5 12.0 0.011 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id1_texture">
         <pose>26.5 12.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -211,6 +223,13 @@
         </material>
       </visual>
 
+      <visual name="marker_id2_quiet_zone">
+        <pose>23.5 6.0 0.011 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id2_texture">
         <pose>23.5 6.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -223,6 +242,13 @@
         </material>
       </visual>
 
+      <visual name="marker_id3_quiet_zone">
+        <pose>17.5 9.0 0.011 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id3_texture">
         <pose>17.5 9.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>
@@ -235,6 +261,13 @@
         </material>
       </visual>
 
+      <visual name="marker_id4_quiet_zone">
+        <pose>11.5 3.0 0.011 0 0 0</pose>
+        <geometry><plane><normal>0 0 1</normal><size>0.60 0.60</size></plane></geometry>
+        <material>
+          <ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse><specular>0 0 0 1</specular>
+        </material>
+      </visual>
       <visual name="marker_id4_texture">
         <pose>11.5 3.0 0.012 0 0 0</pose>
         <geometry><plane><normal>0 0 1</normal><size>0.50 0.50</size></plane></geometry>

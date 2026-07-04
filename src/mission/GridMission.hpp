@@ -111,10 +111,13 @@ struct GridMissionConfig {
     // EntryForward (free-flight forward toward the first grid intersection)
     double entry_forward_timeout_s = 25.0;
     double entry_forward_speed_mps = 0.30;
-    double entry_blind_clear_distance_m = 1.8;
+    // Must clear the downward camera's rear footprint (~1.3m at 2m altitude)
+    // past the 1.5m pad edge, or the receding vertiport edge classifies as an
+    // L/T intersection and latches as a false grid (0,0).
+    double entry_blind_clear_distance_m = 3.0;
     double entry_blind_min_s = 0.0;
     int    entry_blind_min_frames = 0;
-    double entry_intersection_min_distance_m = 0.5;
+    double entry_intersection_min_distance_m = 3.0;
     double entry_center_timeout_s = 12.0;
     double entry_center_target_y_norm = 0.55;
     double entry_center_late_y_norm = 0.78;

@@ -684,6 +684,148 @@ void appendRoiFallbackMarkers(
     }
 }
 
+// Defense-in-depth path alongside the primary ArUco candidate stage: the
+// printed marker card's own quiet zone is thin (5cm), and the stock detector
+// can still fail to segment the black border against textured grass at low
+// resolution or blur. This finds dark, roughly square components itself and
+// re-runs detection on a tight ROI whose synthetic white padding reinforces
+// the card's quiet zone.
+void appendDarkSquareRoiMarkers(
+    const cv::Mat& gray,
+    OpenCvArucoDetector& detector,
+    const std::string& dictionary_name,
+    int max_rois,
+    VisionResult& result)
+{
+    if (gray.empty()) {
+        return;
+    }
+    const int frame_min = std::max(1, std::min(gray.cols, gray.rows));
+
+    cv::Mat dark;
+    cv::threshold(gray, dark, 95, 255, cv::THRESH_BINARY_INV);
+    const cv::Mat close_kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
+    cv::morphologyEx(dark, dark, cv::MORPH_CLOSE, close_kernel);
+
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int components = cv::connectedComponentsWithStats(dark, labels, stats, centroids, 8);
+
+    struct Candidate {
+        cv::Rect rect;
+        double score = 0.0;
+    };
+    std::vector<Candidate> candidates;
+    const cv::Point2d frame_center(gray.cols / 2.0, gray.rows / 2.0);
+    const bool live_frame = isLiveFrameSize(gray.size());
+    const float min_side_ratio = live_frame
+        ? kLiveMinPlausibleMarkerSideRatio
+        : kRecordedMinPlausibleMarkerSideRatio;
+    const int min_side = std::max(20, static_cast<int>(std::lround(frame_min * min_side_ratio)));
+    const int max_side = static_cast<int>(std::lround(frame_min * 0.60));
+    for (int label = 1; label < components; ++label) {
+        const int x = stats.at<int>(label, cv::CC_STAT_LEFT);
+        const int y = stats.at<int>(label, cv::CC_STAT_TOP);
+        const int width = stats.at<int>(label, cv::CC_STAT_WIDTH);
+        const int height = stats.at<int>(label, cv::CC_STAT_HEIGHT);
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+        if (width < min_side || height < min_side ||
+            width > max_side || height > max_side) {
+            continue;
+        }
+        const double rect_ratio = width / static_cast<double>(std::max(1, height));
+        if (rect_ratio < 0.62 || rect_ratio > 1.60) {
+            continue;
+        }
+        // Border ring + inner black cells: a genuine marker blob fills most of
+        // its bounding box but never all of it (the white data cells punch
+        // holes); loose dark grass patches fall far below the lower bound.
+        const double fill = area / static_cast<double>(std::max(1, width * height));
+        if (fill < 0.45 || fill > 0.97) {
+            continue;
+        }
+        const cv::Rect rect(x, y, width, height);
+        cv::Mat bright;
+        cv::threshold(gray(rect), bright, 180, 255, cv::THRESH_BINARY);
+        const double bright_ratio = cv::countNonZero(bright) /
+            static_cast<double>(std::max(1, rect.area()));
+        if (bright_ratio < 0.03 || bright_ratio > 0.60) {
+            continue;
+        }
+        const double cx = centroids.at<double>(label, 0);
+        const double cy = centroids.at<double>(label, 1);
+        const double center_distance = std::hypot(cx - frame_center.x, cy - frame_center.y);
+        const double center_score = 1.0 - std::clamp(
+            center_distance / std::max(1.0, std::hypot(frame_center.x, frame_center.y)),
+            0.0,
+            1.0);
+        candidates.push_back({rect, center_score});
+    }
+
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.score > rhs.score; });
+
+    int attempted_rois = 0;
+    const int roi_limit = max_rois > 0 ? std::max(1, max_rois) : std::numeric_limits<int>::max();
+    for (const auto& candidate : candidates) {
+        if (attempted_rois >= roi_limit) {
+            return;
+        }
+        const std::size_t markers_before = result.markers.size();
+        // The tight rect puts the synthetic white padding directly against
+        // the black border; the grown/shrunk variants absorb dark grass fuzz
+        // merged into the blob and slight in-image marker rotation.
+        for (const double grow : {0.0, 0.06, -0.04}) {
+            if (attempted_rois >= roi_limit) {
+                break;
+            }
+            const int grow_x = static_cast<int>(std::lround(candidate.rect.width * grow));
+            const int grow_y = static_cast<int>(std::lround(candidate.rect.height * grow));
+            const cv::Rect rect = cv::Rect(
+                candidate.rect.x - grow_x,
+                candidate.rect.y - grow_y,
+                candidate.rect.width + grow_x * 2,
+                candidate.rect.height + grow_y * 2) &
+                cv::Rect(0, 0, gray.cols, gray.rows);
+            if (rect.width < min_side / 2 || rect.height < min_side / 2) {
+                continue;
+            }
+            ++attempted_rois;
+            detectInPaddedRoi(
+                gray,
+                detector,
+                rect,
+                std::max(12, std::max(rect.width, rect.height) / 3),
+                std::max(rect.width, rect.height) < 110,
+                result);
+            if (result.markers.size() > markers_before) {
+                break;
+            }
+        }
+        if (result.markers.size() == markers_before) {
+            // Last resort: Otsu inside the tight rect splits the black marker
+            // from grass + white cells, so the rect-based template matcher
+            // works here even without a real quiet zone.
+            const auto match = matchTemplateSquare(
+                gray,
+                markerTemplates(dictionary_name),
+                candidate.rect);
+            if (match.matched) {
+                const std::vector<cv::Point2f> corners {
+                    cv::Point2f(static_cast<float>(match.rect.x), static_cast<float>(match.rect.y)),
+                    cv::Point2f(static_cast<float>(match.rect.x + match.rect.width), static_cast<float>(match.rect.y)),
+                    cv::Point2f(static_cast<float>(match.rect.x + match.rect.width), static_cast<float>(match.rect.y + match.rect.height)),
+                    cv::Point2f(static_cast<float>(match.rect.x), static_cast<float>(match.rect.y + match.rect.height)),
+                };
+                appendMarkerIfUnique(result, makeMarkerObservation(match.id, corners));
+            }
+        }
+    }
+}
+
 void appendTargetedFallbackMarkers(
     const cv::Mat& image,
     const cv::Mat& gray,
@@ -804,6 +946,17 @@ VisionResult ArucoDetector::detect(
                 detector,
                 partial_markers,
                 config_.fallback_max_rois,
+                result);
+        }
+        // Field markers sit directly on grass with no quiet zone, so the
+        // primary detector usually misses them entirely; the dark-square ROI
+        // path is the main grid-marker path, not a rare fallback.
+        if (config_.dark_roi_fallback_enabled && result.markers.empty()) {
+            appendDarkSquareRoiMarkers(
+                gray,
+                detector,
+                config_.dictionary,
+                config_.dark_fallback_max_rois,
                 result);
         }
         if (result.markers.empty() && shouldRunFullFallback(config_, frame_seq, image.size())) {
