@@ -32,9 +32,11 @@ constexpr float kLivePartialMarkerSideRatio = 0.08f;
 constexpr float kLiveMinPlausibleMarkerSideRatio = 0.08f;
 constexpr float kRecordedMinPlausibleMarkerSideRatio = 0.030f;
 
-cv::aruco::PREDEFINED_DICTIONARY_NAME dictionaryFromName(const std::string& name)
+using ArucoDictionaryName = decltype(cv::aruco::DICT_4X4_50);
+
+ArucoDictionaryName dictionaryFromName(const std::string& name)
 {
-    static const std::map<std::string, cv::aruco::PREDEFINED_DICTIONARY_NAME> dictionaries = {
+    static const std::map<std::string, ArucoDictionaryName> dictionaries = {
         {"DICT_4X4_50", cv::aruco::DICT_4X4_50},
         {"DICT_4X4_100", cv::aruco::DICT_4X4_100},
         {"DICT_4X4_250", cv::aruco::DICT_4X4_250},
@@ -67,7 +69,7 @@ cv::aruco::PREDEFINED_DICTIONARY_NAME dictionaryFromName(const std::string& name
 class OpenCvArucoDetector {
 public:
     OpenCvArucoDetector(
-        cv::aruco::PREDEFINED_DICTIONARY_NAME dictionary_name,
+        ArucoDictionaryName dictionary_name,
         const cv::aruco::DetectorParameters& parameters)
 #if CV_VERSION_MAJOR > 4 || (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR >= 7)
         : dictionary_(cv::aruco::getPredefinedDictionary(dictionary_name))
