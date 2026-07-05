@@ -1226,7 +1226,9 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
     safety.startMission(Clock::now());
 
     const auto period = std::chrono::milliseconds(1000 / std::max(1, cfg.setpoint_rate_hz));
-    bool first_frame = true;
+    // GCS link failures are logged at most once per this interval. The link is
+    // strictly best-effort: publishing continues every frame regardless.
+    auto last_gcs_warn_time = Clock::now() - std::chrono::hours(1);
     std::string last_safety_abort_reason;
     // Latch the last committed node event so we can keep retransmitting
     // it to the GCS each frame (UDP loss redundancy + no peek-stage ghost nodes).
@@ -1507,8 +1509,9 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             last_cmd_sendable = false;
         }
 
-        // Publish telemetry / video
-        if (publisher.lastError().empty() || first_frame) {
+        // Publish telemetry / video. Strictly best-effort: a send failure must
+        // never stop future publishes, block the loop, or degrade the mission.
+        {
             oapp::GcsTelemetryPublishInput pin;
             pin.frame = frame;
             pin.image_bgr = frame.image_bgr;
@@ -1618,7 +1621,12 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             pin.camera_status = "streaming";
             (void)publisher.publish(std::move(pin));
         }
-        first_frame = false;
+        const std::string gcs_error = publisher.takeLastError();
+        if (!gcs_error.empty() && Clock::now() - last_gcs_warn_time >= std::chrono::seconds(5)) {
+            std::cerr << "[gcs] send warning (best-effort, mission unaffected): "
+                      << gcs_error << "\n";
+            last_gcs_warn_time = Clock::now();
+        }
 
         // Log
         logState(mout, apst, vp_out.result, idec, mission, registry, now_s());

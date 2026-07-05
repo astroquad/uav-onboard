@@ -77,7 +77,12 @@ public:
     bool open(const GcsTelemetryPublisherOptions& options);
     GcsTelemetryPublishStats publish(GcsTelemetryPublishInput input);
     void close();
+    // Error from open(); after open() succeeded, prefer takeLastError().
     std::string lastError() const;
+    // Consumes the most recent publish/send error. The GCS link is
+    // best-effort: a failure never stops future publishes, so callers must
+    // not treat a sticky error as a reason to skip publishing.
+    std::string takeLastError();
 
 private:
     struct Impl;

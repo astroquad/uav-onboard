@@ -11,6 +11,7 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -100,6 +101,27 @@ bool UdpTelemetrySender::open(const std::string& ip, std::uint16_t port)
         return false;
     }
 
+    // Telemetry is best-effort and may be sent from the mission loop: never
+    // block on a full send queue, drop the datagram instead.
+#ifdef _WIN32
+    u_long non_blocking = 1;
+    if (ioctlsocket(static_cast<SOCKET>(socket_), FIONBIO, &non_blocking) != 0) {
+        last_error_ = socketErrorString();
+        closeSocket(socket_);
+        socket_ = 0;
+        return false;
+    }
+#else
+    const int flags = fcntl(static_cast<int>(socket_), F_GETFL, 0);
+    if (flags < 0 ||
+        fcntl(static_cast<int>(socket_), F_SETFL, flags | O_NONBLOCK) < 0) {
+        last_error_ = socketErrorString();
+        closeSocket(socket_);
+        socket_ = 0;
+        return false;
+    }
+#endif
+
     socket_open_ = true;
     return true;
 }
@@ -131,6 +153,17 @@ bool UdpTelemetrySender::send(const std::string& payload) const
         reinterpret_cast<sockaddr*>(&address),
         sizeof(address));
     if (sent < 0 || static_cast<std::size_t>(sent) != payload.size()) {
+#ifdef _WIN32
+        if (WSAGetLastError() == WSAEWOULDBLOCK) {
+            last_error_ = "telemetry datagram dropped (send buffer full)";
+            return false;
+        }
+#else
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            last_error_ = "telemetry datagram dropped (send buffer full)";
+            return false;
+        }
+#endif
         last_error_ = socketErrorString();
         return false;
     }

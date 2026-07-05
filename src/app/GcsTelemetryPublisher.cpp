@@ -656,4 +656,11 @@ std::string GcsTelemetryPublisher::lastError() const
     return impl_->last_error;
 }
 
+std::string GcsTelemetryPublisher::takeLastError()
+{
+    std::string output = std::move(impl_->last_error);
+    impl_->last_error.clear();
+    return output;
+}
+
 } // namespace onboard::app

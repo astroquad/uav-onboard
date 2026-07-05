@@ -714,9 +714,9 @@ int runFrameSourceVisionDebug(const VisionDebugPipelineOptions& options)
         publish_input.processing_fps = processing_fps;
         publish_input.camera_status = frame.image_bgr.empty() ? "decode_failed" : "streaming";
         const auto publish_stats = publisher.publish(std::move(publish_input));
-        const std::string publish_error = publisher.lastError();
+        const std::string publish_error = publisher.takeLastError();
         if (!publish_error.empty()) {
-            std::cerr << "publish warning: " << publish_error << "\n";
+            std::cerr << "publish warning (best-effort): " << publish_error << "\n";
         }
 
         ++processed_count;
