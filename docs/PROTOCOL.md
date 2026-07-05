@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.10
-Last updated: 2026-07-04
+Version: v1.11
+Last updated: 2026-07-05
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 `protocol_version` in JSON remains integer `1`. The document version changes
@@ -42,6 +42,24 @@ not block onboard mission logic.
 Telemetry packets are sent from onboard to GCS over UDP. Vision/debug and
 mission staging executables usually send one telemetry packet per processed
 camera frame so GCS can match metadata to the optional MJPEG frame id.
+
+### Telemetry datagram framing (AQT1)
+
+Telemetry JSON larger than 1200 bytes is split into MTU-safe chunks so no
+datagram relies on IP fragmentation (a 1280-byte tunnel MTU, e.g.
+Tailscale/WireGuard, is the design floor):
+
+- A JSON payload of at most 1200 bytes is sent as one bare-JSON datagram,
+  unchanged from earlier protocol versions.
+- Larger payloads are split into datagrams that reuse the 28-byte video
+  header layout (section 5) with magic `AQT1` instead of `AQV1`; the
+  `frame_id` field carries a per-sender `message_id` that increases by one
+  per telemetry message. Each chunk payload is at most 1200 bytes.
+- Receivers distinguish the two forms by the first byte: `{` means a legacy
+  unchunked JSON message, `A` (magic `AQT1`) means a chunk.
+- A message is delivered only when all chunks arrive; a newer `message_id`
+  abandons any partial message. Incomplete messages are dropped, consistent
+  with the best-effort channel rules.
 
 Required top-level fields:
 
@@ -421,3 +439,4 @@ receive a `CMD_ACK` telemetry response when implemented.
 | v1.8 | 2026-05-21 | Added `vision.drone_position`, clarified committed-node resend semantics, documented grid mission staging and current mission telemetry limits. |
 | v1.9 | 2026-07-04 | No schema change; hardware examples updated to the upgraded platform (Raspberry Pi 5 + IMX296 mono global-shutter, frames grayscale end-to-end), command channel marked explicitly as documented-only/future work. |
 | v1.10 | 2026-07-05 | Added `mission.mission_elapsed_ms`; documented that `markers_found[].first_seen_s`/`revisited_s` are frozen mission-elapsed snapshots (fixed drift where they crept upward over the mission). Backward compatible: `protocol_version` stays integer `1`. |
+| v1.11 | 2026-07-05 | Added `AQT1` app-level telemetry chunking so every datagram fits a 1280-byte tunnel MTU (Tailscale/WireGuard); payloads <= 1200 bytes stay bare JSON and receivers accept both forms. `protocol_version` stays `1`. |

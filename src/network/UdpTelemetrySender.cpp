@@ -1,5 +1,8 @@
 #include "network/UdpTelemetrySender.hpp"
 
+#include "common/Time.hpp"
+#include "network/TelemetryChunker.hpp"
+
 #include <cerrno>
 #include <cstring>
 
@@ -126,13 +129,28 @@ bool UdpTelemetrySender::open(const std::string& ip, std::uint16_t port)
     return true;
 }
 
-bool UdpTelemetrySender::send(const std::string& payload) const
+bool UdpTelemetrySender::send(const std::string& payload)
 {
     if (!socket_open_) {
         last_error_ = "socket is not open";
         return false;
     }
 
+    const auto datagrams = buildTelemetryDatagrams(
+        payload, ++message_counter_, common::unixTimestampMs());
+    for (const auto& datagram : datagrams) {
+        if (!sendDatagram(datagram)) {
+            // The message is useless without every chunk; the receiver
+            // discards the partial message when the next one starts.
+            return false;
+        }
+    }
+    last_error_.clear();
+    return true;
+}
+
+bool UdpTelemetrySender::sendDatagram(const std::string& datagram)
+{
     sockaddr_in address {};
     address.sin_family = AF_INET;
     address.sin_port = htons(port_);
@@ -147,12 +165,12 @@ bool UdpTelemetrySender::send(const std::string& payload) const
 #else
         static_cast<int>(socket_),
 #endif
-        payload.data(),
-        static_cast<int>(payload.size()),
+        datagram.data(),
+        static_cast<int>(datagram.size()),
         0,
         reinterpret_cast<sockaddr*>(&address),
         sizeof(address));
-    if (sent < 0 || static_cast<std::size_t>(sent) != payload.size()) {
+    if (sent < 0 || static_cast<std::size_t>(sent) != datagram.size()) {
 #ifdef _WIN32
         if (WSAGetLastError() == WSAEWOULDBLOCK) {
             last_error_ = "telemetry datagram dropped (send buffer full)";

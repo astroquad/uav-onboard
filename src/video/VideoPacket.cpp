@@ -52,10 +52,12 @@ std::uint64_t readU64(const std::uint8_t* data, std::size_t offset)
 
 } // namespace
 
-std::array<std::uint8_t, kVideoHeaderSize> serializeHeader(const VideoPacketHeader& header)
+std::array<std::uint8_t, kVideoHeaderSize> serializeHeader(
+    const VideoPacketHeader& header,
+    const std::array<char, 4>& magic)
 {
     std::array<std::uint8_t, kVideoHeaderSize> output {};
-    std::copy(kVideoMagic.begin(), kVideoMagic.end(), output.begin());
+    std::copy(magic.begin(), magic.end(), output.begin());
     writeU16(output, 4, static_cast<std::uint16_t>(kVideoHeaderSize));
     writeU16(output, 6, header.flags);
     writeU32(output, 8, header.frame_id);
@@ -66,12 +68,16 @@ std::array<std::uint8_t, kVideoHeaderSize> serializeHeader(const VideoPacketHead
     return output;
 }
 
-bool parseHeader(const std::uint8_t* data, std::size_t size, VideoPacketHeader& header)
+bool parseHeader(
+    const std::uint8_t* data,
+    std::size_t size,
+    VideoPacketHeader& header,
+    const std::array<char, 4>& magic)
 {
     if (size < kVideoHeaderSize) {
         return false;
     }
-    if (!std::equal(kVideoMagic.begin(), kVideoMagic.end(), reinterpret_cast<const char*>(data))) {
+    if (!std::equal(magic.begin(), magic.end(), reinterpret_cast<const char*>(data))) {
         return false;
     }
     if (readU16(data, 4) != kVideoHeaderSize) {
@@ -85,6 +91,16 @@ bool parseHeader(const std::uint8_t* data, std::size_t size, VideoPacketHeader& 
     header.payload_size = readU32(data, 16);
     header.timestamp_ms = readU64(data, 20);
     return header.payload_size <= size - kVideoHeaderSize;
+}
+
+std::array<std::uint8_t, kVideoHeaderSize> serializeHeader(const VideoPacketHeader& header)
+{
+    return serializeHeader(header, kVideoMagic);
+}
+
+bool parseHeader(const std::uint8_t* data, std::size_t size, VideoPacketHeader& header)
+{
+    return parseHeader(data, size, header, kVideoMagic);
 }
 
 } // namespace onboard::video

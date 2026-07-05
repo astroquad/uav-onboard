@@ -65,9 +65,11 @@ add_library(onboard_core STATIC
     src/mission/MarkerRevisitPlanner.cpp
     src/mission/MarkerRegistry.cpp
     src/mission/SnakePlanner.cpp
+    src/network/TelemetryChunker.cpp
     src/network/UdpTelemetrySender.cpp
     src/protocol/TelemetryMessage.cpp
     src/safety/SafetyMonitor.cpp
+    src/video/VideoPacket.cpp
 )
 
 target_include_directories(onboard_core PUBLIC
@@ -136,7 +138,6 @@ endif()
 add_library(onboard_video STATIC
     src/camera/RpicamMjpegSource.cpp
     src/video/UdpMjpegStreamer.cpp
-    src/video/VideoPacket.cpp
 )
 target_include_directories(onboard_video PUBLIC src)
 target_link_libraries(onboard_video PUBLIC onboard_core)
