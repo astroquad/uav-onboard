@@ -1,7 +1,7 @@
 # Astroquad Onboard-GCS Protocol
 
-Version: v1.12
-Last updated: 2026-07-06
+Version: v1.13
+Last updated: 2026-07-07
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 `protocol_version` in JSON remains integer `1`. The document version changes
@@ -375,6 +375,26 @@ Rules:
   24fps video arrives as ~500 chunk datagrams/s in per-frame bursts and OS
   default buffers hold barely two frames.
 
+### Video FEC (XOR parity, v1.13)
+
+When `[debug_video] fec_group_size = N` (> 0), the sender emits one parity
+packet after every group of N data chunks so the receiver can reconstruct a
+single lost chunk per group without retransmission — for lossy paths (LTE
+uplinks, DERP relays). Parity packets:
+
+- set flags bit `0x0001` and carry the group size N in the flags high byte;
+- use `chunk_index` as the group index and keep `chunk_count` equal to the
+  frame's data chunk count;
+- carry a payload of `4 + 1200` bytes: a big-endian `u32` total frame byte
+  count followed by the XOR of the group's data payloads zero-padded to 1200
+  bytes (`payload_size = 1204`, still within the 1280-byte tunnel MTU).
+
+Data chunks are unchanged; every data chunk except the last is exactly 1200
+bytes, so a reconstructed chunk's length is implied by its index (the final
+chunk uses the transmitted total byte count). Receivers that ignore the
+flags bit would corrupt frames, so deploy both sides together. Bandwidth
+overhead is ~1/N (25% at N=4).
+
 ## 6. GCS Discovery Beacon
 
 GCS broadcasts the following text payload to UDP port 5601 once per second:
@@ -452,3 +472,4 @@ receive a `CMD_ACK` telemetry response when implemented.
 | v1.10 | 2026-07-05 | Added `mission.mission_elapsed_ms`; documented that `markers_found[].first_seen_s`/`revisited_s` are frozen mission-elapsed snapshots (fixed drift where they crept upward over the mission). Backward compatible: `protocol_version` stays integer `1`. |
 | v1.11 | 2026-07-05 | Added `AQT1` app-level telemetry chunking so every datagram fits a 1280-byte tunnel MTU (Tailscale/WireGuard); payloads <= 1200 bytes stay bare JSON and receivers accept both forms. Debug video may be downscaled onboard; overlay coordinates stay in camera pixel space and GCS scales them. `protocol_version` stays `1`. |
 | v1.12 | 2026-07-06 | Receivers recover from sender restarts (large frame_id/message_id regression starts a new stream) and should use >= 1 MB receive buffers for 24fps video. No wire format change; `protocol_version` stays `1`. |
+| v1.13 | 2026-07-07 | Added XOR FEC parity packets for video (flags bit 0x0001, group size in flags high byte); one lost data chunk per group is reconstructed at the receiver. Verified 5% loss: frame completion 45% -> 98%. `protocol_version` stays `1`. |

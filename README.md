@@ -147,31 +147,45 @@ Telemetry larger than 1200 bytes is chunked (`AQT1`, protocol v1.11) so no
 datagram exceeds the 1280-byte tunnel MTU; deploy onboard and GCS together
 when updating across this protocol change.
 
-### Constrained links (LTE hotspot, DERP relay)
+### LTE / constrained-link operation
 
-The full default stream is ~4-5 Mbit/s of video plus ~1.1 Mbit/s of
-frame telemetry — fine on a direct LAN/Tailscale path, far too much for an
-LTE-hotspot uplink or a DERP-relayed peer. Symptoms of an overloaded path:
-GCS `[video-rx]` shows `incomplete` growing much faster than `completed`,
-and the SSH session sharing the same uplink stutters (a blocked terminal
-also back-pressures onboard stdout, so the log itself pauses).
+Real missions run over an LTE uplink (outdoor, remote GCS), so the video
+link is engineered for it:
 
-Recipe (~1.2 Mbit/s total):
+- **XOR FEC** (`[debug_video] fec_group_size = 4`, protocol v1.13): one
+  parity packet per 4 data chunks lets the GCS reconstruct one lost chunk
+  per group. Measured at 5% packet loss: frame completion 45% -> 98%.
+- **Burst-free pacing**: each frame's chunks are spread across ~60% of the
+  send period instead of a line-rate burst, which shallow LTE buffers
+  tail-drop.
+- `--fps`, `--telemetry-fps`, `--video-width`, `--video-quality` size the
+  stream to the measured path capacity.
+
+**Measure the path first** (loss vs rate, from the Pi):
+
+```bash
+tailscale ping <gcs-name-or-ip>                      # must say "direct"
+ping -c 200 -i 0.01  -s 1200 -q <gcs-ip>             # 1.2 Mbit/s probe
+ping -c 400 -i 0.005 -s 1200 -q <gcs-ip>             # 2.4 Mbit/s probe
+```
+
+Pick the highest rate with ~0% loss and stay ~30% below it. 12fps recipe
+(~2.1 Mbit/s including FEC and telemetry, fits a >=2.4 Mbit/s clean path):
 
 ```bash
 ./build/vision_debug_node --config config --line-mode light_on_dark --video \
-  --fps 6 --telemetry-fps 6 > /tmp/vision_debug.log 2>&1
+  --fps 12 --telemetry-fps 6 --video-width 600 --video-quality 55 \
+  > /tmp/vision_debug.log 2>&1
 ```
 
-- `--fps <n>` caps debug video, `--telemetry-fps <n>` caps frame telemetry
-  (GCS overlays fall back to nearest-timestamp matching between messages).
-- Redirecting stdout keeps a congested SSH session from stalling the loop.
-- Each video frame's chunks are automatically paced across ~60% of the send
-  period (instead of a line-rate burst), which shallow LTE/DERP buffers
-  need; raise `[debug_video] chunk_pacing_us` further only if incomplete
-  frames persist at low fps.
-- Check the path first: `tailscale ping <gcs-name>` should say `direct`;
-  `via DERP` means relayed and low-bitrate settings are mandatory.
+- Redirect stdout as shown: a congested SSH session otherwise back-pressures
+  the terminal and stalls the log (and briefly the loop).
+- Watch GCS `[video-rx]`: healthy = `fec_recovered` growing while
+  `incomplete` stays near-flat. `incomplete` growing fast means the path is
+  saturated — lower `--fps`/`--video-width` further.
+- If the Pi reaches the LTE modem over Wi-Fi (hotspot), prefer USB tethering:
+  it removes a lossy radio hop (`wifi_tx` in `[system]` telemetry shows the
+  hop's PHY rate).
 
 ## Astroquad GCS
 

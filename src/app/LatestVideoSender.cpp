@@ -28,6 +28,7 @@ bool LatestVideoSender::start(
     // stream instead of ~20-packet line-rate bursts they tail-drop.
     const int send_fps = effectiveDebugVideoFps(config.send_fps, camera_fps);
     streamer_.setFrameSpreadUs(600000 / std::max(1, send_fps));
+    streamer_.setFecGroupSize(config.fec_group_size);
     running_ = true;
     worker_ = std::thread([this]() { workerLoop(); });
     return true;

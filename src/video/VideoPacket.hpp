@@ -16,6 +16,15 @@ constexpr std::size_t kVideoHeaderSize = 28;
 constexpr std::size_t kVideoMaxPayloadSize = 1200;
 constexpr std::size_t kTelemetryMaxPayloadSize = 1200;
 
+// XOR forward-error-correction for video chunks (protocol v1.13). A parity
+// packet follows each group of data chunks; the receiver reconstructs one
+// missing data chunk per group. Parity packets set kVideoFlagFecParity in
+// header.flags, carry the group size in the flags high byte, use chunk_index
+// as the group index, and their payload is a 4-byte big-endian total frame
+// byte count followed by the XOR of the group's zero-padded data payloads.
+constexpr std::uint16_t kVideoFlagFecParity = 0x0001;
+constexpr std::size_t kVideoFecPayloadSize = kVideoMaxPayloadSize + 4;
+
 struct VideoPacketHeader {
     std::uint16_t flags = 0;
     std::uint32_t frame_id = 0;

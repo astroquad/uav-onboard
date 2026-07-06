@@ -454,6 +454,8 @@ void applyRuntimeOverlay(RuntimeConfig& config, const std::string& config_dir, c
             debug_video["send_width"].value_or(config.vision.debug_video.send_width);
         config.vision.debug_video.send_height =
             debug_video["send_height"].value_or(config.vision.debug_video.send_height);
+        config.vision.debug_video.fec_group_size =
+            debug_video["fec_group_size"].value_or(config.vision.debug_video.fec_group_size);
     }
     if (const auto line_follow = table["line_follow"]) {
         config.controller.forward_mps =

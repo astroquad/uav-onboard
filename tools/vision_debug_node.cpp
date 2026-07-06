@@ -45,6 +45,8 @@ struct Options {
     int camera_quality_override = 0;
     int debug_video_fps_override = 0;
     int telemetry_fps_override = -1;
+    int video_width_override = -1;
+    int video_quality_override = -1;
     bool debug_video_fps_specified = false;
     double lens_position_override = -1.0;
     std::string autofocus_mode_override;
@@ -81,6 +83,8 @@ void printUsage()
         << "  --camera-fps <n>     Override rpicam capture FPS\n"
         << "  --fps <n>            Cap GCS debug video send FPS; default 0 sends every processed frame\n"
         << "  --telemetry-fps <n>  Cap frame-telemetry send FPS; default 0 sends every processed frame\n"
+        << "  --video-width <px>   Debug video downscale width (0 = camera JPEG untouched)\n"
+        << "  --video-quality <q>  Debug video re-encode JPEG quality (1-100)\n"
         << "  --camera-quality <n> Override rpicam MJPEG quality, 1-100\n"
         << "  --autofocus-mode <m> Override autofocus mode, e.g. manual/auto/continuous\n"
         << "  --lens-position <d>  Override manual lens position in dioptres\n"
@@ -145,6 +149,10 @@ Options parseOptions(int argc, char** argv)
             options.debug_video_fps_override = parseInt(argv[++i], options.debug_video_fps_override);
         } else if (arg == "--telemetry-fps" && i + 1 < argc) {
             options.telemetry_fps_override = parseInt(argv[++i], options.telemetry_fps_override);
+        } else if (arg == "--video-width" && i + 1 < argc) {
+            options.video_width_override = parseInt(argv[++i], options.video_width_override);
+        } else if (arg == "--video-quality" && i + 1 < argc) {
+            options.video_quality_override = parseInt(argv[++i], options.video_quality_override);
             options.debug_video_fps_specified = true;
         } else if (arg == "--camera-quality" && i + 1 < argc) {
             options.camera_quality_override = parseInt(argv[++i], options.camera_quality_override);
@@ -243,6 +251,8 @@ void applyRuntimeOverlay(
             debug_video["send_width"].value_or(vision_config.debug_video.send_width);
         vision_config.debug_video.send_height =
             debug_video["send_height"].value_or(vision_config.debug_video.send_height);
+        vision_config.debug_video.fec_group_size =
+            debug_video["fec_group_size"].value_or(vision_config.debug_video.fec_group_size);
     }
 }
 
@@ -389,6 +399,13 @@ int main(int argc, char** argv)
     }
     if (options.telemetry_fps_override >= 0) {
         network_config.telemetry_send_fps = options.telemetry_fps_override;
+    }
+    if (options.video_width_override >= 0) {
+        vision_config.debug_video.send_width = options.video_width_override;
+        vision_config.debug_video.send_height = 0;
+    }
+    if (options.video_quality_override > 0) {
+        vision_config.debug_video.jpeg_quality = options.video_quality_override;
     }
     if (target == "sitl") {
         vision_source = "gazebo";

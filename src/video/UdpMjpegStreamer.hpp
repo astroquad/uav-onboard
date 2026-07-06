@@ -23,6 +23,10 @@ public:
     // frame period removes the burst without lowering the frame rate.
     // 0 keeps pure chunk_pacing behavior.
     void setFrameSpreadUs(int spread_us);
+    // Sends one XOR parity packet per this many data chunks so the receiver
+    // can reconstruct a single lost chunk per group (lossy LTE/relay paths).
+    // 0 disables FEC. Bandwidth overhead is ~1/group_size.
+    void setFecGroupSize(int group_size);
     bool sendFrame(const camera::CameraFrame& frame);
     void close();
     std::string lastError() const;
@@ -35,6 +39,7 @@ private:
     std::uint16_t port_ = 0;
     int chunk_pacing_us_ = 0;
     int frame_spread_us_ = 0;
+    int fec_group_size_ = 0;
     int last_chunk_count_ = 0;
     mutable std::string last_error_;
 };
