@@ -11,7 +11,7 @@ vertiport_altitude_m = 2.0
 cruise_altitude_m = 2.0
 # Cycle 16: MarkerLockYaw (merged VertiportVerify + VertiportYawAlign).
 vertiport_verify_timeout_s = 8.0
-vertiport_marker_stable_frames = 3
+vertiport_marker_stable_frames = 6
 vertiport_yaw_tolerance_deg = 5.0
 marker_lock_center_tol_norm = 0.05
 # Cycle 16: yaw rotation applied during MarkerLockYaw. ArduPilot/NED
@@ -42,7 +42,7 @@ entry_center_late_y_norm = 0.78
 entry_center_x_tolerance_norm = 0.08
 entry_center_y_tolerance_norm = 0.06
 entry_center_velocity_threshold_mps = 0.08
-entry_center_stable_frames = 3
+entry_center_stable_frames = 6
 entry_center_forward_kp = 0.55
 entry_center_lateral_kp = 0.20
 entry_center_max_forward_mps = 0.20
@@ -56,7 +56,7 @@ snake_turn_lockout_s = 3.0
 snake_marker_hover_s = 3.0
 marker_hover_min_s = 0.8
 marker_hover_center_tolerance_norm = 0.10
-marker_hover_center_stable_frames = 2
+marker_hover_center_stable_frames = 4
 snake_stop_velocity_threshold_mps = 0.05
 # Cycle 13: bumped 8.0 -> 15.0 to accommodate post-turn blind + hop traversal.
 snake_advance_timeout_s = 15.0
@@ -109,7 +109,7 @@ hop_intersection_min_distance_m = 2.0
 # exists, align yaw/lateral on the outgoing line before freezing yaw and
 # launching to the next node.
 snake_launch_align_timeout_s = 3.0
-snake_launch_align_stable_frames = 2
+snake_launch_align_stable_frames = 4
 snake_launch_line_min_confidence = 0.35
 snake_launch_line_center_tolerance_norm = 0.06
 snake_launch_line_angle_tolerance_deg = 3.0
@@ -122,8 +122,8 @@ initial_snake_turn = "auto"  # auto | left | right
 # marker_window_min_count times within the last marker_window_frames camera
 # frames to be committed. The window flushes whenever two different IDs are
 # seen inside it (camera is ambiguous).
-marker_window_frames = 8
-marker_window_min_count = 4
+marker_window_frames = 16
+marker_window_min_count = 8
 
 [takeoff]
 target_altitude_m = 2.0
@@ -183,7 +183,7 @@ hold_s = 3.0
 center_tolerance_px = 30.0
 center_tolerance_norm = 0.10
 min_s = 0.8
-center_stable_frames = 2
+center_stable_frames = 4
 recenter_timeout_s = 1.25
 center_kp = 0.28
 max_marker_mps = 0.18

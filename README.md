@@ -81,7 +81,7 @@ Current camera defaults live in `config/vision.toml`:
 sensor_model = "imx296"
 width = 1456
 height = 1088
-fps = 12
+fps = 24
 jpeg_quality = 45
 exposure = "sport"
 shutter_us = 0    # lock at the venue (see vision.toml comments)
@@ -97,7 +97,7 @@ send_height = 0    # 0 keeps the aspect ratio
 ```
 
 Debug video is downscaled to 728x544 and re-encoded at `jpeg_quality` on the
-sender's worker thread (roughly 2-3 Mbit/s at the full ~12 fps processing
+sender's worker thread (roughly 4-5 Mbit/s at the full ~24 fps processing
 rate); the vision/mission loop never pays for the resize or encode. GCS
 overlays stay aligned because telemetry coordinates remain in camera pixel
 space and the GCS scales them. Set `send_width`/`send_height` to 0 to forward
@@ -105,7 +105,7 @@ the full-resolution camera JPEG unchanged.
 
 `send_fps = 0` forwards every processed frame (matches the vision rate). Set
 a positive value, or pass `--fps <n>`, to cap the send rate for a constrained
-link. The cap is clamped to the camera FPS (12), so `--fps 15` still sends 12.
+link. The cap is clamped to the camera FPS (24), so `--fps 30` still sends 24.
 
 The IMX296 is a mono global-shutter sensor with a fixed-focus CS-mount lens:
 there are no autofocus/AWB controls, frames are decoded grayscale end-to-end,
@@ -118,7 +118,7 @@ Validate the camera path before running mission code:
 rpicam-hello --version
 rpicam-hello --list-cameras
 rpicam-still -t 1000 --nopreview -o test_data/images/imx296_smoke.jpg
-rpicam-vid -t 5000 --nopreview --codec mjpeg --width 1456 --height 1088 --framerate 12 -o /tmp/imx296_test.mjpeg
+rpicam-vid -t 5000 --nopreview --codec mjpeg --width 1456 --height 1088 --framerate 24 -o /tmp/imx296_test.mjpeg
 ```
 
 ## Network Destinations (Known Hosts)
@@ -163,8 +163,8 @@ line contours, intersection labels, and grid-map text are drawn by GCS from
 telemetry metadata.
 `astroquad-onboard`, `line_follow_node`, and
 `vision_debug_node` all accept `--fps <n>` to override the debug-video send
-FPS; the publisher clamps it to the configured camera FPS (12), so
-`--fps 15` silently becomes 12.
+FPS; the publisher clamps it to the configured camera FPS (24), so
+`--fps 30` silently becomes 24.
 
 Current vision path:
 
@@ -457,7 +457,7 @@ serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:
 ```
 
 By default the downscaled stream is sent at the full processing rate
-(~12 fps). Pass `--fps <n>` to cap it (e.g. `--fps 6`) on a constrained
+(~24 fps). Pass `--fps <n>` to cap it (e.g. `--fps 12`) on a constrained
 link; video/telemetry stay strictly best-effort either way.
 
 Do not run real serial mission paths until RC takeover, battery telemetry,

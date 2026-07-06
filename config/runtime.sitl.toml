@@ -23,7 +23,7 @@ read_timeout_ms = 2000
 
 [debug_video]
 enabled = false
-send_fps = 12
+send_fps = 24
 jpeg_quality = 70
 chunk_pacing_us = 150
 

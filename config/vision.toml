@@ -7,7 +7,7 @@ device = 0
 sensor_model = "imx296"
 width = 1456
 height = 1088
-fps = 12
+fps = 24
 codec = "mjpeg"
 jpeg_quality = 45
 # 'sport' biases short shutter times (less motion blur at mission speed).
@@ -41,7 +41,7 @@ fake_line_angle_deg = 0.0
 # uses [debug_video].
 width = 640
 height = 480
-fps = 12
+fps = 24
 jpeg_quality = 45
 send_fps = 5
 chunk_pacing_us = 150
@@ -55,7 +55,7 @@ enabled = false
 # to forward the camera JPEG untouched.
 #
 # send_fps = 0 forwards every processed frame (matches the vision rate,
-# ~12 fps here, ~2-3 Mbit/s at 728x544). A positive value caps the rate for
+# ~24 fps here, ~4-5 Mbit/s at 728x544). A positive value caps the rate for
 # a constrained link. The CLI --fps <n> overrides this cap.
 send_fps = 0
 jpeg_quality = 60
@@ -95,14 +95,14 @@ dark_max_line_width_ratio = 0.34
 process_width = 480
 max_candidates = 8
 filter_enabled = true
-filter_ema_alpha = 0.35
-filter_confidence_alpha_min = 0.35
+filter_ema_alpha = 0.2
+filter_confidence_alpha_min = 0.2
 filter_min_confidence = 0.25
-filter_max_offset_jump_ratio = 0.16
-filter_max_offset_velocity_ratio = 0.08
+filter_max_offset_jump_ratio = 0.08
+filter_max_offset_velocity_ratio = 0.04
 filter_max_angle_jump_deg = 90.0
-filter_hold_frames = 3
-filter_reacquire_frames = 3
+filter_hold_frames = 6
+filter_reacquire_frames = 6
 intersection_threshold = 0.8
 marker_mask_enabled = true
 marker_mask_detect_candidates = true
@@ -117,24 +117,24 @@ marker_occlusion_scale = 1.3
 
 [intersection_decision]
 enabled = true
-fps_assumption = 12
-cruise_window_frames = 6
-turn_confirm_frames = 8
-cooldown_frames = 8
-min_cross_branch_frames = 2
-min_t_branch_frames = 2
-min_l_branch_frames = 3
+fps_assumption = 24
+cruise_window_frames = 12
+turn_confirm_frames = 16
+cooldown_frames = 16
+min_cross_branch_frames = 4
+min_t_branch_frames = 4
+min_l_branch_frames = 6
 min_branch_score = 0.72
 high_confidence_score = 0.85
-candidate_min_frames = 2
-turn_confirm_required = 3
-record_node_once_frames = 18
+candidate_min_frames = 4
+turn_confirm_required = 6
+record_node_once_frames = 36
 turn_zone_y_min = 0.42
 turn_zone_y_max = 0.68
 late_zone_y = 0.78
-min_prearm_frames = 2
-front_missing_frames = 2
-node_advance_min_frames = 4
+min_prearm_frames = 4
+front_missing_frames = 4
+node_advance_min_frames = 8
 # Cycle 8: NodeRecord is only emitted when the detected intersection centre
 # lies inside this normalized Y band. Avoids latching false nodes off the
 # frame top edge where partial T/+/L geometry yields fused angles.
@@ -172,9 +172,9 @@ dark_roi_fallback_enabled = true
 dark_fallback_max_rois = 8
 bright_roi_fallback_enabled = false
 template_fallback_enabled = false
-detect_interval_frames = 3
+detect_interval_frames = 6
 fallback_max_components = 12
 fallback_max_rois = 120
-full_fallback_interval_frames = 12
+full_fallback_interval_frames = 24
 full_fallback_max_rois = 4
-hold_frames = 9
+hold_frames = 18
