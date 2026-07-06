@@ -1,3 +1,4 @@
+#include "common/KnownHosts.hpp"
 #include "common/NetworkConfig.hpp"
 #include "common/Time.hpp"
 #include "network/UdpTelemetrySender.hpp"
@@ -27,7 +28,7 @@ void printUsage()
         << "\n"
         << "Options:\n"
         << "  --config <dir>       Config directory containing network.toml\n"
-        << "  --gcs-ip <ip>        Override GCS telemetry destination IP\n"
+        << "  --gcs-ip <ip|name>   Override GCS telemetry destination (known names: gcs-laptop, pi5, broadcast)\n"
         << "  --port <n>           Override GCS telemetry destination UDP port\n"
         << "  --count <n>          Send n telemetry packets, 0 means forever\n"
         << "  --interval-ms <n>    Override telemetry send interval\n"
@@ -77,7 +78,7 @@ int main(int argc, char** argv)
     const Options options = parseOptions(argc, argv);
     auto config = onboard::common::loadNetworkConfig(options.config_dir);
     if (!options.gcs_ip_override.empty()) {
-        config.gcs_ip = options.gcs_ip_override;
+        config.gcs_ip = onboard::common::resolveKnownHost(options.gcs_ip_override);
     }
     if (options.telemetry_port_override > 0) {
         config.telemetry_port = static_cast<std::uint16_t>(options.telemetry_port_override);

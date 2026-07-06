@@ -1,5 +1,7 @@
 #include "common/NetworkConfig.hpp"
 
+#include "common/KnownHosts.hpp"
+
 #include <toml++/toml.hpp>
 
 namespace onboard::common {
@@ -31,7 +33,7 @@ NetworkConfig loadNetworkConfig(const std::string& config_dir)
     }
 
     if (const auto gcs = table["gcs"]) {
-        config.gcs_ip = gcs["ip"].value_or(config.gcs_ip);
+        config.gcs_ip = resolveKnownHost(gcs["ip"].value_or(config.gcs_ip));
         config.telemetry_port = static_cast<std::uint16_t>(
             gcs["telemetry_port"].value_or(static_cast<int>(config.telemetry_port)));
         config.command_port = static_cast<std::uint16_t>(

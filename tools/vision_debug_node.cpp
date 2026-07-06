@@ -1,4 +1,5 @@
 #include "app/VisionDebugPipeline.hpp"
+#include "common/KnownHosts.hpp"
 #include "common/NetworkConfig.hpp"
 #include "common/VisionConfig.hpp"
 
@@ -68,7 +69,7 @@ void printUsage()
         << "Usage: vision_debug_node [options]\n\n"
         << "Options:\n"
         << "  --config <dir>       Config directory, default config\n"
-        << "  --gcs-ip <ip>        Override GCS destination IP\n"
+        << "  --gcs-ip <ip|name>   Override GCS destination (known names: gcs-laptop, pi5, broadcast)\n"
         << "  --target <name>      Runtime profile, e.g. sitl or ardupilot_serial\n"
         << "  --vision <source>    rpicam, gazebo, or fake; default rpicam\n"
         << "  --gazebo-topic <t>   Override Gazebo camera image topic\n"
@@ -379,7 +380,8 @@ int main(int argc, char** argv)
     const std::string target = options.target;
 
     if (!options.gcs_ip_override.empty()) {
-        network_config.gcs_ip = options.gcs_ip_override;
+        network_config.gcs_ip =
+            onboard::common::resolveKnownHost(options.gcs_ip_override);
     }
     if (target == "sitl") {
         vision_source = "gazebo";

@@ -1,6 +1,7 @@
 #include "autopilot/AutopilotMavlinkAdapter.hpp"
 #include "autopilot/SerialMavlinkTransport.hpp"
 #include "autopilot/UdpMavlinkTransport.hpp"
+#include "common/KnownHosts.hpp"
 #include "common/NetworkConfig.hpp"
 #include "common/VisionConfig.hpp"
 #include "control/GuidedVelocityController.hpp"
@@ -201,7 +202,7 @@ void printUsage()
         << "  --control-backend <guided_velocity|alt_hold_rc_override>\n"
         << "                              Default guided_velocity. alt_hold_rc_override is line-follow only.\n"
         << "  --line-mode <mode>          auto, light_on_dark, or dark_on_light\n"
-        << "  --gcs-ip <ip>               Override GCS telemetry/video destination IP\n"
+        << "  --gcs-ip <ip|name>          Override GCS destination (known names: gcs-laptop, pi5, broadcast)\n"
         << "  --telemetry-port <n>        Override GCS telemetry UDP port\n"
         << "  --video-port <n>            Override GCS video UDP port\n"
         << "  --fps <n>                   Override GCS debug video send FPS\n"
@@ -878,7 +879,8 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
         applyAutopilotUri(config, options.autopilot_uri);
     }
     if (!options.gcs_ip_override.empty()) {
-        config.network.gcs_ip = options.gcs_ip_override;
+        config.network.gcs_ip =
+            onboard::common::resolveKnownHost(options.gcs_ip_override);
     }
     if (options.telemetry_port_override > 0 && options.telemetry_port_override <= 65535) {
         config.network.telemetry_port =

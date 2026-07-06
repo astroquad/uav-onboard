@@ -1,6 +1,10 @@
 [gcs]
-# UDP telemetry is broadcast so the laptop IP can change between networks.
-ip = "255.255.255.255"
+# Destination for telemetry/debug video. Known names are resolved through
+# src/common/KnownHosts.hpp (gcs-laptop = Lenovo GCS laptop over Tailscale,
+# pi5 = this Raspberry Pi, broadcast = 255.255.255.255). A literal IP also
+# works. Use "broadcast" (or --gcs-ip broadcast) for LAN/WSL beacon
+# discovery when Tailscale is not in use.
+ip = "gcs-laptop"
 telemetry_port = 14550
 command_port = 14551
 video_port = 5600

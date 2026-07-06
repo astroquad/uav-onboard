@@ -12,6 +12,12 @@ target_include_directories(test_telemetry_chunker PRIVATE ../src)
 target_link_libraries(test_telemetry_chunker PRIVATE onboard_core)
 add_test(NAME telemetry_chunker COMMAND test_telemetry_chunker)
 
+add_executable(test_known_hosts
+    test_known_hosts.cpp
+)
+target_include_directories(test_known_hosts PRIVATE ../src)
+add_test(NAME known_hosts COMMAND test_known_hosts)
+
 add_executable(test_line_stabilizer
     test_line_stabilizer.cpp
     ../src/vision/LineStabilizer.cpp

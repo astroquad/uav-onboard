@@ -18,6 +18,7 @@
 #include "autopilot/UdpMavlinkTransport.hpp"
 
 #include <mavlink/v2.0/ardupilotmega/mavlink.h>
+#include "common/KnownHosts.hpp"
 #include "common/NetworkConfig.hpp"
 #include "common/Time.hpp"
 #include "common/VisionConfig.hpp"
@@ -138,7 +139,7 @@ void printUsage()
         << "                               Vision source (default: target runtime profile)\n"
         << "  --world <grid|line>          Gazebo world profile (default: grid)\n"
         << "  --line-mode <mode>           light_on_dark | dark_on_light | auto\n"
-        << "  --gcs-ip <ip>                Override GCS destination IP\n"
+        << "  --gcs-ip <ip|name>           Override GCS destination (known names: gcs-laptop, pi5, broadcast)\n"
         << "  --gazebo-topic <topic>       Override Gazebo camera image topic\n"
         << "  --vertiport-marker-id <id>   Override vertiport ArUco ID (default: 23)\n"
         << "  --max-intersections <n>      Safety cap on recorded nodes\n"
@@ -490,7 +491,7 @@ void loadConfigs(const Options& opt, Configs& cfg)
         cfg.vision.source.gazebo_topic = opt.gazebo_topic_override;
     }
     if (!opt.gcs_ip_override.empty()) {
-        cfg.network.gcs_ip = opt.gcs_ip_override;
+        cfg.network.gcs_ip = ocommon::resolveKnownHost(opt.gcs_ip_override);
     }
 
     try {
@@ -732,7 +733,7 @@ void loadConfigs(const Options& opt, Configs& cfg)
         applyAutopilotUri(cfg, opt.autopilot_uri);
     }
     if (!opt.gcs_ip_override.empty()) {
-        cfg.network.gcs_ip = opt.gcs_ip_override;
+        cfg.network.gcs_ip = ocommon::resolveKnownHost(opt.gcs_ip_override);
     }
     if (opt.debug_video_fps_specified) {
         if (opt.debug_video_fps_override <= 0) {

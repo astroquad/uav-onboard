@@ -1,5 +1,6 @@
 #include "camera/CameraFrame.hpp"
 #include "camera/RpicamMjpegSource.hpp"
+#include "common/KnownHosts.hpp"
 #include "common/NetworkConfig.hpp"
 #include "common/Time.hpp"
 #include "common/VisionConfig.hpp"
@@ -74,7 +75,7 @@ void printUsage()
         << "  --config <dir>       Config directory, default config\n"
         << "  --source <mode>      rpicam, test-pattern, or image\n"
         << "  --image <path>       JPEG path for --source image\n"
-        << "  --gcs-ip <ip>        Override destination IP\n"
+        << "  --gcs-ip <ip|name>   Override destination (known names: gcs-laptop, pi5, broadcast)\n"
         << "  --port <n>           Override destination UDP port\n"
         << "  --width <n>          Override stream width\n"
         << "  --height <n>         Override stream height\n"
@@ -326,7 +327,8 @@ int main(int argc, char** argv)
     auto vision_config = onboard::common::loadVisionConfig(options.config_dir);
 
     if (!options.gcs_ip_override.empty()) {
-        network_config.gcs_ip = options.gcs_ip_override;
+        network_config.gcs_ip =
+            onboard::common::resolveKnownHost(options.gcs_ip_override);
     }
     if (options.port_override > 0) {
         network_config.video_port = static_cast<std::uint16_t>(options.port_override);
