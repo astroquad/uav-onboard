@@ -49,10 +49,15 @@ port = 5600
 
 [debug_video]
 enabled = false
-send_fps = 5
-jpeg_quality = 40
+# GCS debug video is monitoring-only: downscale to half resolution
+# (1456x1088 -> 728x544, send_height 0 keeps aspect) and re-encode at
+# jpeg_quality on the sender worker thread. 10 fps at ~25-40KB/frame is
+# roughly 2-3 Mbit/s. Set send_width/send_height to 0 to forward the
+# camera JPEG untouched.
+send_fps = 10
+jpeg_quality = 60
 chunk_pacing_us = 150
-send_width = 0
+send_width = 728
 send_height = 0
 
 [line]

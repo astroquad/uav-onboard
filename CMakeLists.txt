@@ -205,6 +205,7 @@ if(BUILD_TOOLS)
         if(TARGET line_follow_node)
             target_sources(line_follow_node PRIVATE
                 src/app/GcsTelemetryPublisher.cpp
+                src/app/LatestVideoSender.cpp
             )
             target_link_libraries(line_follow_node PRIVATE onboard_vision onboard_video)
             target_compile_definitions(line_follow_node PRIVATE ONBOARD_LINE_FOLLOW_HAS_VISION=1)
@@ -236,6 +237,7 @@ if(BUILD_TOOLS)
             tools/vision_debug_node.cpp
             src/app/VisionDebugPipeline.cpp
             src/app/GcsTelemetryPublisher.cpp
+            src/app/LatestVideoSender.cpp
         )
         target_include_directories(vision_debug_node PRIVATE src)
         target_link_libraries(vision_debug_node PRIVATE onboard_core onboard_video onboard_vision)
@@ -247,6 +249,7 @@ if(BUILD_TOOLS)
                 src/main.cpp
                 src/app/AstroquadOnboardApp.cpp
                 src/app/GcsTelemetryPublisher.cpp
+                src/app/LatestVideoSender.cpp
             )
             target_include_directories(astroquad-onboard PRIVATE src)
             target_link_libraries(astroquad-onboard PRIVATE

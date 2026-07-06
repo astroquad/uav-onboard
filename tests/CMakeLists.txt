@@ -18,6 +18,12 @@ add_executable(test_known_hosts
 target_include_directories(test_known_hosts PRIVATE ../src)
 add_test(NAME known_hosts COMMAND test_known_hosts)
 
+add_executable(test_debug_video_throttle
+    test_debug_video_throttle.cpp
+)
+target_include_directories(test_debug_video_throttle PRIVATE ../src)
+add_test(NAME debug_video_throttle COMMAND test_debug_video_throttle)
+
 add_executable(test_line_stabilizer
     test_line_stabilizer.cpp
     ../src/vision/LineStabilizer.cpp

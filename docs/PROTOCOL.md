@@ -363,6 +363,10 @@ Rules:
 - GCS keeps the last complete frame through temporary UDP drops.
 - GCS does not display a video latency estimate because onboard and laptop
   clocks are not assumed synchronized.
+- Onboard may downscale debug video before sending (`[debug_video]`
+  `send_width`/`send_height`). Telemetry overlay coordinates stay in the
+  camera pixel space (`camera.width`/`camera.height`); GCS scales overlays
+  from that space onto the received frame.
 
 ## 6. GCS Discovery Beacon
 
@@ -439,4 +443,4 @@ receive a `CMD_ACK` telemetry response when implemented.
 | v1.8 | 2026-05-21 | Added `vision.drone_position`, clarified committed-node resend semantics, documented grid mission staging and current mission telemetry limits. |
 | v1.9 | 2026-07-04 | No schema change; hardware examples updated to the upgraded platform (Raspberry Pi 5 + IMX296 mono global-shutter, frames grayscale end-to-end), command channel marked explicitly as documented-only/future work. |
 | v1.10 | 2026-07-05 | Added `mission.mission_elapsed_ms`; documented that `markers_found[].first_seen_s`/`revisited_s` are frozen mission-elapsed snapshots (fixed drift where they crept upward over the mission). Backward compatible: `protocol_version` stays integer `1`. |
-| v1.11 | 2026-07-05 | Added `AQT1` app-level telemetry chunking so every datagram fits a 1280-byte tunnel MTU (Tailscale/WireGuard); payloads <= 1200 bytes stay bare JSON and receivers accept both forms. `protocol_version` stays `1`. |
+| v1.11 | 2026-07-05 | Added `AQT1` app-level telemetry chunking so every datagram fits a 1280-byte tunnel MTU (Tailscale/WireGuard); payloads <= 1200 bytes stay bare JSON and receivers accept both forms. Debug video may be downscaled onboard; overlay coordinates stay in camera pixel space and GCS scales them. `protocol_version` stays `1`. |

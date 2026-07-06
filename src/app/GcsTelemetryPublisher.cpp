@@ -1,23 +1,17 @@
 #include "app/GcsTelemetryPublisher.hpp"
 
+#include "app/DebugVideoThrottle.hpp"
+#include "app/LatestVideoSender.hpp"
 #include "camera/CameraFrame.hpp"
 #include "network/UdpTelemetrySender.hpp"
 #include "protocol/TelemetryMessage.hpp"
-#include "video/UdpMjpegStreamer.hpp"
 #include "vision/IntersectionDetector.hpp"
 
-#include <opencv2/imgcodecs.hpp>
-
 #include <algorithm>
-#include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdio>
 #include <fstream>
-#include <mutex>
-#include <optional>
 #include <sstream>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -275,133 +269,6 @@ protocol::SystemTelemetry readSystemTelemetry()
     return telemetry;
 }
 
-class LatestVideoSender {
-public:
-    bool start(const std::string& ip, std::uint16_t port, int chunk_pacing_us)
-    {
-        if (!streamer_.open(ip, port)) {
-            last_error_ = streamer_.lastError();
-            return false;
-        }
-        streamer_.setChunkPacingUs(chunk_pacing_us);
-        running_ = true;
-        worker_ = std::thread([this]() { workerLoop(); });
-        return true;
-    }
-
-    void submit(camera::CameraFrame frame)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (latest_) {
-            ++dropped_frames_;
-        }
-        latest_ = std::move(frame);
-        condition_.notify_one();
-    }
-
-    void noteSkippedFrame()
-    {
-        skipped_frames_.fetch_add(1);
-    }
-
-    void stop()
-    {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            running_ = false;
-            latest_.reset();
-        }
-        condition_.notify_one();
-        if (worker_.joinable()) {
-            worker_.join();
-        }
-        streamer_.close();
-    }
-
-    std::string takeLastError()
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::string output = std::move(last_error_);
-        last_error_.clear();
-        return output;
-    }
-
-    std::uint64_t sentFrames() const { return sent_frames_.load(); }
-    std::uint64_t skippedFrames() const { return skipped_frames_.load(); }
-    std::uint64_t chunksSent() const { return chunks_sent_.load(); }
-    std::uint64_t sendFailures() const { return send_failures_.load(); }
-    int lastChunkCount() const { return last_chunk_count_.load(); }
-
-    std::uint64_t droppedFrames() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return dropped_frames_;
-    }
-
-    double lastSendMs() const
-    {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
-        return last_send_ms_;
-    }
-
-private:
-    void workerLoop()
-    {
-        while (true) {
-            std::optional<camera::CameraFrame> frame;
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                condition_.wait(lock, [this]() { return !running_ || latest_.has_value(); });
-                if (!running_ && !latest_) {
-                    return;
-                }
-                frame = std::move(latest_);
-                latest_.reset();
-            }
-
-            if (!frame) {
-                continue;
-            }
-
-            const auto send_started = std::chrono::steady_clock::now();
-            const bool sent = streamer_.sendFrame(*frame);
-            const auto send_finished = std::chrono::steady_clock::now();
-            {
-                std::lock_guard<std::mutex> lock(stats_mutex_);
-                last_send_ms_ = std::chrono::duration<double, std::milli>(
-                    send_finished - send_started).count();
-            }
-            last_chunk_count_.store(streamer_.lastChunkCount());
-            if (sent) {
-                ++sent_frames_;
-                chunks_sent_.fetch_add(static_cast<std::uint64_t>(
-                    std::max(0, streamer_.lastChunkCount())));
-                continue;
-            }
-
-            send_failures_.fetch_add(1);
-            std::lock_guard<std::mutex> lock(mutex_);
-            last_error_ = streamer_.lastError();
-        }
-    }
-
-    video::UdpMjpegStreamer streamer_;
-    std::atomic<bool> running_ {false};
-    std::thread worker_;
-    mutable std::mutex mutex_;
-    std::condition_variable condition_;
-    std::optional<camera::CameraFrame> latest_;
-    std::string last_error_;
-    std::uint64_t dropped_frames_ = 0;
-    std::atomic<std::uint64_t> sent_frames_ {0};
-    std::atomic<std::uint64_t> skipped_frames_ {0};
-    std::atomic<std::uint64_t> chunks_sent_ {0};
-    std::atomic<std::uint64_t> send_failures_ {0};
-    std::atomic<int> last_chunk_count_ {0};
-    mutable std::mutex stats_mutex_;
-    double last_send_ms_ = 0.0;
-};
-
 } // namespace
 
 struct GcsTelemetryPublisher::Impl {
@@ -448,7 +315,7 @@ bool GcsTelemetryPublisher::open(const GcsTelemetryPublisherOptions& options)
         !impl_->video_sender.start(
             options.network.gcs_ip,
             options.network.video_port,
-            options.vision.debug_video.chunk_pacing_us)) {
+            options.vision.debug_video)) {
         impl_->last_error = impl_->video_sender.takeLastError();
         return false;
     }
@@ -575,48 +442,31 @@ GcsTelemetryPublishStats GcsTelemetryPublisher::publish(GcsTelemetryPublishInput
     double video_submit_ms = impl_->last_video_submit_ms;
     std::uint64_t video_jpeg_bytes = input_jpeg_bytes;
     if (impl_->options.send_video) {
-        camera::CameraFrame video_frame;
-        video_frame.frame_id = input.frame.frame_id;
-        video_frame.timestamp_ms = input.frame.timestamp_ms;
-        video_frame.width = input.frame.width;
-        video_frame.height = input.frame.height;
-        video_frame.jpeg_data = std::move(input.frame.jpeg_data);
+        VideoSubmission submission;
+        submission.frame.frame_id = input.frame.frame_id;
+        submission.frame.timestamp_ms = input.frame.timestamp_ms;
+        submission.frame.width = input.frame.width;
+        submission.frame.height = input.frame.height;
+        submission.frame.jpeg_data = std::move(input.frame.jpeg_data);
+        submission.image_bgr = input.image_bgr;
 
-        if (video_frame.jpeg_data.empty() && !input.image_bgr.empty()) {
-            std::vector<int> params {
-                cv::IMWRITE_JPEG_QUALITY,
-                std::clamp(impl_->options.vision.debug_video.jpeg_quality, 1, 100),
-            };
-            std::vector<unsigned char> encoded;
-            if (cv::imencode(".jpg", input.image_bgr, encoded, params)) {
-                video_frame.jpeg_data.assign(encoded.begin(), encoded.end());
-            } else {
-                impl_->last_error = "failed to JPEG-encode debug video frame";
-            }
-        }
-        video_jpeg_bytes = video_frame.jpeg_data.size();
-
-        if (!video_frame.jpeg_data.empty()) {
-            const int send_fps = std::clamp(
-                impl_->options.vision.debug_video.send_fps,
-                1,
-                std::max(1, impl_->options.vision.camera.fps));
+        // Downscale/re-encode happens on the sender's worker thread; the
+        // caller only pays for this latest-wins swap.
+        const bool has_payload =
+            !submission.frame.jpeg_data.empty() || !submission.image_bgr.empty();
+        if (has_payload) {
             const auto now = std::chrono::steady_clock::now();
-            const auto min_period = std::chrono::microseconds(1000000 / send_fps);
-            const bool send_every_processed_frame =
-                send_fps >= std::max(1, impl_->options.vision.camera.fps);
-            const bool should_send =
-                send_every_processed_frame ||
-                impl_->last_video_sent_time.time_since_epoch().count() == 0 ||
-                now - impl_->last_video_sent_time >= min_period;
-            if (should_send) {
+            if (shouldSendDebugVideoFrame(
+                    now,
+                    impl_->last_video_sent_time,
+                    impl_->options.vision.debug_video.send_fps,
+                    impl_->options.vision.camera.fps)) {
                 const auto video_submit_started = std::chrono::steady_clock::now();
-                impl_->video_sender.submit(std::move(video_frame));
+                impl_->video_sender.submit(std::move(submission));
                 const auto video_submit_finished = std::chrono::steady_clock::now();
                 video_submit_ms = std::chrono::duration<double, std::milli>(
                     video_submit_finished - video_submit_started).count();
                 impl_->last_video_submit_ms = video_submit_ms;
-                impl_->last_video_sent_time = now;
                 const std::string video_error = impl_->video_sender.takeLastError();
                 if (!video_error.empty()) {
                     impl_->last_error = video_error;

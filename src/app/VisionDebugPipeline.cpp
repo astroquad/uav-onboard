@@ -1,6 +1,8 @@
 #include "app/VisionDebugPipeline.hpp"
 
+#include "app/DebugVideoThrottle.hpp"
 #include "app/GcsTelemetryPublisher.hpp"
+#include "app/LatestVideoSender.hpp"
 #include "camera/RpicamMjpegSource.hpp"
 #include "mission/GridCoordinateTracker.hpp"
 #include "mission/IntersectionDecision.hpp"
@@ -408,152 +410,6 @@ private:
     double rate_ = 0.0;
 };
 
-class LatestVideoSender {
-public:
-    bool start(const std::string& ip, std::uint16_t port, int chunk_pacing_us)
-    {
-        if (!streamer_.open(ip, port)) {
-            last_error_ = streamer_.lastError();
-            return false;
-        }
-        streamer_.setChunkPacingUs(chunk_pacing_us);
-
-        running_ = true;
-        worker_ = std::thread([this]() { workerLoop(); });
-        return true;
-    }
-
-    void submit(camera::CameraFrame frame)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (latest_) {
-            ++dropped_frames_;
-        }
-        latest_ = std::move(frame);
-        condition_.notify_one();
-    }
-
-    void noteSkippedFrame()
-    {
-        skipped_frames_.fetch_add(1);
-    }
-
-    void stop()
-    {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            running_ = false;
-            latest_.reset();
-        }
-        condition_.notify_one();
-        if (worker_.joinable()) {
-            worker_.join();
-        }
-        streamer_.close();
-    }
-
-    std::string takeLastError()
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::string output = std::move(last_error_);
-        last_error_.clear();
-        return output;
-    }
-
-    std::uint64_t sentFrames() const
-    {
-        return sent_frames_.load();
-    }
-
-    std::uint64_t droppedFrames() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return dropped_frames_;
-    }
-
-    std::uint64_t skippedFrames() const
-    {
-        return skipped_frames_.load();
-    }
-
-    std::uint64_t chunksSent() const
-    {
-        return chunks_sent_.load();
-    }
-
-    std::uint64_t sendFailures() const
-    {
-        return send_failures_.load();
-    }
-
-    int lastChunkCount() const
-    {
-        return last_chunk_count_.load();
-    }
-
-    double lastSendMs() const
-    {
-        std::lock_guard<std::mutex> lock(stats_mutex_);
-        return last_send_ms_;
-    }
-
-private:
-    void workerLoop()
-    {
-        while (true) {
-            std::optional<camera::CameraFrame> frame;
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                condition_.wait(lock, [this]() { return !running_ || latest_.has_value(); });
-                if (!running_ && !latest_) {
-                    return;
-                }
-                frame = std::move(latest_);
-                latest_.reset();
-            }
-
-            if (frame) {
-                const auto send_started = std::chrono::steady_clock::now();
-                const bool sent = streamer_.sendFrame(*frame);
-                const auto send_finished = std::chrono::steady_clock::now();
-                const double send_ms = std::chrono::duration<double, std::milli>(
-                    send_finished - send_started).count();
-                {
-                    std::lock_guard<std::mutex> lock(stats_mutex_);
-                    last_send_ms_ = send_ms;
-                }
-                last_chunk_count_.store(streamer_.lastChunkCount());
-                if (sent) {
-                    ++sent_frames_;
-                    chunks_sent_.fetch_add(static_cast<std::uint64_t>(
-                        std::max(0, streamer_.lastChunkCount())));
-                    continue;
-                }
-
-                send_failures_.fetch_add(1);
-                std::lock_guard<std::mutex> lock(mutex_);
-                last_error_ = streamer_.lastError();
-            }
-        }
-    }
-
-    video::UdpMjpegStreamer streamer_;
-    std::atomic<bool> running_ {false};
-    std::thread worker_;
-    mutable std::mutex mutex_;
-    std::condition_variable condition_;
-    std::optional<camera::CameraFrame> latest_;
-    std::string last_error_;
-    std::uint64_t dropped_frames_ = 0;
-    std::atomic<std::uint64_t> sent_frames_ {0};
-    std::atomic<std::uint64_t> skipped_frames_ {0};
-    std::atomic<std::uint64_t> chunks_sent_ {0};
-    std::atomic<std::uint64_t> send_failures_ {0};
-    std::atomic<int> last_chunk_count_ {0};
-    mutable std::mutex stats_mutex_;
-    double last_send_ms_ = 0.0;
-};
-
 std::unique_ptr<vision::FrameSource> createFrameSource(const std::string& source)
 {
     if (source == "fake") {
@@ -779,7 +635,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         !video_sender.start(
             options.network.gcs_ip,
             options.network.video_port,
-            options.vision.debug_video.chunk_pacing_us)) {
+            options.vision.debug_video)) {
         std::cerr << "failed to open UDP video streamer: "
                   << video_sender.takeLastError() << "\n";
         return 1;
@@ -1045,26 +901,24 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
         double video_submit_ms = last_video_submit_ms;
         if (options.send_video) {
-            const int send_fps = std::clamp(
-                options.vision.debug_video.send_fps,
-                1,
-                std::max(1, options.vision.camera.fps));
             const auto now = std::chrono::steady_clock::now();
-            const auto min_period = std::chrono::microseconds(1000000 / send_fps);
-            const bool send_every_processed_frame =
-                send_fps >= std::max(1, options.vision.camera.fps);
-            const bool should_send =
-                send_every_processed_frame ||
-                last_video_sent_time.time_since_epoch().count() == 0 ||
-                now - last_video_sent_time >= min_period;
-            if (should_send) {
+            if (shouldSendDebugVideoFrame(
+                    now,
+                    last_video_sent_time,
+                    options.vision.debug_video.send_fps,
+                    options.vision.camera.fps)) {
+                // Hand the sender both the camera JPEG and the already
+                // decoded image; the optional downscale/re-encode runs on
+                // the sender's worker thread.
+                VideoSubmission submission;
+                submission.frame = std::move(frame);
+                submission.image_bgr = image;
                 const auto video_submit_started = std::chrono::steady_clock::now();
-                video_sender.submit(std::move(frame));
+                video_sender.submit(std::move(submission));
                 const auto video_submit_finished = std::chrono::steady_clock::now();
                 video_submit_ms = std::chrono::duration<double, std::milli>(
                     video_submit_finished - video_submit_started).count();
                 last_video_submit_ms = video_submit_ms;
-                last_video_sent_time = now;
                 const std::string video_error = video_sender.takeLastError();
                 if (!video_error.empty()) {
                     std::cerr << "video send warning: " << video_error << "\n";
