@@ -78,7 +78,7 @@ void printUsage()
         << "  --camera-width <n>   Override rpicam capture width\n"
         << "  --camera-height <n>  Override rpicam capture height\n"
         << "  --camera-fps <n>     Override rpicam capture FPS\n"
-        << "  --fps <n>            Override GCS debug video send FPS; default 5 when video is enabled\n"
+        << "  --fps <n>            Cap GCS debug video send FPS; default 0 sends every processed frame\n"
         << "  --camera-quality <n> Override rpicam MJPEG quality, 1-100\n"
         << "  --autofocus-mode <m> Override autofocus mode, e.g. manual/auto/continuous\n"
         << "  --lens-position <d>  Override manual lens position in dioptres\n"

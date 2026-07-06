@@ -482,7 +482,9 @@ int runFrameSourceVisionDebug(const VisionDebugPipelineOptions& options)
               << "  video UDP port: " << options.network.video_port << "\n"
               << "  camera: " << publisher_options.camera_sensor_model << "\n"
               << "  gazebo_topic: " << options.vision.source.gazebo_topic << "\n"
-              << "  video_send_fps: " << options.vision.debug_video.send_fps << "\n"
+              << "  video_send_fps: "
+              << effectiveDebugVideoFps(options.vision.debug_video.send_fps, options.vision.camera.fps)
+              << (options.vision.debug_video.send_fps <= 0 ? " (every processed frame)" : " (cap)") << "\n"
               << "  video_chunk_pacing_us: " << options.vision.debug_video.chunk_pacing_us << "\n"
               << "  aruco_dictionary: " << processor.arucoDictionaryName() << "\n"
               << "  aruco: " << (options.enable_aruco ? "on" : "off") << "\n"
@@ -709,7 +711,9 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
               << "  autofocus_mode: " << options.vision.camera.autofocus_mode << "\n"
               << "  lens_position: " << options.vision.camera.lens_position << "\n"
               << "  exposure: " << options.vision.camera.exposure << "\n"
-              << "  video_send_fps: " << options.vision.debug_video.send_fps << "\n"
+              << "  video_send_fps: "
+              << effectiveDebugVideoFps(options.vision.debug_video.send_fps, options.vision.camera.fps)
+              << (options.vision.debug_video.send_fps <= 0 ? " (every processed frame)" : " (cap)") << "\n"
               << "  video_chunk_pacing_us: " << options.vision.debug_video.chunk_pacing_us << "\n"
               << "  aruco_dictionary: " << processor.arucoDictionaryName() << "\n"
               << "  aruco: " << (options.enable_aruco ? "on" : "off") << "\n"
@@ -862,7 +866,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
             telemetry.debug.video_send_ms = video_sender.lastSendMs();
             telemetry.debug.capture_fps = capture_fps;
             telemetry.debug.processing_fps = processing_fps;
-            telemetry.debug.debug_video_send_fps = options.vision.debug_video.send_fps;
+            telemetry.debug.debug_video_send_fps = effectiveDebugVideoFps(options.vision.debug_video.send_fps, options.vision.camera.fps);
             telemetry.debug.video_chunk_pacing_us = options.vision.debug_video.chunk_pacing_us;
             telemetry.debug.cpu_temp_c = last_system.cpu_temp_c;
             telemetry.debug.telemetry_bytes = last_telemetry_bytes;

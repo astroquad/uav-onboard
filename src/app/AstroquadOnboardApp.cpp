@@ -145,7 +145,7 @@ void printUsage()
         << "  --max-intersections <n>      Safety cap on recorded nodes\n"
         << "  --snake-initial-turn <auto|left|right>\n"
         << "  --revisit-order <asc|desc>     Marker revisit order (default: desc)\n"
-        << "  --fps <n>                   Override GCS debug video send FPS\n"
+        << "  --fps <n>                   Cap GCS debug video send FPS (default sends every processed frame)\n"
         << "  --video                      Enable GCS MJPEG streaming\n"
         << "  --no-video                   Disable GCS MJPEG streaming\n"
         << "  --no-telemetry               Disable GCS telemetry sending\n"

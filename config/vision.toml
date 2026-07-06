@@ -51,10 +51,13 @@ port = 5600
 enabled = false
 # GCS debug video is monitoring-only: downscale to half resolution
 # (1456x1088 -> 728x544, send_height 0 keeps aspect) and re-encode at
-# jpeg_quality on the sender worker thread. 10 fps at ~25-40KB/frame is
-# roughly 2-3 Mbit/s. Set send_width/send_height to 0 to forward the
-# camera JPEG untouched.
-send_fps = 10
+# jpeg_quality on the sender worker thread. Set send_width/send_height to 0
+# to forward the camera JPEG untouched.
+#
+# send_fps = 0 forwards every processed frame (matches the vision rate,
+# ~12 fps here, ~2-3 Mbit/s at 728x544). A positive value caps the rate for
+# a constrained link. The CLI --fps <n> overrides this cap.
+send_fps = 0
 jpeg_quality = 60
 chunk_pacing_us = 150
 send_width = 728

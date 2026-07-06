@@ -5,9 +5,18 @@
 
 namespace onboard::app {
 
+// Resolves the effective debug-video send rate. send_fps <= 0 means "match
+// the vision processing rate": every processed frame is forwarded. A positive
+// value caps the rate, clamped to [1, camera_fps] (a camera can never emit
+// more than it captures).
+inline int effectiveDebugVideoFps(int send_fps, int camera_fps)
+{
+    const int max_fps = std::max(1, camera_fps);
+    return send_fps <= 0 ? max_fps : std::clamp(send_fps, 1, max_fps);
+}
+
 // Decides whether a processed frame should be forwarded as debug video.
-// send_fps is clamped to [1, camera_fps]; at or above the camera rate every
-// processed frame is sent. The first call always sends.
+// The first call always sends.
 //
 // Pacing is credit-based: on a send, last_sent advances by exactly one send
 // period (not to `now`), so the fractional remainder carries over to the
@@ -23,7 +32,7 @@ inline bool shouldSendDebugVideoFrame(
     int camera_fps)
 {
     const int max_fps = std::max(1, camera_fps);
-    const int fps = std::clamp(send_fps, 1, max_fps);
+    const int fps = effectiveDebugVideoFps(send_fps, camera_fps);
     if (fps >= max_fps || last_sent.time_since_epoch().count() == 0) {
         last_sent = now;
         return true;

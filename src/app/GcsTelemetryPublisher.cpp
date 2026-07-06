@@ -403,7 +403,7 @@ GcsTelemetryPublishStats GcsTelemetryPublisher::publish(GcsTelemetryPublishInput
         telemetry.debug.video_send_ms = impl_->video_sender.lastSendMs();
         telemetry.debug.capture_fps = input.capture_fps;
         telemetry.debug.processing_fps = input.processing_fps;
-        telemetry.debug.debug_video_send_fps = impl_->options.vision.debug_video.send_fps;
+        telemetry.debug.debug_video_send_fps = effectiveDebugVideoFps(impl_->options.vision.debug_video.send_fps, impl_->options.vision.camera.fps);
         telemetry.debug.video_chunk_pacing_us = impl_->options.vision.debug_video.chunk_pacing_us;
         telemetry.debug.cpu_temp_c = impl_->last_system.cpu_temp_c;
         telemetry.debug.telemetry_bytes = impl_->last_telemetry_bytes;

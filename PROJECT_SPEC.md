@@ -365,7 +365,7 @@ lookahead_band_ratio = 0.06
 
 [debug_video]
 enabled = false
-send_fps = 10
+send_fps = 0       # 0 = 처리 프레임 전부, >0 = 상한 (--fps로 override)
 jpeg_quality = 60
 chunk_pacing_us = 150
 send_width = 728   # GCS debug video downscale (0 = 카메라 JPEG 그대로)
@@ -373,9 +373,10 @@ send_height = 0    # 0 = 종횡비 유지
 ```
 
 Debug video는 sender worker thread에서 728x544로 downscale/재인코딩되어
-전송된다 (10fps 기준 약 2-3 Mbit/s). Vision/mission loop는 latest-wins
-submit 비용만 낸다. Telemetry 좌표는 camera pixel space를 유지하고 GCS가
-overlay를 스케일한다.
+전송된다 (~12fps 처리율 전부 기준 약 2-3 Mbit/s). Vision/mission loop는
+latest-wins submit 비용만 낸다. `send_fps = 0`은 처리 프레임을 전부 보내고,
+양수 값(또는 `--fps <n>`)은 상한을 건다 (camera fps=12로 clamp). Telemetry
+좌표는 camera pixel space를 유지하고 GCS가 overlay를 스케일한다.
 
 `config/network.toml`은 `gcs.ip = "gcs-laptop"`을 기본으로 쓴다. 이름은
 `src/common/KnownHosts.hpp`에서 해석된다 (`gcs-laptop` = 100.85.239.73,

@@ -28,6 +28,21 @@ int main()
         }
     }
 
+    // send_fps <= 0 means "match the processing rate": every processed frame.
+    {
+        using onboard::app::effectiveDebugVideoFps;
+        assert(effectiveDebugVideoFps(0, 12) == 12);
+        assert(effectiveDebugVideoFps(-1, 12) == 12);
+        assert(effectiveDebugVideoFps(10, 12) == 10);
+        assert(effectiveDebugVideoFps(30, 12) == 12); // capped at camera fps
+
+        Clock::time_point last_sent {};
+        for (int i = 0; i < 5; ++i) {
+            assert(shouldSendDebugVideoFrame(
+                epoch + milliseconds(i), last_sent, 0, 12));
+        }
+    }
+
     // Credit pacing: 10 fps over a 12 fps frame train must average ~10 fps,
     // not beat down to ~6 fps like a naive fixed-gate throttle.
     {
