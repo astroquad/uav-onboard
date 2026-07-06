@@ -145,7 +145,9 @@ when updating across this protocol change.
 
 ## Astroquad GCS
 
-Start `astroquad-gcs` (or `uav-gcs-video`) on the laptop first, then run:
+Start `astroquad-gcs` on the laptop first (use `uav-gcs-video` only as a raw
+transport smoke tool — it has no telemetry receiver and never draws
+line/intersection/marker overlays), then run:
 
 ```bash
 ./build/vision_debug_node --config config --line-mode light_on_dark --video
