@@ -35,7 +35,8 @@ public:
     bool start(
         const std::string& ip,
         std::uint16_t port,
-        const common::DebugVideoConfig& config);
+        const common::DebugVideoConfig& config,
+        int camera_fps);
     void submit(VideoSubmission submission);
     void noteSkippedFrame();
     void stop();

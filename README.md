@@ -147,6 +147,32 @@ Telemetry larger than 1200 bytes is chunked (`AQT1`, protocol v1.11) so no
 datagram exceeds the 1280-byte tunnel MTU; deploy onboard and GCS together
 when updating across this protocol change.
 
+### Constrained links (LTE hotspot, DERP relay)
+
+The full default stream is ~4-5 Mbit/s of video plus ~1.1 Mbit/s of
+frame telemetry — fine on a direct LAN/Tailscale path, far too much for an
+LTE-hotspot uplink or a DERP-relayed peer. Symptoms of an overloaded path:
+GCS `[video-rx]` shows `incomplete` growing much faster than `completed`,
+and the SSH session sharing the same uplink stutters (a blocked terminal
+also back-pressures onboard stdout, so the log itself pauses).
+
+Recipe (~1.2 Mbit/s total):
+
+```bash
+./build/vision_debug_node --config config --line-mode light_on_dark --video \
+  --fps 6 --telemetry-fps 6 > /tmp/vision_debug.log 2>&1
+```
+
+- `--fps <n>` caps debug video, `--telemetry-fps <n>` caps frame telemetry
+  (GCS overlays fall back to nearest-timestamp matching between messages).
+- Redirecting stdout keeps a congested SSH session from stalling the loop.
+- Each video frame's chunks are automatically paced across ~60% of the send
+  period (instead of a line-rate burst), which shallow LTE/DERP buffers
+  need; raise `[debug_video] chunk_pacing_us` further only if incomplete
+  frames persist at low fps.
+- Check the path first: `tailscale ping <gcs-name>` should say `direct`;
+  `via DERP` means relayed and low-bitrate settings are mandatory.
+
 ## Astroquad GCS
 
 Start `astroquad-gcs` on the laptop first (use `uav-gcs-video` only as a raw

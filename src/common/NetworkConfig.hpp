@@ -11,6 +11,10 @@ struct NetworkConfig {
     std::uint16_t command_port = 14551;
     std::uint16_t video_port = 5600;
     int telemetry_interval_ms = 1000;
+    // Frame-telemetry rate cap for vision/mission runtimes. 0 sends one
+    // telemetry message per processed camera frame (~5.5KB each); a positive
+    // value caps the rate for constrained links (LTE hotspot, DERP relay).
+    int telemetry_send_fps = 0;
 };
 
 NetworkConfig loadNetworkConfig(const std::string& config_dir);

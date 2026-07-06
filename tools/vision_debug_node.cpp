@@ -44,6 +44,7 @@ struct Options {
     int camera_fps_override = 0;
     int camera_quality_override = 0;
     int debug_video_fps_override = 0;
+    int telemetry_fps_override = -1;
     bool debug_video_fps_specified = false;
     double lens_position_override = -1.0;
     std::string autofocus_mode_override;
@@ -79,6 +80,7 @@ void printUsage()
         << "  --camera-height <n>  Override rpicam capture height\n"
         << "  --camera-fps <n>     Override rpicam capture FPS\n"
         << "  --fps <n>            Cap GCS debug video send FPS; default 0 sends every processed frame\n"
+        << "  --telemetry-fps <n>  Cap frame-telemetry send FPS; default 0 sends every processed frame\n"
         << "  --camera-quality <n> Override rpicam MJPEG quality, 1-100\n"
         << "  --autofocus-mode <m> Override autofocus mode, e.g. manual/auto/continuous\n"
         << "  --lens-position <d>  Override manual lens position in dioptres\n"
@@ -141,6 +143,8 @@ Options parseOptions(int argc, char** argv)
             options.camera_fps_override = parseInt(argv[++i], options.camera_fps_override);
         } else if (arg == "--fps" && i + 1 < argc) {
             options.debug_video_fps_override = parseInt(argv[++i], options.debug_video_fps_override);
+        } else if (arg == "--telemetry-fps" && i + 1 < argc) {
+            options.telemetry_fps_override = parseInt(argv[++i], options.telemetry_fps_override);
             options.debug_video_fps_specified = true;
         } else if (arg == "--camera-quality" && i + 1 < argc) {
             options.camera_quality_override = parseInt(argv[++i], options.camera_quality_override);
@@ -382,6 +386,9 @@ int main(int argc, char** argv)
     if (!options.gcs_ip_override.empty()) {
         network_config.gcs_ip =
             onboard::common::resolveKnownHost(options.gcs_ip_override);
+    }
+    if (options.telemetry_fps_override >= 0) {
+        network_config.telemetry_send_fps = options.telemetry_fps_override;
     }
     if (target == "sitl") {
         vision_source = "gazebo";

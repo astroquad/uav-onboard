@@ -137,6 +137,11 @@ void UdpMjpegStreamer::setChunkPacingUs(int pacing_us)
     chunk_pacing_us_ = std::max(0, pacing_us);
 }
 
+void UdpMjpegStreamer::setFrameSpreadUs(int spread_us)
+{
+    frame_spread_us_ = std::max(0, spread_us);
+}
+
 bool UdpMjpegStreamer::sendFrame(const camera::CameraFrame& frame)
 {
     if (!socket_open_) {
@@ -212,8 +217,14 @@ bool UdpMjpegStreamer::sendFrame(const camera::CameraFrame& frame)
             return false;
         }
 
-        if (chunk_pacing_us_ > 0 && chunk_index + 1 < chunk_count) {
-            std::this_thread::sleep_for(std::chrono::microseconds(chunk_pacing_us_));
+        if (chunk_index + 1 < chunk_count) {
+            const int spread_gap_us = frame_spread_us_ > 0
+                ? frame_spread_us_ / static_cast<int>(chunk_count)
+                : 0;
+            const int gap_us = std::max(chunk_pacing_us_, spread_gap_us);
+            if (gap_us > 0) {
+                std::this_thread::sleep_for(std::chrono::microseconds(gap_us));
+            }
         }
     }
 

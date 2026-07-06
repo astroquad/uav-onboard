@@ -96,6 +96,7 @@ struct Options {
     int vertiport_marker_id = 23;
     int max_intersections_override = 0;
     int debug_video_fps_override = 0;
+    int telemetry_fps_override = -1;
     std::string snake_initial_turn = "auto";
     std::string revisit_order;
     bool debug_video_fps_specified = false;
@@ -146,6 +147,7 @@ void printUsage()
         << "  --snake-initial-turn <auto|left|right>\n"
         << "  --revisit-order <asc|desc>     Marker revisit order (default: desc)\n"
         << "  --fps <n>                   Cap GCS debug video send FPS (default sends every processed frame)\n"
+        << "  --telemetry-fps <n>         Cap frame-telemetry send FPS (default sends every processed frame)\n"
         << "  --video                      Enable GCS MJPEG streaming\n"
         << "  --no-video                   Disable GCS MJPEG streaming\n"
         << "  --no-telemetry               Disable GCS telemetry sending\n"
@@ -180,6 +182,9 @@ Options parseOptions(int argc, char** argv)
         else if (a == "--max-intersections") o.max_intersections_override = parseInt(next("--max-intersections"), 0);
         else if (a == "--fps") {
             o.debug_video_fps_override = parseInt(next("--fps"), 0);
+        }
+        else if (a == "--telemetry-fps") {
+            o.telemetry_fps_override = parseInt(next("--telemetry-fps"), -1);
             o.debug_video_fps_specified = true;
         }
         else if (a == "--snake-initial-turn") o.snake_initial_turn = next("--snake-initial-turn");
@@ -741,6 +746,9 @@ void loadConfigs(const Options& opt, Configs& cfg)
         }
         cfg.vision.debug_video.send_fps = opt.debug_video_fps_override;
         cfg.vision.debug_video.enabled = true;
+    }
+    if (opt.telemetry_fps_override >= 0) {
+        cfg.network.telemetry_send_fps = opt.telemetry_fps_override;
     }
     if (opt.unsafe_assume_rc_present) {
         cfg.safety.assume_rc_present = true;

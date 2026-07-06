@@ -17,6 +17,12 @@ public:
 
     bool open(const std::string& ip, std::uint16_t port);
     void setChunkPacingUs(int pacing_us);
+    // Spreads each frame's chunks across this window instead of one
+    // line-rate burst. Shallow/bufferbloated paths (LTE uplinks, DERP
+    // relays) tail-drop ~20-packet bursts; pacing them over most of the
+    // frame period removes the burst without lowering the frame rate.
+    // 0 keeps pure chunk_pacing behavior.
+    void setFrameSpreadUs(int spread_us);
     bool sendFrame(const camera::CameraFrame& frame);
     void close();
     std::string lastError() const;
@@ -28,6 +34,7 @@ private:
     std::string ip_;
     std::uint16_t port_ = 0;
     int chunk_pacing_us_ = 0;
+    int frame_spread_us_ = 0;
     int last_chunk_count_ = 0;
     mutable std::string last_error_;
 };
