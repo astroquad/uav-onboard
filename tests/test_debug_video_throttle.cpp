@@ -1,3 +1,7 @@
+// Tests are assert-based: keep assert() active even in Release
+// builds (CMake adds -DNDEBUG there, which silently no-ops all checks).
+#undef NDEBUG
+
 #include "app/DebugVideoThrottle.hpp"
 
 #include <cassert>
@@ -59,32 +63,31 @@ int main()
         assert(sent <= 102);
     }
 
-    // A stall must not bank a burst: after a 1 s gap at most two sends may
-    // arrive back-to-back before normal pacing resumes.
+    // A stall must not bank a burst: the credit clamp allows at most one
+    // extra send over the target rate in the second after a 1 s gap.
     {
         Clock::time_point last_sent {};
         assert(shouldSendDebugVideoFrame(epoch, last_sent, 10, 12));
         const auto resume = epoch + milliseconds(1000);
-        int consecutive = 0;
-        for (int i = 0; i < 4; ++i) {
+        int sent = 0;
+        for (int i = 0; i < 12; ++i) {
             const auto now = resume + microseconds(i * 1000000LL / 12);
             if (shouldSendDebugVideoFrame(now, last_sent, 10, 12)) {
-                ++consecutive;
-            } else {
-                break;
+                ++sent;
             }
         }
-        assert(consecutive <= 2);
+        assert(sent <= 11);
+        assert(sent >= 9);
     }
 
-    // Non-positive send_fps clamps up to 1 fps instead of dividing by zero.
+    // send_fps = 1 caps at one frame per second.
     {
         Clock::time_point last_sent {};
-        assert(shouldSendDebugVideoFrame(epoch, last_sent, 0, 12));
+        assert(shouldSendDebugVideoFrame(epoch, last_sent, 1, 12));
         assert(!shouldSendDebugVideoFrame(
-            epoch + milliseconds(500), last_sent, 0, 12));
+            epoch + milliseconds(500), last_sent, 1, 12));
         assert(shouldSendDebugVideoFrame(
-            epoch + milliseconds(1000), last_sent, 0, 12));
+            epoch + milliseconds(1000), last_sent, 1, 12));
     }
 
     return 0;

@@ -1,3 +1,7 @@
+// Tests are assert-based: keep assert() active even in Release
+// builds (CMake adds -DNDEBUG there, which silently no-ops all checks).
+#undef NDEBUG
+
 // Anti-windup PI behaviour for GridControlMapper's altitude and yaw laws.
 // With the integral gains at their 0.0 default the mapper must reproduce the
 // pure-P output exactly; with ki > 0 the integral must accumulate, clamp
