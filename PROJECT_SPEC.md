@@ -365,14 +365,29 @@ lookahead_band_ratio = 0.06
 
 [debug_video]
 enabled = false
-send_fps = 5
+send_fps = 10
+jpeg_quality = 60
 chunk_pacing_us = 150
+send_width = 728   # GCS debug video downscale (0 = 카메라 JPEG 그대로)
+send_height = 0    # 0 = 종횡비 유지
 ```
+
+Debug video는 sender worker thread에서 728x544로 downscale/재인코딩되어
+전송된다 (10fps 기준 약 2-3 Mbit/s). Vision/mission loop는 latest-wins
+submit 비용만 낸다. Telemetry 좌표는 camera pixel space를 유지하고 GCS가
+overlay를 스케일한다.
+
+`config/network.toml`은 `gcs.ip = "gcs-laptop"`을 기본으로 쓴다. 이름은
+`src/common/KnownHosts.hpp`에서 해석된다 (`gcs-laptop` = 100.85.239.73,
+`pi5` = 100.101.84.47, `broadcast` = LAN/WSL 디스커버리). 1200바이트를
+넘는 telemetry JSON은 `AQT1` 청크로 분할되어 1280-byte 터널 MTU 안에서
+전송된다 (protocol v1.11).
 
 `vision_debug_node`, `line_follow_node`, and `astroquad-onboard`
 expose `--fps <n>` as a CLI override for raw debug-video
 send FPS. Mission telemetry still follows processed frames; debug video remains
-best-effort.
+best-effort — 송신 실패는 mission loop를 막지 않으며 latch 없이 매 프레임
+재시도한다.
 
 `config/mission.toml [grid_mission]` 주요값:
 

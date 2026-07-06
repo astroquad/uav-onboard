@@ -89,10 +89,19 @@ gain = 0.0
 
 [debug_video]
 enabled = false
-send_fps = 5
-jpeg_quality = 40
+send_fps = 10
+jpeg_quality = 60
 chunk_pacing_us = 150
+send_width = 728   # downscale for the GCS link (0 = camera JPEG untouched)
+send_height = 0    # 0 keeps the aspect ratio
 ```
+
+Debug video is downscaled to 728x544 and re-encoded at `jpeg_quality` on the
+sender's worker thread (roughly 2-3 Mbit/s at 10 fps); the vision/mission
+loop never pays for the resize or encode. GCS overlays stay aligned because
+telemetry coordinates remain in camera pixel space and the GCS scales them.
+Set `send_width`/`send_height` to 0 to forward the full-resolution camera
+JPEG unchanged.
 
 The IMX296 is a mono global-shutter sensor with a fixed-focus CS-mount lens:
 there are no autofocus/AWB controls, frames are decoded grayscale end-to-end,
@@ -108,21 +117,48 @@ rpicam-still -t 1000 --nopreview -o test_data/images/imx296_smoke.jpg
 rpicam-vid -t 5000 --nopreview --codec mjpeg --width 1456 --height 1088 --framerate 12 -o /tmp/imx296_test.mjpeg
 ```
 
+## Network Destinations (Known Hosts)
+
+The Tailscale IPs are effectively static, so `config/network.toml` ships with
+`gcs.ip = "gcs-laptop"` and no run command needs a literal IP. Known names
+live in `src/common/KnownHosts.hpp` (kept byte-identical with the copy in
+`uav-gcs`):
+
+| Name | Address | Host |
+|---|---|---|
+| `gcs-laptop` | `100.85.239.73` | Lenovo GCS laptop (Tailscale) |
+| `pi5` | `100.101.84.47` | Raspberry Pi 5 (Tailscale) |
+| `broadcast` | `255.255.255.255` | LAN/WSL beacon discovery |
+
+`--gcs-ip <ip|name>` accepts either a known name or a literal IP and
+overrides the config. On a plain LAN without Tailscale, pass
+`--gcs-ip broadcast` (or a literal IP) to restore beacon discovery.
+
+Over Tailscale, both devices must be logged in (`tailscale status`) and the
+Windows laptop needs the one-time firewall setup from
+`uav-gcs/scripts/setup_windows_firewall.ps1` — Windows otherwise drops
+inbound UDP on the Tailscale interface silently.
+
+Telemetry larger than 1200 bytes is chunked (`AQT1`, protocol v1.11) so no
+datagram exceeds the 1280-byte tunnel MTU; deploy onboard and GCS together
+when updating across this protocol change.
+
 ## Astroquad GCS
 
-Start `astroquad-gcs` on the laptop first, then run:
+Start `astroquad-gcs` (or `uav-gcs-video`) on the laptop first, then run:
 
 ```bash
+./build/vision_debug_node --config config --line-mode light_on_dark --video
 ./build/vision_debug_node --config config --line-only --line-mode light_on_dark
-./build/vision_debug_node --config config --line-only --line-mode light_on_dark --video --fps 12
 ```
 
-Onboard sends raw camera JPEG only when `--video` is enabled. Marker boxes,
+Onboard sends debug video only when `--video` is enabled. Marker boxes,
 line contours, intersection labels, and grid-map text are drawn by GCS from
 telemetry metadata.
 `astroquad-onboard`, `line_follow_node`, and
-`vision_debug_node` all accept `--fps <n>` to override raw debug-video send
-FPS; the publisher clamps it to the configured camera FPS.
+`vision_debug_node` all accept `--fps <n>` to override the debug-video send
+FPS; the publisher clamps it to the configured camera FPS (12), so
+`--fps 15` silently becomes 12.
 
 Current vision path:
 
@@ -202,6 +238,9 @@ If the generator places executables under `build\Release`, run:
 ```
 
 ### Line-Tracing World
+
+WSL/SITL flows keep an explicit `--gcs-ip` override because the Windows host
+IP seen from WSL is not the Tailscale address in `config/network.toml`:
 
 ```bash
 bash ~/astroquad/uav-onboard/scripts/line_tracing_test.sh
@@ -411,8 +450,8 @@ serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:
   --video --allow-arm-takeoff
 ```
 
-Add `--fps 12` only when you intentionally want 12fps raw debug video on the
-GCS link; omitting it keeps the real serial default at 5fps.
+Add `--fps 12` only when you intentionally want 12fps debug video on the
+GCS link; omitting it keeps the default 10fps downscaled stream.
 
 Do not run real serial mission paths until RC takeover, battery telemetry,
 MTF-01 optical-flow/range local estimate, motor order, prop direction, and a
@@ -442,12 +481,14 @@ Start `uav-gcs-telem` on the laptop first:
 ./build/uav-onboard-telem --config config --gcs-ip 127.0.0.1 --count 10
 ```
 
-The default GCS IP is broadcast:
+The default GCS destination is the laptop's Tailscale address via the known
+host name (see "Network Destinations"):
 
 ```toml
 [gcs]
-ip = "255.255.255.255"
+ip = "gcs-laptop"
 telemetry_port = 14550
 ```
 
-Some networks block local broadcast; use `--gcs-ip <laptop-ip>` when needed.
+Use `--gcs-ip broadcast` for LAN beacon discovery, or `--gcs-ip <ip|name>`
+for any other destination.
