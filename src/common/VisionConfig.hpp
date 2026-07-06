@@ -59,6 +59,10 @@ struct DebugVideoConfig {
     int chunk_pacing_us = 150;
     int send_width = 0;
     int send_height = 0;
+    // XOR parity every N data chunks (0 = off); receiver reconstructs one
+    // lost chunk per group. ~1/N bandwidth overhead; for lossy LTE/relay
+    // links.
+    int fec_group_size = 4;
 };
 
 struct ArucoConfig {

@@ -81,7 +81,7 @@ Current camera defaults live in `config/vision.toml`:
 sensor_model = "imx296"
 width = 1456
 height = 1088
-fps = 12
+fps = 24
 jpeg_quality = 45
 exposure = "sport"
 shutter_us = 0    # lock at the venue (see vision.toml comments)
@@ -97,7 +97,7 @@ send_height = 0    # 0 keeps the aspect ratio
 ```
 
 Debug video is downscaled to 728x544 and re-encoded at `jpeg_quality` on the
-sender's worker thread (roughly 2-3 Mbit/s at the full ~12 fps processing
+sender's worker thread (roughly 4-5 Mbit/s at the full ~24 fps processing
 rate); the vision/mission loop never pays for the resize or encode. GCS
 overlays stay aligned because telemetry coordinates remain in camera pixel
 space and the GCS scales them. Set `send_width`/`send_height` to 0 to forward
@@ -105,7 +105,7 @@ the full-resolution camera JPEG unchanged.
 
 `send_fps = 0` forwards every processed frame (matches the vision rate). Set
 a positive value, or pass `--fps <n>`, to cap the send rate for a constrained
-link. The cap is clamped to the camera FPS (12), so `--fps 15` still sends 12.
+link. The cap is clamped to the camera FPS (24), so `--fps 30` still sends 24.
 
 The IMX296 is a mono global-shutter sensor with a fixed-focus CS-mount lens:
 there are no autofocus/AWB controls, frames are decoded grayscale end-to-end,
@@ -118,7 +118,7 @@ Validate the camera path before running mission code:
 rpicam-hello --version
 rpicam-hello --list-cameras
 rpicam-still -t 1000 --nopreview -o test_data/images/imx296_smoke.jpg
-rpicam-vid -t 5000 --nopreview --codec mjpeg --width 1456 --height 1088 --framerate 12 -o /tmp/imx296_test.mjpeg
+rpicam-vid -t 5000 --nopreview --codec mjpeg --width 1456 --height 1088 --framerate 24 -o /tmp/imx296_test.mjpeg
 ```
 
 ## Network Destinations (Known Hosts)
@@ -147,6 +147,46 @@ Telemetry larger than 1200 bytes is chunked (`AQT1`, protocol v1.11) so no
 datagram exceeds the 1280-byte tunnel MTU; deploy onboard and GCS together
 when updating across this protocol change.
 
+### LTE / constrained-link operation
+
+Real missions run over an LTE uplink (outdoor, remote GCS), so the video
+link is engineered for it:
+
+- **XOR FEC** (`[debug_video] fec_group_size = 4`, protocol v1.13): one
+  parity packet per 4 data chunks lets the GCS reconstruct one lost chunk
+  per group. Measured at 5% packet loss: frame completion 45% -> 98%.
+- **Burst-free pacing**: each frame's chunks are spread across ~60% of the
+  send period instead of a line-rate burst, which shallow LTE buffers
+  tail-drop.
+- `--fps`, `--telemetry-fps`, `--video-width`, `--video-quality` size the
+  stream to the measured path capacity.
+
+**Measure the path first** (loss vs rate, from the Pi):
+
+```bash
+tailscale ping <gcs-name-or-ip>                      # must say "direct"
+ping -c 200 -i 0.01  -s 1200 -q <gcs-ip>             # 1.2 Mbit/s probe
+ping -c 400 -i 0.005 -s 1200 -q <gcs-ip>             # 2.4 Mbit/s probe
+```
+
+Pick the highest rate with ~0% loss and stay ~30% below it. 12fps recipe
+(~2.1 Mbit/s including FEC and telemetry, fits a >=2.4 Mbit/s clean path):
+
+```bash
+./build/vision_debug_node --config config --line-mode light_on_dark --video \
+  --fps 12 --telemetry-fps 6 --video-width 600 --video-quality 55 \
+  > /tmp/vision_debug.log 2>&1
+```
+
+- Redirect stdout as shown: a congested SSH session otherwise back-pressures
+  the terminal and stalls the log (and briefly the loop).
+- Watch GCS `[video-rx]`: healthy = `fec_recovered` growing while
+  `incomplete` stays near-flat. `incomplete` growing fast means the path is
+  saturated — lower `--fps`/`--video-width` further.
+- If the Pi reaches the LTE modem over Wi-Fi (hotspot), prefer USB tethering:
+  it removes a lossy radio hop (`wifi_tx` in `[system]` telemetry shows the
+  hop's PHY rate).
+
 ## Astroquad GCS
 
 Start `astroquad-gcs` on the laptop first (use `uav-gcs-video` only as a raw
@@ -163,8 +203,8 @@ line contours, intersection labels, and grid-map text are drawn by GCS from
 telemetry metadata.
 `astroquad-onboard`, `line_follow_node`, and
 `vision_debug_node` all accept `--fps <n>` to override the debug-video send
-FPS; the publisher clamps it to the configured camera FPS (12), so
-`--fps 15` silently becomes 12.
+FPS; the publisher clamps it to the configured camera FPS (24), so
+`--fps 30` silently becomes 24.
 
 Current vision path:
 
@@ -457,7 +497,7 @@ serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:
 ```
 
 By default the downscaled stream is sent at the full processing rate
-(~12 fps). Pass `--fps <n>` to cap it (e.g. `--fps 6`) on a constrained
+(~24 fps). Pass `--fps <n>` to cap it (e.g. `--fps 12`) on a constrained
 link; video/telemetry stay strictly best-effort either way.
 
 Do not run real serial mission paths until RC takeover, battery telemetry,

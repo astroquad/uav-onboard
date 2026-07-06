@@ -113,6 +113,8 @@ VisionConfig loadVisionConfig(const std::string& config_dir)
             debug_video["send_width"].value_or(config.debug_video.send_width);
         config.debug_video.send_height =
             debug_video["send_height"].value_or(config.debug_video.send_height);
+        config.debug_video.fec_group_size =
+            debug_video["fec_group_size"].value_or(config.debug_video.fec_group_size);
     }
 
     if (const auto aruco = table["aruco"]) {

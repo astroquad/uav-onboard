@@ -11,3 +11,8 @@ video_port = 5600
 
 [telemetry]
 send_interval_ms = 1000
+# Frame-telemetry rate cap for the vision/mission runtimes. 0 sends one
+# message per processed camera frame (~5.5KB, ~1.1 Mbit/s at 24fps); set a
+# positive cap (or pass --telemetry-fps) on constrained links. GCS overlays
+# fall back to nearest-timestamp matching for frames without telemetry.
+send_fps = 0

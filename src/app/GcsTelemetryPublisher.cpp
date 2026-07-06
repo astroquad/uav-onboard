@@ -280,6 +280,7 @@ struct GcsTelemetryPublisher::Impl {
     std::string last_error;
     protocol::SystemTelemetry last_system;
     std::chrono::steady_clock::time_point last_video_sent_time {};
+    std::chrono::steady_clock::time_point last_telemetry_sent_time {};
     double last_telemetry_build_ms = 0.0;
     double last_telemetry_send_ms = 0.0;
     double last_video_submit_ms = 0.0;
@@ -315,7 +316,8 @@ bool GcsTelemetryPublisher::open(const GcsTelemetryPublisherOptions& options)
         !impl_->video_sender.start(
             options.network.gcs_ip,
             options.network.video_port,
-            options.vision.debug_video)) {
+            options.vision.debug_video,
+            options.vision.camera.fps)) {
         impl_->last_error = impl_->video_sender.takeLastError();
         return false;
     }
@@ -337,7 +339,14 @@ GcsTelemetryPublishStats GcsTelemetryPublisher::publish(GcsTelemetryPublishInput
 
     double telemetry_build_ms = impl_->last_telemetry_build_ms;
     double telemetry_send_ms = impl_->last_telemetry_send_ms;
-    if (impl_->options.send_telemetry) {
+    const bool telemetry_due =
+        impl_->options.send_telemetry &&
+        shouldSendDebugVideoFrame(
+            std::chrono::steady_clock::now(),
+            impl_->last_telemetry_sent_time,
+            impl_->options.network.telemetry_send_fps,
+            impl_->options.vision.camera.fps);
+    if (telemetry_due) {
         if (impl_->published_count % 30 == 0) {
             impl_->last_system = readSystemTelemetry();
         }

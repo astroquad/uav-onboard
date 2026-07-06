@@ -637,7 +637,8 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
         !video_sender.start(
             options.network.gcs_ip,
             options.network.video_port,
-            options.vision.debug_video)) {
+            options.vision.debug_video,
+            options.vision.camera.fps)) {
         std::cerr << "failed to open UDP video streamer: "
                   << video_sender.takeLastError() << "\n";
         return 1;
@@ -743,6 +744,7 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
     RateMeter capture_rate;
     RateMeter processing_rate;
     auto last_video_sent_time = std::chrono::steady_clock::time_point {};
+    auto last_telemetry_sent_time = std::chrono::steady_clock::time_point {};
     while (options.count == 0 || processed_count < options.count) {
         camera::CameraFrame frame;
         const auto read_started = std::chrono::steady_clock::now();
@@ -810,7 +812,14 @@ int VisionDebugPipeline::run(const VisionDebugPipelineOptions& options)
 
         double telemetry_build_ms = last_telemetry_build_ms;
         double telemetry_send_ms = last_telemetry_send_ms;
-        if (options.send_telemetry) {
+        const bool telemetry_due =
+            options.send_telemetry &&
+            shouldSendDebugVideoFrame(
+                std::chrono::steady_clock::now(),
+                last_telemetry_sent_time,
+                options.network.telemetry_send_fps,
+                options.vision.camera.fps);
+        if (telemetry_due) {
             if (processed_count % 30 == 0) {
                 last_system = readSystemTelemetry();
             }

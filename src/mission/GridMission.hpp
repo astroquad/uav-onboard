@@ -96,9 +96,9 @@ struct GridMissionConfig {
 
     // MarkerLockYaw (verifies the vertiport marker and aligns yaw to grid entry)
     double vertiport_verify_timeout_s = 8.0;
-    int    vertiport_marker_stable_frames = 3;
+    int    vertiport_marker_stable_frames = 6;
     double vertiport_yaw_tolerance_rad = 0.0872665;   // ~5°
-    int    vertiport_yaw_stable_frames = 2;
+    int    vertiport_yaw_stable_frames = 4;
     // Acceptable marker center error (normalized to half-frame) before we
     // declare the drone "centered over the marker" during MarkerLockYaw.
     double marker_lock_center_tol_norm = 0.05;
@@ -139,7 +139,7 @@ struct GridMissionConfig {
     double snake_stop_velocity_threshold_mps = 0.05;
     int    snake_stop_velocity_consecutive_frames = 2;
     double snake_yaw_target_tolerance_rad = 0.0872665;
-    int    snake_yaw_stable_frames = 2;
+    int    snake_yaw_stable_frames = 4;
     double snake_advance_timeout_s = 15.0;
     // Hop-to-hop progress is measured from the last committed node. During
     // forward hops the mission stays in ForwardBlind: yaw remains locked to

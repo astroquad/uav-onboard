@@ -1,3 +1,7 @@
+// Tests are assert-based: keep assert() active even in Release
+// builds (CMake adds -DNDEBUG there, which silently no-ops all checks).
+#undef NDEBUG
+
 #include "vision/IntersectionDetector.hpp"
 #include "vision/LineDetector.hpp"
 #include "vision/LineMaskBuilder.hpp"

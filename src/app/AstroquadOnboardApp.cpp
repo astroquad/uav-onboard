@@ -96,6 +96,9 @@ struct Options {
     int vertiport_marker_id = 23;
     int max_intersections_override = 0;
     int debug_video_fps_override = 0;
+    int telemetry_fps_override = -1;
+    int video_width_override = -1;
+    int video_quality_override = -1;
     std::string snake_initial_turn = "auto";
     std::string revisit_order;
     bool debug_video_fps_specified = false;
@@ -146,6 +149,9 @@ void printUsage()
         << "  --snake-initial-turn <auto|left|right>\n"
         << "  --revisit-order <asc|desc>     Marker revisit order (default: desc)\n"
         << "  --fps <n>                   Cap GCS debug video send FPS (default sends every processed frame)\n"
+        << "  --telemetry-fps <n>         Cap frame-telemetry send FPS (default sends every processed frame)\n"
+        << "  --video-width <px>          Debug video downscale width (0 = camera JPEG untouched)\n"
+        << "  --video-quality <q>         Debug video re-encode JPEG quality (1-100)\n"
         << "  --video                      Enable GCS MJPEG streaming\n"
         << "  --no-video                   Disable GCS MJPEG streaming\n"
         << "  --no-telemetry               Disable GCS telemetry sending\n"
@@ -180,6 +186,15 @@ Options parseOptions(int argc, char** argv)
         else if (a == "--max-intersections") o.max_intersections_override = parseInt(next("--max-intersections"), 0);
         else if (a == "--fps") {
             o.debug_video_fps_override = parseInt(next("--fps"), 0);
+        }
+        else if (a == "--telemetry-fps") {
+            o.telemetry_fps_override = parseInt(next("--telemetry-fps"), -1);
+        }
+        else if (a == "--video-width") {
+            o.video_width_override = parseInt(next("--video-width"), -1);
+        }
+        else if (a == "--video-quality") {
+            o.video_quality_override = parseInt(next("--video-quality"), -1);
             o.debug_video_fps_specified = true;
         }
         else if (a == "--snake-initial-turn") o.snake_initial_turn = next("--snake-initial-turn");
@@ -357,6 +372,8 @@ void applyDebugVideoConfig(const toml::node_view<toml::node> debug_video, Config
         debug_video["send_width"].value_or(cfg.vision.debug_video.send_width);
     cfg.vision.debug_video.send_height =
         debug_video["send_height"].value_or(cfg.vision.debug_video.send_height);
+    cfg.vision.debug_video.fec_group_size =
+        debug_video["fec_group_size"].value_or(cfg.vision.debug_video.fec_group_size);
 }
 
 void applyLineControllerConfig(const toml::node_view<toml::node> line_controller, Configs& cfg)
@@ -741,6 +758,16 @@ void loadConfigs(const Options& opt, Configs& cfg)
         }
         cfg.vision.debug_video.send_fps = opt.debug_video_fps_override;
         cfg.vision.debug_video.enabled = true;
+    }
+    if (opt.telemetry_fps_override >= 0) {
+        cfg.network.telemetry_send_fps = opt.telemetry_fps_override;
+    }
+    if (opt.video_width_override >= 0) {
+        cfg.vision.debug_video.send_width = opt.video_width_override;
+        cfg.vision.debug_video.send_height = 0;
+    }
+    if (opt.video_quality_override > 0) {
+        cfg.vision.debug_video.jpeg_quality = opt.video_quality_override;
     }
     if (opt.unsafe_assume_rc_present) {
         cfg.safety.assume_rc_present = true;

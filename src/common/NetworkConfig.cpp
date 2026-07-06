@@ -45,6 +45,8 @@ NetworkConfig loadNetworkConfig(const std::string& config_dir)
     if (const auto telemetry = table["telemetry"]) {
         config.telemetry_interval_ms =
             telemetry["send_interval_ms"].value_or(config.telemetry_interval_ms);
+        config.telemetry_send_fps =
+            telemetry["send_fps"].value_or(config.telemetry_send_fps);
     }
 
     return config;

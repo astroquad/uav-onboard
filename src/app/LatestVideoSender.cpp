@@ -1,5 +1,7 @@
 #include "app/LatestVideoSender.hpp"
 
+#include "app/DebugVideoThrottle.hpp"
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -12,7 +14,8 @@ namespace onboard::app {
 bool LatestVideoSender::start(
     const std::string& ip,
     std::uint16_t port,
-    const common::DebugVideoConfig& config)
+    const common::DebugVideoConfig& config,
+    int camera_fps)
 {
     if (!streamer_.open(ip, port)) {
         last_error_ = streamer_.lastError();
@@ -20,6 +23,12 @@ bool LatestVideoSender::start(
     }
     config_ = config;
     streamer_.setChunkPacingUs(config.chunk_pacing_us);
+    // Spread each frame's chunks across 60% of the send period so shallow
+    // or bufferbloated paths (LTE uplinks, DERP relays) see a smooth packet
+    // stream instead of ~20-packet line-rate bursts they tail-drop.
+    const int send_fps = effectiveDebugVideoFps(config.send_fps, camera_fps);
+    streamer_.setFrameSpreadUs(600000 / std::max(1, send_fps));
+    streamer_.setFecGroupSize(config.fec_group_size);
     running_ = true;
     worker_ = std::thread([this]() { workerLoop(); });
     return true;
