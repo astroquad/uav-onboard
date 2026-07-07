@@ -9,9 +9,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <fstream>
+#include <mutex>
 #include <sstream>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -278,13 +281,55 @@ struct GcsTelemetryPublisher::Impl {
     std::uint32_t telemetry_seq = 1;
     int published_count = 0;
     std::string last_error;
-    protocol::SystemTelemetry last_system;
+    // System telemetry is gathered on its own thread: readSystemTelemetry()
+    // forks (vcgencmd/iw via popen) and reads sysfs, which costs tens of
+    // milliseconds — unacceptable jitter on the 20 Hz mission/control loop
+    // that calls publish(). The loop only takes this cached snapshot.
+    protocol::SystemTelemetry last_system;              // guarded by system_mutex
+    std::mutex system_mutex;
+    std::condition_variable system_cv;
+    std::thread system_thread;
+    bool system_running = false;
     std::chrono::steady_clock::time_point last_video_sent_time {};
     std::chrono::steady_clock::time_point last_telemetry_sent_time {};
     double last_telemetry_build_ms = 0.0;
     double last_telemetry_send_ms = 0.0;
     double last_video_submit_ms = 0.0;
     std::uint64_t last_telemetry_bytes = 0;
+
+    void startSystemTelemetryThread()
+    {
+        system_running = true;
+        system_thread = std::thread([this]() {
+            for (;;) {
+                protocol::SystemTelemetry fresh = readSystemTelemetry();
+                std::unique_lock<std::mutex> lock(system_mutex);
+                last_system = std::move(fresh);
+                if (system_cv.wait_for(lock, std::chrono::seconds(5),
+                                       [this]() { return !system_running; })) {
+                    return;
+                }
+            }
+        });
+    }
+
+    void stopSystemTelemetryThread()
+    {
+        {
+            std::lock_guard<std::mutex> lock(system_mutex);
+            system_running = false;
+        }
+        system_cv.notify_one();
+        if (system_thread.joinable()) {
+            system_thread.join();
+        }
+    }
+
+    protocol::SystemTelemetry systemSnapshot()
+    {
+        std::lock_guard<std::mutex> lock(system_mutex);
+        return last_system;
+    }
 };
 
 GcsTelemetryPublisher::GcsTelemetryPublisher()
@@ -305,7 +350,7 @@ bool GcsTelemetryPublisher::open(const GcsTelemetryPublisherOptions& options)
     impl_->last_error.clear();
     impl_->telemetry_seq = 1;
     impl_->published_count = 0;
-    impl_->last_system = readSystemTelemetry();
+    impl_->startSystemTelemetryThread();
     impl_->last_video_sent_time = {};
     impl_->last_telemetry_build_ms = 0.0;
     impl_->last_telemetry_send_ms = 0.0;
@@ -347,14 +392,10 @@ GcsTelemetryPublishStats GcsTelemetryPublisher::publish(GcsTelemetryPublishInput
             impl_->options.network.telemetry_send_fps,
             impl_->options.vision.camera.fps);
     if (telemetry_due) {
-        if (impl_->published_count % 30 == 0) {
-            impl_->last_system = readSystemTelemetry();
-        }
-
         protocol::BringupTelemetry telemetry;
         telemetry.seq = impl_->telemetry_seq++;
         telemetry.timestamp_ms = input.frame.timestamp_ms;
-        telemetry.system = impl_->last_system;
+        telemetry.system = impl_->systemSnapshot();
         telemetry.camera.status = input.camera_status;
         telemetry.camera.sensor_model = impl_->options.camera_sensor_model.empty()
             ? impl_->options.vision.camera.sensor_model
@@ -414,7 +455,7 @@ GcsTelemetryPublishStats GcsTelemetryPublisher::publish(GcsTelemetryPublishInput
         telemetry.debug.processing_fps = input.processing_fps;
         telemetry.debug.debug_video_send_fps = effectiveDebugVideoFps(impl_->options.vision.debug_video.send_fps, impl_->options.vision.camera.fps);
         telemetry.debug.video_chunk_pacing_us = impl_->options.vision.debug_video.chunk_pacing_us;
-        telemetry.debug.cpu_temp_c = impl_->last_system.cpu_temp_c;
+        telemetry.debug.cpu_temp_c = telemetry.system.cpu_temp_c;
         telemetry.debug.telemetry_bytes = impl_->last_telemetry_bytes;
         telemetry.debug.video_jpeg_bytes = input_jpeg_bytes;
         telemetry.debug.video_sent_frames = impl_->video_sender.sentFrames();
@@ -507,6 +548,7 @@ void GcsTelemetryPublisher::close()
     if (impl_ == nullptr) {
         return;
     }
+    impl_->stopSystemTelemetryThread();
     impl_->video_sender.stop();
 }
 

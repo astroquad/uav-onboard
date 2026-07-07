@@ -90,6 +90,13 @@ target_include_directories(test_safety_monitor PRIVATE ../src)
 target_link_libraries(test_safety_monitor PRIVATE onboard_core)
 add_test(NAME safety_monitor COMMAND test_safety_monitor)
 
+add_executable(test_flight_logger
+    test_flight_logger.cpp
+)
+target_include_directories(test_flight_logger PRIVATE ../src)
+target_link_libraries(test_flight_logger PRIVATE onboard_core)
+add_test(NAME flight_logger COMMAND test_flight_logger)
+
 if(TARGET onboard_vision)
     add_executable(test_intersection_detector
         test_intersection_detector.cpp

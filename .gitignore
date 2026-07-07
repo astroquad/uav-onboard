@@ -25,8 +25,9 @@ install_manifest.txt
 *.pdb
 *.so
 
-# Runtime logs
+# Runtime logs (includes per-run flight logs under logs/flights/)
 logs/*
+logs/flights/
 !logs/.gitkeep
 *.log
 

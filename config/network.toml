@@ -11,8 +11,10 @@ video_port = 5600
 
 [telemetry]
 send_interval_ms = 1000
-# Frame-telemetry rate cap for the vision/mission runtimes. 0 sends one
-# message per processed camera frame (~5.5KB, ~1.1 Mbit/s at 24fps); set a
-# positive cap (or pass --telemetry-fps) on constrained links. GCS overlays
-# fall back to nearest-timestamp matching for frames without telemetry.
-send_fps = 0
+# Frame-telemetry rate cap for the vision/mission runtimes. Default 6 fps is
+# part of the measured LTE recipe (~0.25 Mbit/s of the ~2.2 Mbit/s budget);
+# GCS overlays fall back to nearest-timestamp matching for frames without
+# telemetry, and mission state still updates several times per second.
+# 0 would send one message per processed camera frame (~5.5KB, ~1.1 Mbit/s
+# at 24fps) — LAN only. Override per run with --telemetry-fps.
+send_fps = 6

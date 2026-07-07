@@ -104,6 +104,7 @@ void AutopilotMavlinkAdapter::requestDefaultStreams()
 {
     requestMessageInterval(MAVLINK_MSG_ID_DISTANCE_SENSOR, 10.0);
     requestMessageInterval(MAVLINK_MSG_ID_LOCAL_POSITION_NED, 10.0);
+    requestMessageInterval(MAVLINK_MSG_ID_SYS_STATUS, 2.0);
     requestMessageInterval(MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 5.0);
     requestMessageInterval(MAVLINK_MSG_ID_ATTITUDE, 20.0);
 #ifdef MAVLINK_MSG_ID_SERVO_OUTPUT_RAW
@@ -528,6 +529,18 @@ void AutopilotMavlinkAdapter::processMessage(const mavlink_message_t& message)
             state_.local_vx_mps = position.vx;
             state_.local_vy_mps = position.vy;
             state_.local_vz_mps = position.vz;
+        }
+    } else if (message.msgid == MAVLINK_MSG_ID_SYS_STATUS) {
+        mavlink_sys_status_t sys {};
+        mavlink_msg_sys_status_decode(&message, &sys);
+        if (sys.voltage_battery != UINT16_MAX && sys.voltage_battery > 0) {
+            state_.battery_voltage_v = sys.voltage_battery / 1000.0;
+        }
+        if (sys.current_battery >= 0) {
+            state_.battery_current_a = sys.current_battery / 100.0;
+        }
+        if (sys.battery_remaining >= 0) {
+            state_.battery_remaining_pct = sys.battery_remaining;
         }
     } else if (message.msgid == MAVLINK_MSG_ID_GLOBAL_POSITION_INT) {
         mavlink_global_position_int_t position {};

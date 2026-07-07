@@ -49,18 +49,17 @@ port = 5600
 
 [debug_video]
 enabled = false
-# GCS debug video is monitoring-only: downscale to half resolution
-# (1456x1088 -> 728x544, send_height 0 keeps aspect) and re-encode at
-# jpeg_quality on the sender worker thread. Set send_width/send_height to 0
-# to forward the camera JPEG untouched.
-#
-# send_fps = 0 forwards every processed frame (matches the vision rate,
-# ~24 fps here, ~4-5 Mbit/s at 728x544). A positive value caps the rate for
-# a constrained link. The CLI --fps <n> overrides this cap.
-send_fps = 0
-jpeg_quality = 60
+# GCS debug video is monitoring-only. Defaults are sized for the measured
+# competition LTE uplink (~2.4 Mbit/s clean zone, 3-4 Mbit/s loss knee), NOT
+# for LAN throughput: 12 fps at 600px/q55 plus capped telemetry and FEC
+# measures ~2.1-2.2 Mbit/s (see README "LTE / constrained-link operation").
+# Raise via --fps/--video-width/--video-quality only after probing a faster
+# path; send_fps = 0 would forward every processed frame (~24 fps, ~4-5
+# Mbit/s) which stutters on LTE.
+send_fps = 12
+jpeg_quality = 55
 chunk_pacing_us = 150
-send_width = 728
+send_width = 600
 send_height = 0
 # XOR parity packet every N data chunks; the GCS reconstructs one lost
 # chunk per group (protocol v1.13). ~25% bandwidth overhead at 4; set 0

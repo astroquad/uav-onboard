@@ -132,15 +132,11 @@ ControlSetpoint GridControlMapper::compute(const GridControlMapperInput& input)
             sp.yaw_rate_rad_s = static_cast<float>(
                 computeYawRate(input.current_yaw_rad, input.target_yaw_rad));
         }
-        if (input.advance_phase) {
-            const double scale = config_.forward_speed_advance_mps /
-                std::max(0.05, static_cast<double>(std::abs(sp.vx_forward_mps)) + 1e-6);
-            if (std::abs(sp.vx_forward_mps) > config_.forward_speed_advance_mps) {
-                sp.vx_forward_mps = static_cast<float>(
-                    config_.forward_speed_advance_mps *
-                    (sp.vx_forward_mps >= 0 ? 1.0 : -1.0));
-            }
-            (void)scale;
+        if (input.advance_phase &&
+            std::abs(sp.vx_forward_mps) > config_.forward_speed_advance_mps) {
+            sp.vx_forward_mps = static_cast<float>(
+                config_.forward_speed_advance_mps *
+                (sp.vx_forward_mps >= 0 ? 1.0 : -1.0));
         }
         return sp;
     }

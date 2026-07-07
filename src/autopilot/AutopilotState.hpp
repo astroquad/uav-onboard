@@ -46,6 +46,11 @@ struct AutopilotState {
     std::optional<double> ekf_pos_vert_variance;
     std::optional<double> ekf_compass_variance;
     std::optional<double> ekf_terrain_alt_variance;
+    // SYS_STATUS battery readings. Advisory only (the FC enforces the hard
+    // BATT_LOW/CRT limits); consumed by the flight logger and telemetry.
+    std::optional<double> battery_voltage_v;
+    std::optional<double> battery_current_a;
+    std::optional<int> battery_remaining_pct;
     std::optional<int> rc_channel_count;
     std::optional<int> rc_rssi;
     std::array<std::uint16_t, 18> rc_channels_pwm {};

@@ -149,8 +149,24 @@ when updating across this protocol change.
 
 ### LTE / constrained-link operation
 
-Real missions run over an LTE uplink (outdoor, remote GCS), so the video
-link is engineered for it:
+Real missions run over an LG U+ LTE USB modem (outdoor, remote GCS), so the
+**shipped defaults are already LTE-sized** — not LAN-sized. The video/telemetry
+defaults in `config/vision.toml` and `config/network.toml` are:
+
+| Setting | Default | Notes |
+|---|---|---|
+| `[debug_video] send_fps` | 12 | was 0 (= every processed frame, ~24 fps) |
+| `[debug_video] send_width` | 600 | was 728 |
+| `[debug_video] jpeg_quality` | 55 | was 60 |
+| `[debug_video] fec_group_size` | 4 | XOR parity, unchanged |
+| `[telemetry] send_fps` | 6 | was 0 (= one message per processed frame) |
+
+Together these measure ~2.1–2.2 Mbit/s (FEC + telemetry included), which fits
+the measured ≥2.4 Mbit/s clean LTE zone. So a plain `--video` launch is already
+link-safe; you only touch the flags below to size **up** for a faster measured
+path or **down** for a worse one.
+
+The link is also engineered for loss:
 
 - **XOR FEC** (`[debug_video] fec_group_size = 4`, protocol v1.13): one
   parity packet per 4 data chunks lets the GCS reconstruct one lost chunk
@@ -158,8 +174,8 @@ link is engineered for it:
 - **Burst-free pacing**: each frame's chunks are spread across ~60% of the
   send period instead of a line-rate burst, which shallow LTE buffers
   tail-drop.
-- `--fps`, `--telemetry-fps`, `--video-width`, `--video-quality` size the
-  stream to the measured path capacity.
+- `--fps`, `--telemetry-fps`, `--video-width`, `--video-quality` override the
+  defaults to re-size the stream to a re-measured path.
 
 **Measure the path first** (loss vs rate, from the Pi):
 
@@ -169,8 +185,9 @@ ping -c 200 -i 0.01  -s 1200 -q <gcs-ip>             # 1.2 Mbit/s probe
 ping -c 400 -i 0.005 -s 1200 -q <gcs-ip>             # 2.4 Mbit/s probe
 ```
 
-Pick the highest rate with ~0% loss and stay ~30% below it. 12fps recipe
-(~2.1 Mbit/s including FEC and telemetry, fits a >=2.4 Mbit/s clean path):
+Pick the highest rate with ~0% loss and stay ~30% below it. The default recipe
+(equivalent to the flags below) already targets a ≥2.4 Mbit/s clean path; pass
+the flags only to override for a re-measured link:
 
 ```bash
 ./build/vision_debug_node --config config --line-mode light_on_dark --video \
@@ -395,6 +412,46 @@ completion. Omit `--revisit-order` for descending order, or pass
 `--revisit-order asc` for ascending order. After revisit it returns to `(0,0)`,
 faces grid south, flies back toward the latched vertiport marker, centers on
 that marker, lands, and publishes mission completion telemetry.
+
+## Flight Logging
+
+`astroquad-onboard` writes a self-contained log folder for **every** run (both
+SITL and real flight), enabled by default. Each run gets a unique sequential
+number and timestamp:
+
+```text
+logs/flights/run_0001_2026-07-07_18-30-12/
+  meta.json     one-shot run description: argv, target, key mission/video/
+                camera/network config, mission-start unix time
+  frames.csv    one row per mission tick (~20 Hz): mission state + control
+                intent, grid coord/heading, line tracing (detected/offset/
+                angle/confidence), intersection decision (state/type/branch
+                mask/center-y), ArUco marker errors, control commands
+                (vx/vy/vz/yaw-rate), and Pixhawk/MAVLink values (mode, armed,
+                AGL, LOCAL_NED x/y/z, yaw, optical-flow quality, battery volts)
+  events.jsonl  state transitions (with reason), node commits, marker
+                found/revisited, safety events, run start/end
+```
+
+Configuration is in `config/logging.toml`:
+
+- `base_dir` (default `logs/flights`) — configurable base path.
+- `frame_log_hz` (default `0` = every tick, ~25 MB/h) — cap the per-frame CSV
+  rate on tight storage; events are never rate-capped.
+- `flush_interval_s` — how often the writer flushes to disk.
+
+All log I/O runs on a **dedicated writer thread** with a bounded queue, so
+logging never stalls the 20 Hz control loop; if the SD card stalls, the oldest
+frame rows are dropped (counted in the `run_end` event) rather than blocking
+the mission. CLI overrides:
+
+```bash
+./build/astroquad-onboard ... --no-flight-log         # disable for this run
+./build/astroquad-onboard ... --flight-log-dir /mnt/usb/astroquad_logs
+```
+
+`logs/` is gitignored (`logs/*` and `logs/flights/`), so flight logs stay
+local and are never committed.
 
 ## ArduPilot Serial Bench And Missions
 

@@ -1,0 +1,24 @@
+# Per-run flight logging (astroquad-onboard, SITL and real flight).
+#
+# Every run creates a fresh sequential folder:
+#   <base_dir>/run_0001_2026-07-07_18-30-12/
+#     meta.json    - one-shot run description (argv, key config, start time)
+#     frames.csv   - one row per mission tick: mission state, control intent,
+#                    grid coord/heading, line tracing, intersection decision,
+#                    ArUco markers, control commands, MAVLink sensor values
+#                    (AGL, LOCAL_NED, yaw, flow quality, battery voltage)
+#     events.jsonl - state transitions, node commits, marker found/revisit,
+#                    safety events, run start/end
+#
+# base_dir is gitignored (logs/*); flight logs stay local.
+# Disable per run with --no-flight-log, or point elsewhere with
+# --flight-log-dir <dir>.
+[flight_log]
+enabled = true
+base_dir = "logs/flights"
+# Per-frame CSV rate cap in Hz. 0 = every mission tick (~20 Hz, roughly
+# 25 MB/hour). Events are never rate-capped. All file I/O runs on a separate
+# writer thread; if the SD card stalls, oldest frame rows are dropped rather
+# than blocking the control loop.
+frame_log_hz = 0.0
+flush_interval_s = 1.0

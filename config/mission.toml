@@ -54,12 +54,19 @@ snake_turn_lockout_s = 3.0
 # Every grid marker hover, both during snake search and revisit, holds for
 # this full duration while marker-centering remains active.
 snake_marker_hover_s = 3.0
-marker_hover_min_s = 0.8
-marker_hover_center_tolerance_norm = 0.10
-marker_hover_center_stable_frames = 4
 snake_stop_velocity_threshold_mps = 0.05
 # Cycle 13: bumped 8.0 -> 15.0 to accommodate post-turn blind + hop traversal.
+# Also the per-hop budget in SNAKE_FORWARD (anchored to the last node commit),
+# so a hop that never sees its next intersection lands instead of flying on.
 snake_advance_timeout_s = 15.0
+# Real-flight hang guards -> EMERGENCY_LAND. turn_timeout_s bounds every 90
+# degree turn state (covers lost yaw data / wind preventing settle; at the
+# real profile's 0.25 rad/s yaw cap a 90 turn takes ~7 s). stop_timeout_s
+# bounds the stop-and-settle states; if boundary stops keep timing out in
+# the field, raise snake_stop_velocity_threshold_mps instead (EKF velocity
+# noise may sit above the settle threshold).
+turn_timeout_s = 15.0
+stop_timeout_s = 12.0
 # Main snake forward speed while yaw is locked and lateral line-centering is active.
 forward_speed_blind_mps = 0.60
 # Cycle 13: was hard-coded 0.18 in GridControlMapperConfig; raised to 0.30.
@@ -178,12 +185,12 @@ max_yaw_rate_change_rad_s = 0.0
 # 0 disables; values > 0 use std::pow(confidence, forward_confidence_scale).
 forward_confidence_scale = 0.0
 
+# Grid-mission hover completion is time-based (hold_s); centering runs for the
+# whole dwell via center_kp/max_marker_mps. center_tolerance_px and the
+# timeout keys below belong to the line-follow mission tool.
 [marker_hover]
 hold_s = 3.0
 center_tolerance_px = 30.0
-center_tolerance_norm = 0.10
-min_s = 0.8
-center_stable_frames = 4
 recenter_timeout_s = 1.25
 center_kp = 0.28
 max_marker_mps = 0.18

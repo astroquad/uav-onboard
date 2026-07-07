@@ -52,12 +52,15 @@ struct VideoStreamConfig {
     int port = 5600;
 };
 
+// Compiled defaults mirror config/vision.toml's LTE-sized profile
+// (12 fps, 600px, q55 ≈ 2.1 Mbit/s with FEC + telemetry) so a missing
+// config file still yields link-safe behaviour.
 struct DebugVideoConfig {
     bool enabled = false;
-    int send_fps = 5;
-    int jpeg_quality = 40;
+    int send_fps = 12;
+    int jpeg_quality = 55;
     int chunk_pacing_us = 150;
-    int send_width = 0;
+    int send_width = 600;
     int send_height = 0;
     // XOR parity every N data chunks (0 = off); receiver reconstructs one
     // lost chunk per group. ~1/N bandwidth overhead; for lossy LTE/relay

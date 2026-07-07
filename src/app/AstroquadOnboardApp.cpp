@@ -28,6 +28,7 @@
 #include "mission/GridCoordinateTracker.hpp"
 #include "mission/GridMission.hpp"
 #include "mission/IntersectionDecision.hpp"
+#include "logging/FlightLogger.hpp"
 #include "mission/MarkerRegistry.hpp"
 #include "mission/SnakePlanner.hpp"
 #include "safety/SafetyMonitor.hpp"
@@ -50,6 +51,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -101,6 +103,7 @@ struct Options {
     int video_quality_override = -1;
     std::string snake_initial_turn = "auto";
     std::string revisit_order;
+    std::string flight_log_dir_override;
     bool debug_video_fps_specified = false;
     bool send_video = false;
     bool send_video_overridden = false;
@@ -108,6 +111,7 @@ struct Options {
     bool allow_arm_takeoff = false;
     bool no_arm = false;
     bool unsafe_assume_rc_present = false;
+    bool flight_log_disabled = false;
 };
 
 std::atomic_bool g_shutdown_requested {false};
@@ -155,6 +159,8 @@ void printUsage()
         << "  --video                      Enable GCS MJPEG streaming\n"
         << "  --no-video                   Disable GCS MJPEG streaming\n"
         << "  --no-telemetry               Disable GCS telemetry sending\n"
+        << "  --flight-log-dir <dir>       Flight log base directory (default: config/logging.toml)\n"
+        << "  --no-flight-log              Disable per-run flight logging\n"
         << "  --allow-arm-takeoff          Permit real serial arm+takeoff\n"
         << "  --no-arm                     Skip arm/takeoff (vision/state-machine smoke)\n"
         << "  --unsafe-assume-rc-present   Bypass MAVLink RC gate for real-flight debugging\n"
@@ -186,6 +192,7 @@ Options parseOptions(int argc, char** argv)
         else if (a == "--max-intersections") o.max_intersections_override = parseInt(next("--max-intersections"), 0);
         else if (a == "--fps") {
             o.debug_video_fps_override = parseInt(next("--fps"), 0);
+            o.debug_video_fps_specified = true;
         }
         else if (a == "--telemetry-fps") {
             o.telemetry_fps_override = parseInt(next("--telemetry-fps"), -1);
@@ -195,13 +202,14 @@ Options parseOptions(int argc, char** argv)
         }
         else if (a == "--video-quality") {
             o.video_quality_override = parseInt(next("--video-quality"), -1);
-            o.debug_video_fps_specified = true;
         }
         else if (a == "--snake-initial-turn") o.snake_initial_turn = next("--snake-initial-turn");
         else if (a == "--revisit-order") o.revisit_order = next("--revisit-order");
         else if (a == "--video") { o.send_video = true; o.send_video_overridden = true; }
         else if (a == "--no-video") { o.send_video = false; o.send_video_overridden = true; }
         else if (a == "--no-telemetry") o.send_telemetry = false;
+        else if (a == "--flight-log-dir") o.flight_log_dir_override = next("--flight-log-dir");
+        else if (a == "--no-flight-log") o.flight_log_disabled = true;
         else if (a == "--allow-arm-takeoff") o.allow_arm_takeoff = true;
         else if (a == "--no-arm") o.no_arm = true;
         else if (a == "--unsafe-assume-rc-present") o.unsafe_assume_rc_present = true;
@@ -226,6 +234,7 @@ struct Configs {
     omission::AltitudePolicyConfig altitude;
     omission::SnakePlannerConfig snake;
     osafety::SafetyConfig safety;
+    onboard::logging::FlightLoggerOptions flight_log;
     std::string vision_source = "gazebo";
     int setpoint_rate_hz = 20;
 };
@@ -329,6 +338,10 @@ void applySafetyTimeouts(const toml::node_view<toml::node> timeouts, Configs& cf
             cfg.safety.autopilot_heartbeat_lost_ms);
     cfg.safety.mission_timeout_ms =
         timeouts["mission_timeout_ms"].value_or(cfg.safety.mission_timeout_ms);
+    cfg.safety.vision_stale_hold_ms =
+        timeouts["vision_stale_hold_ms"].value_or(cfg.safety.vision_stale_hold_ms);
+    cfg.safety.vision_stale_land_ms =
+        timeouts["vision_stale_land_ms"].value_or(cfg.safety.vision_stale_land_ms);
     cfg.mission.autopilot_heartbeat_timeout_s =
         static_cast<double>(cfg.safety.autopilot_heartbeat_lost_ms) / 1000.0;
     cfg.mission.mission_timeout_s =
@@ -433,25 +446,6 @@ void applyMarkerHoverConfig(const toml::node_view<toml::node> marker_hover,
 
     cfg.mission.snake_marker_hover_s =
         marker_hover["hold_s"].value_or(cfg.mission.snake_marker_hover_s);
-    cfg.mission.marker_hover_min_s =
-        marker_hover["min_s"].value_or(
-            marker_hover["min_center_s"].value_or(cfg.mission.marker_hover_min_s));
-    cfg.mission.marker_hover_center_stable_frames =
-        marker_hover["center_stable_frames"].value_or(
-            cfg.mission.marker_hover_center_stable_frames);
-
-    if (const auto center_tol_norm =
-            marker_hover["center_tolerance_norm"].value<double>()) {
-        cfg.mission.marker_hover_center_tolerance_norm = *center_tol_norm;
-    } else if (const auto center_tol_px =
-                   marker_hover["center_tolerance_px"].value<double>()) {
-        const double half_w =
-            std::max(1.0, static_cast<double>(cfg.vision.camera.width) * 0.5);
-        const double half_h =
-            std::max(1.0, static_cast<double>(cfg.vision.camera.height) * 0.5);
-        cfg.mission.marker_hover_center_tolerance_norm =
-            std::max(*center_tol_px / half_w, *center_tol_px / half_h);
-    }
 
     if (const auto center_kp = marker_hover["center_kp"].value<double>()) {
         cfg.controller.marker_x_kp = *center_kp;
@@ -583,14 +577,9 @@ void loadConfigs(const Options& opt, Configs& cfg)
             g.snake_record_lockout_s = gm["snake_record_lockout_s"].value_or(g.snake_record_lockout_s);
             g.snake_turn_lockout_s = gm["snake_turn_lockout_s"].value_or(g.snake_turn_lockout_s);
             g.snake_marker_hover_s = gm["snake_marker_hover_s"].value_or(g.snake_marker_hover_s);
-            g.marker_hover_min_s = gm["marker_hover_min_s"].value_or(g.marker_hover_min_s);
-            g.marker_hover_center_tolerance_norm =
-                gm["marker_hover_center_tolerance_norm"].value_or(
-                    g.marker_hover_center_tolerance_norm);
-            g.marker_hover_center_stable_frames =
-                gm["marker_hover_center_stable_frames"].value_or(
-                    g.marker_hover_center_stable_frames);
             g.snake_advance_timeout_s = gm["snake_advance_timeout_s"].value_or(g.snake_advance_timeout_s);
+            g.turn_timeout_s = gm["turn_timeout_s"].value_or(g.turn_timeout_s);
+            g.stop_timeout_s = gm["stop_timeout_s"].value_or(g.stop_timeout_s);
             g.max_intersections = gm["max_intersections"].value_or(g.max_intersections);
             g.mission_timeout_s = gm["mission_timeout_s"].value_or(g.mission_timeout_s);
             g.altitude_ceiling_m = gm["altitude_ceiling_m"].value_or(g.altitude_ceiling_m);
@@ -702,6 +691,23 @@ void loadConfigs(const Options& opt, Configs& cfg)
     // Marker hover settings from mission.toml apply before runtime overrides.
     applyMarkerHoverConfigFile(joinPath(opt.config_dir, "mission.toml"), cfg);
 
+    // Per-run flight logging (config/logging.toml). Missing file keeps the
+    // compiled defaults (enabled, logs/flights) — logging must never be a
+    // reason a mission cannot start.
+    try {
+        auto lg = toml::parse_file(joinPath(opt.config_dir, "logging.toml"));
+        if (const auto fl = lg["flight_log"]) {
+            cfg.flight_log.enabled = fl["enabled"].value_or(cfg.flight_log.enabled);
+            cfg.flight_log.base_dir = fl["base_dir"].value_or(cfg.flight_log.base_dir);
+            cfg.flight_log.frame_log_hz =
+                fl["frame_log_hz"].value_or(cfg.flight_log.frame_log_hz);
+            cfg.flight_log.flush_interval_s =
+                fl["flush_interval_s"].value_or(cfg.flight_log.flush_interval_s);
+        }
+    } catch (const toml::parse_error&) {
+        // optional file; defaults apply
+    }
+
     // Load target runtime profile. SITL keeps the existing grid/line split;
     // ardupilot_serial uses the real serial+rpicam profile.
     const std::string runtime_file = (target == "sitl")
@@ -772,6 +778,12 @@ void loadConfigs(const Options& opt, Configs& cfg)
     if (opt.unsafe_assume_rc_present) {
         cfg.safety.assume_rc_present = true;
         cfg.safety.rc_required = false;
+    }
+    if (opt.flight_log_disabled) {
+        cfg.flight_log.enabled = false;
+    }
+    if (!opt.flight_log_dir_override.empty()) {
+        cfg.flight_log.base_dir = opt.flight_log_dir_override;
     }
 }
 
@@ -1174,6 +1186,64 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         std::cerr << "[gcs] warning: publisher open failed: " << publisher.lastError() << "\n";
     }
 
+    // Per-run flight logger (covers both SITL and real flight). Best-effort:
+    // failure to create the run directory only disables logging.
+    onboard::logging::FlightLogger flight_log;
+    if (!flight_log.open(cfg.flight_log)) {
+        std::cerr << "[flight-log] disabled: " << flight_log.lastError() << "\n";
+    }
+    if (flight_log.enabled()) {
+        std::cout << "[flight-log] run dir: " << flight_log.runDir() << "\n";
+        std::string args;
+        for (int i = 0; i < argc; ++i) {
+            if (i) args += ' ';
+            args += argv[i];
+        }
+        using onboard::logging::jsonEscape;
+        std::string meta = "{";
+        meta += "\"start_unix_ms\":" + std::to_string(common::unixTimestampMs());
+        meta += ",\"argv\":\"" + jsonEscape(args) + "\"";
+        meta += ",\"target\":\"" + jsonEscape(opt.target) + "\"";
+        meta += ",\"vision_source\":\"" + jsonEscape(cfg.vision_source) + "\"";
+        meta += ",\"world\":\"" + jsonEscape(opt.world) + "\"";
+        meta += ",\"line_mode\":\"" + jsonEscape(opt.line_mode_override) + "\"";
+        meta += ",\"marker_count\":" + std::to_string(cfg.mission.markers_expected);
+        meta += ",\"vertiport_marker_id\":" + std::to_string(cfg.mission.vertiport_marker_id);
+        meta += ",\"revisit_order\":\"" +
+                std::string(omission::revisitOrderName(cfg.mission.revisit_order)) + "\"";
+        meta += ",\"gcs\":\"" + jsonEscape(cfg.network.gcs_ip) + ":" +
+                std::to_string(cfg.network.telemetry_port) + "\"";
+        meta += ",\"telemetry_send_fps\":" + std::to_string(cfg.network.telemetry_send_fps);
+        meta += ",\"video\":{\"enabled\":" + std::string(pub_opts.send_video ? "true" : "false") +
+                ",\"send_fps\":" + std::to_string(cfg.vision.debug_video.send_fps) +
+                ",\"send_width\":" + std::to_string(cfg.vision.debug_video.send_width) +
+                ",\"jpeg_quality\":" + std::to_string(cfg.vision.debug_video.jpeg_quality) +
+                ",\"fec_group_size\":" + std::to_string(cfg.vision.debug_video.fec_group_size) + "}";
+        meta += ",\"camera\":{\"width\":" + std::to_string(cfg.vision.camera.width) +
+                ",\"height\":" + std::to_string(cfg.vision.camera.height) +
+                ",\"fps\":" + std::to_string(cfg.vision.camera.fps) + "}";
+        meta += ",\"setpoint_rate_hz\":" + std::to_string(cfg.setpoint_rate_hz);
+        char mission_params[512];
+        snprintf(mission_params, sizeof(mission_params),
+                 ",\"mission\":{\"cell_size_m\":%.2f,\"cruise_altitude_m\":%.2f,"
+                 "\"forward_speed_blind_mps\":%.2f,\"entry_forward_speed_mps\":%.2f,"
+                 "\"hop_max_distance_m\":%.2f,\"mission_timeout_s\":%.0f}",
+                 cfg.mission.cell_size_m, cfg.mission.cruise_altitude_m,
+                 cfg.mapper.forward_speed_blind_mps, cfg.mission.entry_forward_speed_mps,
+                 cfg.mission.hop_max_distance_m, cfg.mission.mission_timeout_s);
+        meta += mission_params;
+        meta += "}";
+        flight_log.writeMeta(meta);
+        flight_log.writeFrameHeader(
+            "t_s,frame_seq,cam_ts_ms,state,intent,coord_x,coord_y,heading,nodes,hop_m,"
+            "line_detected,line_offset_norm,line_angle_err_rad,line_conf,"
+            "idec_state,idec_type,branch_mask,center_y_norm,"
+            "markers_visible,marker_err_x,marker_err_y,"
+            "mode,armed,agl_m,local_x_m,local_y_m,alt_m,vxy_mps,yaw_rad,flow_q,batt_v,"
+            "cmd_vx_mps,cmd_vy_mps,cmd_vz_mps,cmd_yaw_rate_rads,"
+            "vision_latency_ms,safety_event");
+    }
+
     std::unique_ptr<oautopilot::MavlinkTransport> transport;
     if (cfg.endpoint.kind == TransportKind::Serial) {
         transport = std::make_unique<oautopilot::SerialMavlinkTransport>(
@@ -1326,6 +1396,30 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
     bool have_control_output = false;
     bool last_cmd_sendable = false;
 
+    // Vision-stale watchdog. Without it a camera/pipeline stall freezes the
+    // mission state machine while the last non-zero velocity command keeps
+    // being re-sent — an unbounded flyaway. Past vision_stale_hold_ms the
+    // loop sends zero velocity (position hold); past vision_stale_land_ms it
+    // commands LAND directly and latches an abort for the state machine.
+    auto last_new_frame_time = Clock::now();
+    bool vision_stale_abort = false;
+    auto last_stale_land_attempt = Clock::now() - std::chrono::hours(1);
+
+    // LAND-mode requests are edge-triggered with a 1s retry so the mode-ack
+    // wait can never stall consecutive control ticks during the descent.
+    auto last_land_mode_attempt = Clock::now() - std::chrono::hours(1);
+
+    // Flight-log change detectors.
+    omission::GridState fl_prev_state = mission.state();
+    std::string fl_prev_safety_event;
+    std::set<int> fl_logged_found_ids;
+    std::set<int> fl_logged_revisited_ids;
+
+    if (flight_log.enabled()) {
+        flight_log.logEvent("{\"t\":0.000,\"type\":\"run_start\",\"no_arm\":" +
+                            std::string(opt.no_arm ? "true" : "false") + "}");
+    }
+
     while (!g_shutdown_requested.load() && mission.state() != omission::GridState::Done) {
         const auto loop_start = Clock::now();
         autopilot.poll(1);
@@ -1354,17 +1448,48 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             }
         }
 
-        // No new frame this tick: re-send the last command to keep the setpoint
-        // cadence steady, then wait for the next tick.
+        // No new frame this tick: keep the setpoint cadence steady, but only
+        // replay the last command while vision is demonstrably fresh. A stale
+        // pipeline degrades to zero-velocity hold, then to LAND.
         const bool new_frame = vision_valid && (vision_seq != last_processed_seq);
         if (!new_frame) {
-            if (have_control_output && last_cmd_sendable) {
+            const auto stale_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                loop_start - last_new_frame_time).count();
+            const bool flight_active = !opt.no_arm && autopilot.state().armed;
+            if (flight_active && stale_ms > cfg.safety.vision_stale_land_ms) {
+                if (!vision_stale_abort) {
+                    vision_stale_abort = true;
+                    std::cerr << "[safety] vision stale " << stale_ms
+                              << "ms -> LAND (no new camera frames)\n";
+                    if (flight_log.enabled()) {
+                        char ev[160];
+                        snprintf(ev, sizeof(ev),
+                                 "{\"t\":%.3f,\"type\":\"safety\",\"event\":\"vision_stale_land\","
+                                 "\"stale_ms\":%lld}",
+                                 now_s(), static_cast<long long>(stale_ms));
+                        flight_log.logEvent(ev);
+                    }
+                }
+                if (autopilot.state().mode_name != "LAND" &&
+                    loop_start - last_stale_land_attempt >= std::chrono::seconds(2)) {
+                    last_stale_land_attempt = loop_start;
+                    try {
+                        autopilot.setLandMode(std::chrono::seconds(2));
+                    } catch (const std::exception& e) {
+                        std::cerr << "[mavlink] stale-vision setLandMode error: "
+                                  << e.what() << "\n";
+                    }
+                }
+            } else if (flight_active && stale_ms > cfg.safety.vision_stale_hold_ms) {
+                autopilot.sendBodyVelocity(oautopilot::BodyVelocityCommand{});
+            } else if (have_control_output && last_cmd_sendable) {
                 autopilot.sendBodyVelocity(last_cmd);
             }
             std::this_thread::sleep_until(loop_start + period);
             continue;
         }
         last_processed_seq = vision_seq;
+        last_new_frame_time = loop_start;
 
         // Intersection + tracker
         auto idec = decision_engine.update(
@@ -1398,9 +1523,8 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         min.frame_seq = frame.frame_id;
         const auto& apst = autopilot.state();
         min.armed = apst.armed;
-        min.guided_mode = apst.mode_name == "GUIDED";
+        const bool mode_guided = apst.mode_name == "GUIDED";
         min.heartbeat_recent = heartbeatRecent(apst, cfg.mission, loop_start);
-        min.autopilot_ready = min.heartbeat_recent;
         min.rangefinder_m = apst.distance_sensor_m;
         min.local_x_m = apst.local_x_m;
         min.local_y_m = apst.local_y_m;
@@ -1411,11 +1535,9 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             min.local_velocity_xy_mps = std::sqrt(vx*vx + vy*vy);
         }
         min.attitude_yaw_rad = apst.attitude_yaw_rad;
-        min.optical_flow_quality = apst.optical_flow_quality;
         min.vision = &vp_out.result;
         min.intersection_decision = idec;
         min.node_event = node_event;
-        min.land_requested = false;
 
         // Safety watchdog. The line-lost timeout is DELIBERATELY not enforced
         // for the grid mission (line_detected held true): hops fly as
@@ -1449,13 +1571,20 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         safety_in.rc_channel_count = apst.rc_channel_count.value_or(0);
         safety_in.last_rc_channels_time = apst.last_rc_channels_time;
         safety_in.mode_known = mission_expects_guided;
-        safety_in.mode_guided = min.guided_mode;
+        safety_in.mode_guided = mode_guided;
         const auto safety_decision = safety.update(safety_in);
+        // vision_stale_abort latches when the watchdog already commanded LAND
+        // during a frame gap; if frames resume, the mission must not carry on
+        // as if nothing happened — route it through the same EmergencyLand path.
         min.abort_requested =
-            safety_decision.action != osafety::SafetyAction::None;
+            safety_decision.action != osafety::SafetyAction::None ||
+            vision_stale_abort;
         if (min.abort_requested &&
             safety_decision.reason != last_safety_abort_reason) {
-            std::cerr << "[safety] " << safety_decision.reason
+            std::cerr << "[safety] "
+                      << (vision_stale_abort && safety_decision.reason.empty()
+                              ? "vision_stale_land"
+                              : safety_decision.reason)
                       << " -> EMERGENCY_LAND\n";
             last_safety_abort_reason = safety_decision.reason;
         }
@@ -1476,6 +1605,17 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             if (commit_ev.valid) {
                 tracker.commitAdvance(commit_ev);
                 last_committed_event = commit_ev;
+                if (flight_log.enabled()) {
+                    char ev[224];
+                    snprintf(ev, sizeof(ev),
+                             "{\"t\":%.3f,\"type\":\"node_commit\",\"x\":%d,\"y\":%d,"
+                             "\"topology\":\"%s\",\"heading\":\"%s\",\"synthetic\":%s}",
+                             min.now_s, commit_ev.local_coord.x, commit_ev.local_coord.y,
+                             ovision::intersectionTypeName(commit_ev.topology),
+                             omission::gridHeadingName(commit_ev.arrival_heading),
+                             mout.synthetic_commit_event.has_value() ? "true" : "false");
+                    flight_log.logEvent(ev);
+                }
             }
         }
 
@@ -1515,10 +1655,18 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
         have_control_output = true;
         if (!opt.no_arm && mout.request_land_mode) {
             last_cmd_sendable = false;   // LAND mode owns the descent; stop velocity
-            try {
-                autopilot.setLandMode(std::chrono::seconds(5));
-            } catch (const std::exception& e) {
-                std::cerr << "[mavlink] setLandMode error: " << e.what() << "\n";
+            // Only chase the mode change while the FC is not in LAND yet, and
+            // at most once per second with a short ack wait — the old
+            // every-tick 5s-timeout call could stall the loop (and telemetry)
+            // for whole seconds during the descent.
+            if (apst.mode_name != "LAND" &&
+                loop_start - last_land_mode_attempt >= std::chrono::seconds(1)) {
+                last_land_mode_attempt = loop_start;
+                try {
+                    autopilot.setLandMode(std::chrono::seconds(1));
+                } catch (const std::exception& e) {
+                    std::cerr << "[mavlink] setLandMode error: " << e.what() << "\n";
+                }
             }
         } else if (!opt.no_arm &&
                    mout.intent != ocontrol::GridControlIntent::Idle &&
@@ -1537,12 +1685,111 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             last_cmd_sendable = false;
         }
 
+        // Flight log: per-tick CSV row + change-triggered events. Lines are
+        // formatted here (microseconds) and written on the logger's thread.
+        if (flight_log.enabled()) {
+            if (mout.state != fl_prev_state) {
+                std::string ev = "{\"t\":";
+                char tbuf[24];
+                snprintf(tbuf, sizeof(tbuf), "%.3f", min.now_s);
+                ev += tbuf;
+                ev += ",\"type\":\"state\",\"from\":\"";
+                ev += omission::gridStateName(fl_prev_state);
+                ev += "\",\"to\":\"";
+                ev += omission::gridStateName(mout.state);
+                ev += "\",\"reason\":\"";
+                ev += onboard::logging::jsonEscape(mission.lastTransitionReason());
+                ev += "\"}";
+                flight_log.logEvent(std::move(ev));
+                fl_prev_state = mout.state;
+            }
+            if (!mout.last_safety_event.empty() &&
+                mout.last_safety_event != fl_prev_safety_event) {
+                fl_prev_safety_event = mout.last_safety_event;
+                flight_log.logEvent(
+                    "{\"t\":" + std::to_string(min.now_s) +
+                    ",\"type\":\"safety\",\"event\":\"" +
+                    onboard::logging::jsonEscape(mout.last_safety_event) + "\"}");
+            }
+            for (const auto& m : registry.records()) {
+                if (!m.grid_coord_valid) continue;
+                if (fl_logged_found_ids.insert(m.aruco_id).second) {
+                    char ev[192];
+                    snprintf(ev, sizeof(ev),
+                             "{\"t\":%.3f,\"type\":\"marker_found\",\"id\":%d,"
+                             "\"x\":%d,\"y\":%d}",
+                             min.now_s, m.aruco_id, m.grid_coord.x, m.grid_coord.y);
+                    flight_log.logEvent(ev);
+                }
+                if (m.revisited && fl_logged_revisited_ids.insert(m.aruco_id).second) {
+                    char ev[128];
+                    snprintf(ev, sizeof(ev),
+                             "{\"t\":%.3f,\"type\":\"marker_revisited\",\"id\":%d}",
+                             min.now_s, m.aruco_id);
+                    flight_log.logEvent(ev);
+                }
+            }
+
+            auto csv_opt = [](const std::optional<double>& v, int prec) {
+                if (!v.has_value()) return std::string();
+                char b[32];
+                snprintf(b, sizeof(b), "%.*f", prec, *v);
+                return std::string(b);
+            };
+            char head[256];
+            snprintf(head, sizeof(head),
+                     "%.3f,%u,%lld,%s,%s,%d,%d,%s,%d,%.2f,"
+                     "%d,%.3f,%.3f,%.2f,%s,%s,0x%02X,%.2f,%zu,",
+                     min.now_s, min.frame_seq,
+                     static_cast<long long>(min.timestamp_ms),
+                     omission::gridStateName(mout.state),
+                     ocontrol::gridControlIntentName(mout.intent),
+                     mout.current_coord.x, mout.current_coord.y,
+                     headingName(mout.current_heading),
+                     mout.intersections_recorded, mout.hop_distance_m,
+                     mout.line_detected ? 1 : 0, mout.line_center_error_norm,
+                     mout.line_angle_error_rad, mout.line_confidence,
+                     omission::decisionStateName(idec.state),
+                     intersectionTypeNameShort(idec.accepted_type),
+                     idec.accepted_branch_mask, idec.center_y_norm,
+                     vp_out.result.markers.size());
+            std::string row = head;
+            if (mout.marker_detected) {
+                char mk[40];
+                snprintf(mk, sizeof(mk), "%.3f,%.3f,",
+                         mout.marker_center_error_x_norm, mout.marker_center_error_y_norm);
+                row += mk;
+            } else {
+                row += ",,";
+            }
+            row += apst.mode_name + ',' + (apst.armed ? '1' : '0') + std::string(1, ',');
+            row += csv_opt(apst.distance_sensor_m, 2) + ',';
+            row += csv_opt(apst.local_x_m, 2) + ',';
+            row += csv_opt(apst.local_y_m, 2) + ',';
+            row += csv_opt(apst.local_altitude_m, 2) + ',';
+            row += csv_opt(min.local_velocity_xy_mps, 2) + ',';
+            row += csv_opt(apst.attitude_yaw_rad, 3) + ',';
+            row += (apst.optical_flow_quality
+                        ? std::to_string(*apst.optical_flow_quality)
+                        : std::string()) + ',';
+            row += csv_opt(apst.battery_voltage_v, 2) + ',';
+            char tail[128];
+            snprintf(tail, sizeof(tail), "%.3f,%.3f,%.3f,%.3f,%.1f,",
+                     sp.vx_forward_mps, sp.vy_right_mps, sp.vz_down_mps,
+                     sp.yaw_rate_rad_s, processing_latency_ms);
+            row += tail;
+            row += mout.last_safety_event;
+            flight_log.logFrame(min.now_s, std::move(row));
+        }
+
         // Publish telemetry / video. Strictly best-effort: a send failure must
         // never stop future publishes, block the loop, or degrade the mission.
         {
             oapp::GcsTelemetryPublishInput pin;
-            pin.frame = frame;
+            // frame is not used after this block; moving avoids copying the
+            // JPEG byte vector every tick (image_bgr is a refcounted cv::Mat).
             pin.image_bgr = frame.image_bgr;
+            pin.frame = std::move(frame);
             pin.vision_output = vp_out;
             pin.intersection_decision = idec;
             // Send the last committed node every frame (not the peek
@@ -1671,7 +1918,9 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
     std::cout << "[grid-mission] shutdown requested or mission DONE. waiting disarm...\n";
     if (!opt.no_arm) {
         try {
-            autopilot.setLandMode(std::chrono::seconds(3));
+            if (autopilot.state().mode_name != "LAND") {
+                autopilot.setLandMode(std::chrono::seconds(3));
+            }
         } catch (...) {}
         const auto land_deadline = Clock::now() + std::chrono::seconds(20);
         while (Clock::now() < land_deadline) {
@@ -1679,6 +1928,19 @@ int onboard::app::AstroquadOnboardApp::run(int argc, char** argv)
             if (!autopilot.state().armed) break;
         }
     }
+    if (flight_log.enabled()) {
+        const char* end_reason = g_shutdown_requested.load()
+            ? "shutdown_requested"
+            : (mission.state() == omission::GridState::Done ? "mission_done" : "loop_exit");
+        char ev[160];
+        snprintf(ev, sizeof(ev),
+                 "{\"t\":%.3f,\"type\":\"run_end\",\"reason\":\"%s\","
+                 "\"final_state\":\"%s\",\"dropped_log_lines\":%llu}",
+                 now_s(), end_reason, omission::gridStateName(mission.state()),
+                 static_cast<unsigned long long>(flight_log.droppedLines()));
+        flight_log.logEvent(ev);
+    }
+    flight_log.close();
     publisher.close();
     frame_source->close();
     std::cout << "[grid-mission] done.\n";

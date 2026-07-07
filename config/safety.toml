@@ -3,6 +3,14 @@ line_lost_ms = 2000
 gcs_link_lost_ms = 5000
 autopilot_heartbeat_lost_ms = 2000
 mission_timeout_ms = 300000
+# Vision pipeline stall watchdog (mission loop). If no new processed camera
+# frame arrives for vision_stale_hold_ms, the loop stops replaying the last
+# velocity command and holds position (zero velocity). Past
+# vision_stale_land_ms it commands LAND and aborts the mission. Guards
+# against an rpicam/Gazebo stall turning the last forward command into a
+# flyaway.
+vision_stale_hold_ms = 800
+vision_stale_land_ms = 4000
 
 [rc]
 assume_rc_present = true

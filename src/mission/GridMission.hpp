@@ -133,9 +133,6 @@ struct GridMissionConfig {
     // Marker hover holds for the full configured dwell while the controller
     // keeps centering the marker under the camera.
     double snake_marker_hover_s = 3.0;
-    double marker_hover_min_s = 0.8;
-    double marker_hover_center_tolerance_norm = 0.10;
-    int    marker_hover_center_stable_frames = 2;
     double snake_stop_velocity_threshold_mps = 0.05;
     int    snake_stop_velocity_consecutive_frames = 2;
     double snake_yaw_target_tolerance_rad = 0.0872665;
@@ -166,6 +163,12 @@ struct GridMissionConfig {
     double autopilot_heartbeat_timeout_s = 2.0;
     double altitude_ceiling_m = 3.5;
     double snake_complete_hover_s = 2.0;
+    // Per-state hang guards (real-flight determinism). A 90° turn that never
+    // settles (yaw data lost, wind) or a boundary stop whose EKF velocity
+    // never drops below the settle threshold would otherwise hover silently
+    // until mission_timeout_s. Both route to EmergencyLand on expiry.
+    double turn_timeout_s = 15.0;
+    double stop_timeout_s = 12.0;
 
     // CLI/SnakePlanner override
     SnakeTurnDir initial_snake_turn = SnakeTurnDir::Unknown;
@@ -207,9 +210,7 @@ struct GridMissionInput {
     std::int64_t timestamp_ms = 0;
     std::uint32_t frame_seq = 0;
 
-    bool autopilot_ready = false;
     bool armed = false;
-    bool guided_mode = false;
     bool heartbeat_recent = true;
     std::optional<double> rangefinder_m;
     std::optional<double> local_x_m;
@@ -217,13 +218,11 @@ struct GridMissionInput {
     std::optional<double> local_altitude_m;
     std::optional<double> local_velocity_xy_mps;
     std::optional<double> attitude_yaw_rad;
-    std::optional<int>    optical_flow_quality;
 
     const onboard::vision::VisionResult* vision = nullptr;
     IntersectionDecision intersection_decision;
     GridNodeEvent node_event;
 
-    bool land_requested = false;
     bool abort_requested = false;
 };
 
@@ -349,6 +348,10 @@ public:
     // distinguish "not yet seen" from a real vertiport detection.
     int activeVertiportMarkerId() const { return active_vertiport_marker_id_; }
 
+    // Reason string passed to the most recent state transition; used by the
+    // flight logger to annotate state-change events.
+    const std::string& lastTransitionReason() const { return last_transition_reason_; }
+
 private:
     void transition(GridState next, double now_s, const std::string& reason);
 
@@ -391,11 +394,17 @@ private:
 
     // Shared per-hop EmergencyLand guard used by the forward handlers (snake /
     // advance / revisit / return). Trips when the hop overruns hop_max_distance_m
-    // or, when check_timeout is set, when it exceeds snake_advance_timeout_s.
-    // Each call site invokes this as the handler's final statement, so the
-    // behaviour matches the previously inlined checks exactly.
+    // or when elapsed_s exceeds snake_advance_timeout_s (elapsed_s < 0 disables
+    // the timeout check). The timeout catches hops where LOCAL_POSITION_NED is
+    // stale/absent — hopDistance() then reads 0 and the distance bound alone
+    // would never fire, leaving the drone flying forward blind indefinitely.
     void checkHopFailsafe(const GridMissionInput& in, GridMissionOutput& out,
-                          double distance, bool check_timeout, const char* reason);
+                          double distance, double elapsed_s, const char* reason);
+
+    // Per-state hang guard: EmergencyLand when the state has been active
+    // longer than timeout_s. Returns true when it fired (caller must return).
+    bool checkStateTimeout(const GridMissionInput& in, GridMissionOutput& out,
+                           double timeout_s, const char* reason);
 
     // Helpers
     bool isHardFailsafe(const GridMissionInput& in, std::string& reason) const;
@@ -405,8 +414,7 @@ private:
                               GridMissionOutput& out) const;
     void beginMarkerHover(int marker_id, double now_s);
     void clearMarkerHover();
-    bool updateMarkerHoverCenterGate(const GridMissionOutput& out);
-    bool markerHoverComplete(const GridMissionOutput& out, double now_s);
+    bool markerHoverComplete(double now_s) const;
     bool hasPendingGridMarkerHint(const GridMissionInput& in) const;
     bool shouldPassThroughRegularNode(const GridMissionInput& in) const;
     bool isEntryIntersectionCandidate(const GridMissionInput& in) const;
@@ -508,12 +516,12 @@ private:
     bool   snake_turn_first_done_ = false;
     bool   marker_hover_active_ = false;
     double marker_hover_start_s_ = -1.0;
-    int    marker_hover_centered_count_ = 0;
     int    last_recorded_marker_id_ = -1;
     int    completion_hover_marker_id_ = -1;
     int    entry_origin_marker_id_ = -1;
     bool   started_ = false;
     std::string last_safety_event_;
+    std::string last_transition_reason_;
 
     std::optional<double> last_node_local_x_;
     std::optional<double> last_node_local_y_;

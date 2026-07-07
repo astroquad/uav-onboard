@@ -18,6 +18,15 @@ struct SafetyConfig {
     bool rc_required = false;
     bool assume_rc_present = true;
     int rc_lost_ms = 1500;
+    // Vision pipeline stall watchdog (enforced by the mission loop, not by
+    // SafetyMonitor::update which only runs on fresh frames). If no new
+    // processed frame arrives for vision_stale_hold_ms the loop stops
+    // re-sending the last velocity command and holds position (zero
+    // velocity); past vision_stale_land_ms it commands LAND. Without this a
+    // camera stall would freeze the mission state machine while the last
+    // non-zero velocity command kept being re-sent — a flyaway.
+    int vision_stale_hold_ms = 800;
+    int vision_stale_land_ms = 4000;
     // Preflight EKF readiness gate. ArduCopter accepts GUIDED only when the EKF
     // horizontal-position and velocity innovation ratios are below ~1.0, so the
     // onboard gate enforces the same bound to predict GUIDED acceptance rather

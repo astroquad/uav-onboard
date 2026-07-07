@@ -57,6 +57,7 @@ add_library(onboard_core STATIC
     src/common/VisionConfig.cpp
     src/control/GridControlMapper.cpp
     src/control/GuidedVelocityController.cpp
+    src/logging/FlightLogger.cpp
     src/mission/AltitudePolicy.cpp
     src/mission/GridCoordinateTracker.cpp
     src/mission/GridMission.cpp

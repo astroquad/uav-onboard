@@ -98,7 +98,6 @@ onboard::mission::GridMissionInput makeInput(
     in.timestamp_ms = static_cast<std::int64_t>(now_s * 1000.0);
     in.frame_seq = static_cast<std::uint32_t>(now_s * 100.0 + 1.0);
     in.armed = true;
-    in.guided_mode = true;
     in.heartbeat_recent = true;
     in.rangefinder_m = 2.0;
     in.local_altitude_m = 2.0;
@@ -196,9 +195,6 @@ int main()
     config.snake_turn_lockout_s = 0.0;
     config.marker_window_frames = 1;
     config.marker_window_min_count = 1;
-    config.marker_hover_min_s = 0.8;
-    config.marker_hover_center_tolerance_norm = 0.10;
-    config.marker_hover_center_stable_frames = 2;
     config.snake_launch_align_stable_frames = 2;
     config.snake_launch_align_timeout_s = 3.0;
 

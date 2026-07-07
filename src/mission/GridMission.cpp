@@ -8,8 +8,6 @@
 namespace onboard::mission {
 namespace {
 
-constexpr int kFrontBranchIndex = 0;
-
 bool nodeJustRecorded(const IntersectionDecision& decision)
 {
     return decision.event_ready && decision.node_recorded;
@@ -147,7 +145,6 @@ void GridMission::reset()
     snake_turn_first_done_ = false;
     marker_hover_active_ = false;
     marker_hover_start_s_ = -1.0;
-    marker_hover_centered_count_ = 0;
     last_recorded_marker_id_ = -1;
     completion_hover_marker_id_ = -1;
     entry_origin_marker_id_ = -1;
@@ -238,7 +235,7 @@ int MarkerWindow::bestStableId() const
 
 void GridMission::transition(GridState next, double now_s, const std::string& reason)
 {
-    (void)reason;
+    last_transition_reason_ = reason;
     state_ = next;
     state_entry_s_ = now_s;
 }
@@ -393,7 +390,6 @@ void GridMission::beginMarkerHover(int marker_id, double now_s)
         last_recorded_marker_id_ != marker_id ||
         marker_hover_start_s_ < 0.0) {
         marker_hover_start_s_ = now_s;
-        marker_hover_centered_count_ = 0;
     }
     marker_hover_active_ = true;
     last_recorded_marker_id_ = marker_id;
@@ -403,33 +399,17 @@ void GridMission::clearMarkerHover()
 {
     marker_hover_active_ = false;
     marker_hover_start_s_ = -1.0;
-    marker_hover_centered_count_ = 0;
 }
 
-bool GridMission::updateMarkerHoverCenterGate(const GridMissionOutput& out)
-{
-    const double tol = std::max(0.0, config_.marker_hover_center_tolerance_norm);
-    const bool centered =
-        out.marker_detected &&
-        std::abs(out.marker_center_error_x_norm) <= tol &&
-        std::abs(out.marker_center_error_y_norm) <= tol;
-    if (centered) {
-        ++marker_hover_centered_count_;
-    } else {
-        marker_hover_centered_count_ = 0;
-    }
-    return marker_hover_centered_count_ >=
-        std::max(1, config_.marker_hover_center_stable_frames);
-}
-
-bool GridMission::markerHoverComplete(const GridMissionOutput& out, double now_s)
+// Hover completion is purely time-based: the controller keeps centering the
+// marker for the whole dwell, but a marker that never centers perfectly must
+// not stall the mission.
+bool GridMission::markerHoverComplete(double now_s) const
 {
     const double start_s = marker_hover_start_s_ >= 0.0
         ? marker_hover_start_s_
         : state_entry_s_;
-    const double elapsed_s = now_s - start_s;
-    (void)updateMarkerHoverCenterGate(out);
-    return elapsed_s >= std::max(0.0, config_.snake_marker_hover_s);
+    return now_s - start_s >= std::max(0.0, config_.snake_marker_hover_s);
 }
 
 bool GridMission::hasPendingGridMarkerHint(const GridMissionInput& in) const
@@ -587,9 +567,6 @@ GridMissionOutput GridMission::update(const GridMissionInput& input)
     if (input.attitude_yaw_rad.has_value()) {
         out.yaw_available = true;
         out.current_yaw_rad = *input.attitude_yaw_rad;
-    }
-    if (input.local_altitude_m.has_value()) {
-        out.altitude_off_pad_confirmed = false;
     }
 
     // Universal failsafe (skip for Idle/Done)
@@ -762,14 +739,26 @@ double GridMission::hopDistance(const GridMissionInput& in) const
 }
 
 void GridMission::checkHopFailsafe(const GridMissionInput& in, GridMissionOutput& out,
-                                   double distance, bool check_timeout, const char* reason)
+                                   double distance, double elapsed_s, const char* reason)
 {
     if (distance > config_.hop_max_distance_m ||
-        (check_timeout && in.now_s - state_entry_s_ > config_.snake_advance_timeout_s)) {
+        (elapsed_s >= 0.0 && elapsed_s > config_.snake_advance_timeout_s)) {
         last_safety_event_ = reason;
         out.last_safety_event = last_safety_event_;
         transition(GridState::EmergencyLand, in.now_s, reason);
     }
+}
+
+bool GridMission::checkStateTimeout(const GridMissionInput& in, GridMissionOutput& out,
+                                    double timeout_s, const char* reason)
+{
+    if (timeout_s > 0.0 && in.now_s - state_entry_s_ > timeout_s) {
+        last_safety_event_ = reason;
+        out.last_safety_event = last_safety_event_;
+        transition(GridState::EmergencyLand, in.now_s, reason);
+        return true;
+    }
+    return false;
 }
 
 bool GridMission::isRevisitState() const
@@ -1241,7 +1230,6 @@ void GridMission::handleMarkerLockYaw(const GridMissionInput& in, GridMissionOut
                 registry_->observe(marker->id, GridCoord{}, /*grid_coord_valid=*/false,
                                    marker->orientation_deg, in.timestamp_ms, in.frame_seq);
             }
-            out.vertiport_verified = true;
         } else {
             vertiport_marker_stable_count_ = 0;
         }
@@ -1407,7 +1395,7 @@ void GridMission::handleEntryOriginMarkerHover(const GridMissionInput& in,
     }
 
     const bool hover_done = focus_id >= 0
-        ? markerHoverComplete(out, in.now_s)
+        ? markerHoverComplete(in.now_s)
         : (in.now_s - state_entry_s_ >= config_.snake_marker_hover_s);
     if (!hover_done) {
         return;
@@ -1569,9 +1557,14 @@ void GridMission::handleSnakeForward(const GridMissionInput& in, GridMissionOutp
         return;
     }
 
-    // Distance failsafe — if we have gone well past one cell length without
-    // seeing the next intersection, hand off to the EmergencyLand path.
-    checkHopFailsafe(in, out, distance, /*check_timeout=*/false, "hop_distance_exceeded");
+    // Distance + time failsafe. The time anchor is the later of state entry
+    // and the last node commit so passthrough hops (which stay in SnakeForward
+    // across several cells) get a fresh per-hop budget instead of one shared
+    // state-entry budget. The timeout also covers the LOCAL_NED-lost case
+    // where hopDistance() reads 0 and the distance bound can never fire.
+    const double hop_elapsed_s =
+        in.now_s - std::max(state_entry_s_, last_node_record_s_);
+    checkHopFailsafe(in, out, distance, hop_elapsed_s, "hop_distance_or_timeout");
 }
 
 void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionOutput& out)
@@ -1628,7 +1621,7 @@ void GridMission::handleSnakeRecordNode(const GridMissionInput& in, GridMissionO
         ? config_.snake_boundary_record_dwell_s
         : config_.snake_record_dwell_s;
     const bool dwell_done = marker_hover_active_
-        ? markerHoverComplete(out, in.now_s)
+        ? markerHoverComplete(in.now_s)
         : (in.now_s - state_entry_s_ >= record_dwell_s);
     if (dwell_done) {
         const int hover_marker_id = marker_hover_active_
@@ -1736,6 +1729,9 @@ void GridMission::handleSnakeLaunchAlign(const GridMissionInput& in, GridMission
 void GridMission::handleSnakeStopAtCenter(const GridMissionInput& in, GridMissionOutput& out)
 {
     out.intent = control::GridControlIntent::StopAndCenter;
+    if (checkStateTimeout(in, out, config_.stop_timeout_s, "stop_settle_timeout")) {
+        return;
+    }
     const double vmag = in.local_velocity_xy_mps.value_or(1.0);
     if (vmag <= config_.snake_stop_velocity_threshold_mps) {
         ++snake_stop_stable_count_;
@@ -1819,6 +1815,9 @@ void GridMission::handleSnakeTurn90(const GridMissionInput& in, GridMissionOutpu
 {
     out.intent = control::GridControlIntent::YawTurn;
     out.target_yaw_rad = yaw_target_rad_;
+    if (checkStateTimeout(in, out, config_.turn_timeout_s, "turn_timeout")) {
+        return;
+    }
     if (in.attitude_yaw_rad.has_value()) {
         const double err = std::abs(wrap(yaw_target_rad_ - *in.attitude_yaw_rad));
         if (err <= config_.snake_yaw_target_tolerance_rad) {
@@ -1919,13 +1918,16 @@ void GridMission::handleSnakeAdvanceOneCell(const GridMissionInput& in, GridMiss
         return;
     }
 
-    checkHopFailsafe(in, out, distance, /*check_timeout=*/true, "advance_timeout");
+    checkHopFailsafe(in, out, distance, in.now_s - state_entry_s_, "advance_timeout");
 }
 
 void GridMission::handleSnakeTurn90Again(const GridMissionInput& in, GridMissionOutput& out)
 {
     out.intent = control::GridControlIntent::YawTurn;
     out.target_yaw_rad = yaw_target_rad_;
+    if (checkStateTimeout(in, out, config_.turn_timeout_s, "turn_timeout")) {
+        return;
+    }
     if (in.attitude_yaw_rad.has_value()) {
         const double err = std::abs(wrap(yaw_target_rad_ - *in.attitude_yaw_rad));
         if (err <= config_.snake_yaw_target_tolerance_rad) {
@@ -2007,7 +2009,7 @@ void GridMission::handleTurnNodeMarkerHover(const GridMissionInput& in,
     }
 
     const bool hover_done = focus_id >= 0
-        ? markerHoverComplete(out, in.now_s)
+        ? markerHoverComplete(in.now_s)
         : (in.now_s - state_entry_s_ >= config_.snake_marker_hover_s);
     if (hover_done) {
         const GridState next = pending_post_hover_state_ != GridState::Idle
@@ -2094,7 +2096,7 @@ void GridMission::handleRevisitForward(const GridMissionInput& in,
         return;
     }
 
-    checkHopFailsafe(in, out, distance, /*check_timeout=*/true, "revisit_hop_timeout");
+    checkHopFailsafe(in, out, distance, in.now_s - state_entry_s_, "revisit_hop_timeout");
 }
 
 void GridMission::handleRevisitStopAtTurn(const GridMissionInput& in,
@@ -2103,6 +2105,9 @@ void GridMission::handleRevisitStopAtTurn(const GridMissionInput& in,
     out.intent = control::GridControlIntent::StopAndCenter;
     out.target_altitude_m = config_.cruise_altitude_m;
     out.target_yaw_rad = yawForHeading(revisit_current_heading_);
+    if (checkStateTimeout(in, out, config_.stop_timeout_s, "revisit_stop_timeout")) {
+        return;
+    }
 
     const double vmag = in.local_velocity_xy_mps.value_or(1.0);
     if (vmag <= config_.snake_stop_velocity_threshold_mps) {
@@ -2141,6 +2146,9 @@ void GridMission::handleRevisitTurn90(const GridMissionInput& in,
     out.intent = control::GridControlIntent::YawTurn;
     out.target_altitude_m = config_.cruise_altitude_m;
     out.target_yaw_rad = yaw_target_rad_;
+    if (checkStateTimeout(in, out, config_.turn_timeout_s, "revisit_turn_timeout")) {
+        return;
+    }
     if (!in.attitude_yaw_rad.has_value()) {
         return;
     }
@@ -2200,7 +2208,7 @@ void GridMission::handleRevisitMarkerHover(const GridMissionInput& in,
     }
 
     const bool hover_done = focus_id >= 0
-        ? markerHoverComplete(out, in.now_s)
+        ? markerHoverComplete(in.now_s)
         : (in.now_s - state_entry_s_ >= config_.snake_marker_hover_s);
     if (!hover_done) {
         return;
@@ -2270,7 +2278,7 @@ void GridMission::handleReturnHomeForward(const GridMissionInput& in,
         return;
     }
 
-    checkHopFailsafe(in, out, distance, /*check_timeout=*/true, "return_hop_timeout");
+    checkHopFailsafe(in, out, distance, in.now_s - state_entry_s_, "return_hop_timeout");
 }
 
 void GridMission::handleReturnHomeStopAtTurn(const GridMissionInput& in,
@@ -2279,6 +2287,9 @@ void GridMission::handleReturnHomeStopAtTurn(const GridMissionInput& in,
     out.intent = control::GridControlIntent::StopAndCenter;
     out.target_altitude_m = config_.cruise_altitude_m;
     out.target_yaw_rad = yawForHeading(return_current_heading_);
+    if (checkStateTimeout(in, out, config_.stop_timeout_s, "return_stop_timeout")) {
+        return;
+    }
 
     const double vmag = in.local_velocity_xy_mps.value_or(1.0);
     if (vmag <= config_.snake_stop_velocity_threshold_mps) {
@@ -2317,6 +2328,9 @@ void GridMission::handleReturnHomeTurn90(const GridMissionInput& in,
     out.intent = control::GridControlIntent::YawTurn;
     out.target_altitude_m = config_.cruise_altitude_m;
     out.target_yaw_rad = yaw_target_rad_;
+    if (checkStateTimeout(in, out, config_.turn_timeout_s, "return_turn_timeout")) {
+        return;
+    }
     if (!in.attitude_yaw_rad.has_value()) {
         return;
     }
@@ -2395,6 +2409,9 @@ void GridMission::handleReturnHomeFaceSouth(const GridMissionInput& in,
     out.target_altitude_m = config_.cruise_altitude_m;
     out.target_yaw_rad = yawForHeading(target_heading);
     out.advance_phase = false;
+    if (checkStateTimeout(in, out, config_.turn_timeout_s, "face_south_timeout")) {
+        return;
+    }
 
     auto leaveGrid = [&]() {
         return_current_coord_ = GridCoord{0, 0};
@@ -2515,7 +2532,7 @@ void GridMission::handleReturnVertiportMarkerHover(const GridMissionInput& in,
         vertiport_acquired_ = true;
     }
 
-    if (out.marker_detected && markerHoverComplete(out, in.now_s)) {
+    if (out.marker_detected && markerHoverComplete(in.now_s)) {
         clearMarkerHover();
         transition(GridState::Land, in.now_s, "return_vertiport_done");
         return;
