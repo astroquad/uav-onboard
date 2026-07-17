@@ -415,12 +415,13 @@ that marker, lands, and publishes mission completion telemetry.
 
 ## Flight Logging
 
-`astroquad-onboard` writes a self-contained log folder for **every** run (both
-SITL and real flight), enabled by default. Each run gets a unique sequential
-number and timestamp:
+`astroquad-onboard` and the flight-capable `line_follow_node` path write a
+self-contained log folder for every SITL or real flight, enabled by default.
+Full-mission and staging logs use separate directory trees:
 
 ```text
 logs/flights/run_0001_2026-07-07_18-30-12/
+  # astroquad-onboard full grid mission
   meta.json     one-shot run description: argv, target, key mission/video/
                 camera/network config, mission-start unix time
   frames.csv    one row per mission tick (~20 Hz): mission state + control
@@ -431,6 +432,14 @@ logs/flights/run_0001_2026-07-07_18-30-12/
                 AGL, LOCAL_NED x/y/z, yaw, optical-flow quality, battery volts)
   events.jsonl  state transitions (with reason), node commits, marker
                 found/revisited, safety events, run start/end
+
+logs/flights/line_follow_node/run_0001_2026-07-07_18-31-05/
+  # line_follow_node staging mission; meta.json also records
+  # program=line_follow_node and mission_type=line_follow_staging
+  meta.json
+  frames.csv    line/marker observations, BODY_NED or LOCAL_NED command frame,
+                control outputs, and Pixhawk/MAVLink sensor values
+  events.jsonl  staging state transitions, landing, and run start/end
 ```
 
 Configuration is in `config/logging.toml`:
@@ -448,7 +457,12 @@ the mission. CLI overrides:
 ```bash
 ./build/astroquad-onboard ... --no-flight-log         # disable for this run
 ./build/astroquad-onboard ... --flight-log-dir /mnt/usb/astroquad_logs
+./build/line_follow_node ... --no-flight-log
+./build/line_follow_node ... --flight-log-dir /mnt/usb/astroquad_logs
 ```
+
+For `line_follow_node`, `--flight-log-dir` specifies the common base and the
+`line_follow_node/` discriminator is appended automatically.
 
 `logs/` is gitignored (`logs/*` and `logs/flights/`), so flight logs stay
 local and are never committed.
@@ -496,6 +510,13 @@ Line-follow default GUIDED + body-NED velocity path:
 omitted. This path requests GUIDED, arms, performs MAVLink takeoff, then sends
 body-frame NED velocity setpoints. On real serial targets it requires RC input
 and an optical-flow/range local estimate before arm/takeoff.
+
+Line following, marker approach, and marker hover remain camera-closed-loop
+while their visual target is visible: the controller continuously sends
+body-frame NED velocity corrections. If both the active target and a usable
+fallback disappear briefly, `line_follow_node` captures a LOCAL_NED anchor for
+a short hold; the existing mission timeout then requests LAND if vision does
+not recover.
 
 Line-follow only ALT_HOLD + RC override experiment path:
 

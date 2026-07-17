@@ -1,7 +1,9 @@
-# Per-run flight logging (astroquad-onboard, SITL and real flight).
+# Per-run flight logging (astroquad-onboard and line_follow_node, SITL and real flight).
 #
-# Every run creates a fresh sequential folder:
+# astroquad-onboard creates:
 #   <base_dir>/run_0001_2026-07-07_18-30-12/
+# line_follow_node creates a separately numbered staging tree:
+#   <base_dir>/line_follow_node/run_0001_2026-07-07_18-30-12/
 #     meta.json    - one-shot run description (argv, key config, start time)
 #     frames.csv   - one row per mission tick: mission state, control intent,
 #                    grid coord/heading, line tracing, intersection decision,

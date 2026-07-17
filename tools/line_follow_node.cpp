@@ -3,8 +3,10 @@
 #include "autopilot/UdpMavlinkTransport.hpp"
 #include "common/KnownHosts.hpp"
 #include "common/NetworkConfig.hpp"
+#include "common/Time.hpp"
 #include "common/VisionConfig.hpp"
 #include "control/GuidedVelocityController.hpp"
+#include "logging/FlightLogger.hpp"
 #include "mission/LineFollowMission.hpp"
 #include "safety/SafetyMonitor.hpp"
 
@@ -24,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <csignal>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -137,6 +140,7 @@ struct RuntimeConfig {
     onboard::control::GuidedVelocityControllerConfig controller;
     RcOverrideConfig rc_override;
     onboard::safety::SafetyConfig safety;
+    onboard::logging::FlightLoggerOptions flight_log;
     double fake_center_error_norm = 0.0;
     double fake_line_angle_deg = 90.0;
     double desired_line_angle_deg = 90.0;
@@ -153,6 +157,7 @@ struct Options {
     std::string line_mode_override;
     std::string gcs_ip_override;
     std::string gazebo_topic_override;
+    std::string flight_log_dir_override;
     std::optional<int> mission_timeout_ms;
     int telemetry_port_override = 0;
     int video_port_override = 0;
@@ -173,6 +178,7 @@ struct Options {
     bool alt_hold_auto_takeoff = false;
     bool unsafe_assume_rc_present = false;
     bool profile_vision = false;
+    bool flight_log_disabled = false;
 };
 
 std::string joinConfigPath(const std::string& config_dir, const std::string& filename)
@@ -221,6 +227,8 @@ void printUsage()
         << "  --alt-hold-auto-takeoff     In alt_hold_rc_override, arm and climb using RC throttle override\n"
         << "  --unsafe-assume-rc-present  Bypass MAVLink RC gate for real-flight debugging\n"
         << "  --profile-vision            Log per-stage vision latency in control log\n"
+        << "  --flight-log-dir <dir>      Flight log base directory (line_follow_node subdir is added)\n"
+        << "  --no-flight-log             Disable per-run flight logging\n"
         << "  --smoke-duration-ms <n>     MAVLink smoke duration, default 10000\n"
         << "  --mission-timeout-ms <n>    Override safety mission timeout\n"
         << "  -h, --help                  Show this help\n";
@@ -300,6 +308,10 @@ Options parseOptions(int argc, char** argv)
             options.unsafe_assume_rc_present = true;
         } else if (arg == "--profile-vision") {
             options.profile_vision = true;
+        } else if (arg == "--flight-log-dir" && i + 1 < argc) {
+            options.flight_log_dir_override = argv[++i];
+        } else if (arg == "--no-flight-log") {
+            options.flight_log_disabled = true;
         } else if (arg == "--smoke-duration-ms" && i + 1 < argc) {
             options.smoke_duration_ms = parseInt(argv[++i], options.smoke_duration_ms);
         } else if (arg == "--mission-timeout-ms" && i + 1 < argc) {
@@ -314,6 +326,15 @@ Options parseOptions(int argc, char** argv)
         }
     }
     return options;
+}
+
+std::string joinDataPath(const std::string& base, const std::string& child)
+{
+    if (base.empty()) {
+        return child;
+    }
+    const char last = base.back();
+    return (last == '/' || last == '\\') ? base + child : base + "/" + child;
 }
 
 std::uint16_t parsePort(const std::string& value, std::uint16_t fallback)
@@ -846,6 +867,23 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
     } catch (const toml::parse_error&) {
     }
 
+    try {
+        const auto table = toml::parse_file(joinConfigPath(options.config_dir, "logging.toml"));
+        if (const auto flight_log = table["flight_log"]) {
+            config.flight_log.enabled =
+                flight_log["enabled"].value_or(config.flight_log.enabled);
+            config.flight_log.base_dir =
+                flight_log["base_dir"].value_or(config.flight_log.base_dir);
+            config.flight_log.frame_log_hz =
+                flight_log["frame_log_hz"].value_or(config.flight_log.frame_log_hz);
+            config.flight_log.flush_interval_s =
+                flight_log["flush_interval_s"].value_or(
+                    config.flight_log.flush_interval_s);
+        }
+    } catch (const toml::parse_error&) {
+        // Flight logging is best-effort; compiled defaults remain usable.
+    }
+
     if (target == "sitl") {
         config.endpoint.kind = TransportKind::Udp;
         config.endpoint.label = "sitl";
@@ -912,6 +950,16 @@ RuntimeConfig loadRuntimeConfig(const Options& options)
         config.safety.assume_rc_present = true;
         config.safety.rc_required = false;
     }
+    if (options.flight_log_disabled) {
+        config.flight_log.enabled = false;
+    }
+    if (!options.flight_log_dir_override.empty()) {
+        config.flight_log.base_dir = options.flight_log_dir_override;
+    }
+    // Keep staging logs separate without changing astroquad-onboard's
+    // established logs/flights/run_* layout.
+    config.flight_log.base_dir =
+        joinDataPath(config.flight_log.base_dir, "line_follow_node");
     config.rc_override.sender_system_id =
         std::clamp(config.rc_override.sender_system_id, 1, 255);
     config.rc_override.roll_full_scale_mps =
@@ -955,6 +1003,16 @@ onboard::autopilot::BodyVelocityCommand toAutopilotCommand(
         setpoint.vz_down_mps,
         setpoint.yaw_rate_rad_s,
     };
+}
+
+std::string csvOptional(const std::optional<double>& value, int precision)
+{
+    if (!value) {
+        return {};
+    }
+    char buffer[48];
+    std::snprintf(buffer, sizeof(buffer), "%.*f", precision, *value);
+    return buffer;
 }
 
 double degToRad(double degrees)
@@ -2530,6 +2588,65 @@ int main(int argc, char** argv)
             return 0;
         }
 
+        // Per-run staging flight log.  The configured base directory already
+        // has a line_follow_node component, so these runs cannot be confused
+        // with astroquad-onboard's full grid-mission logs.
+        onboard::logging::FlightLogger flight_log;
+        if (!flight_log.open(config.flight_log)) {
+            std::cerr << "[flight-log] disabled: " << flight_log.lastError() << "\n";
+        }
+        if (flight_log.enabled()) {
+            std::cout << "[flight-log] line-follow run dir: "
+                      << flight_log.runDir() << "\n";
+            std::string args;
+            for (int i = 0; i < argc; ++i) {
+                if (i) {
+                    args += ' ';
+                }
+                args += argv[i];
+            }
+            using onboard::logging::jsonEscape;
+            std::string meta = "{";
+            meta += "\"start_unix_ms\":" +
+                std::to_string(onboard::common::unixTimestampMs());
+            meta += ",\"program\":\"line_follow_node\"";
+            meta += ",\"mission_type\":\"line_follow_staging\"";
+            meta += ",\"argv\":\"" + jsonEscape(args) + "\"";
+            meta += ",\"target\":\"" + jsonEscape(config.endpoint.label) + "\"";
+            meta += ",\"vision_source\":\"" +
+                jsonEscape(config.vision_source) + "\"";
+            meta += ",\"line_mode\":\"" +
+                jsonEscape(config.vision.line.mode) + "\"";
+            meta += ",\"control_backend\":\"" +
+                std::string(toString(options.control_backend)) + "\"";
+            meta += ",\"setpoint_rate_hz\":" +
+                std::to_string(config.setpoint_rate_hz);
+            char mission_meta[384];
+            std::snprintf(
+                mission_meta,
+                sizeof(mission_meta),
+                ",\"mission\":{\"target_altitude_m\":%.2f,"
+                "\"line_follow_duration_s\":%.2f,\"line_lost_timeout_s\":%.2f,"
+                "\"marker_approach_timeout_s\":%.2f,\"marker_hover_s\":%.2f,"
+                "\"marker_lost_timeout_s\":%.2f}",
+                config.mission.target_altitude_m,
+                config.mission.line_follow_duration_s,
+                config.mission.line_lost_timeout_s,
+                config.mission.marker_approach_timeout_s,
+                config.mission.marker_hover_s,
+                config.mission.marker_lost_timeout_s);
+            meta += mission_meta;
+            meta += "}";
+            flight_log.writeMeta(meta);
+            flight_log.writeFrameHeader(
+                "t_s,state,command_frame,line_detected,line_conf,line_offset_norm,"
+                "line_angle_err_rad,marker_detected,marker_centered,marker_err_x,"
+                "marker_err_y,mode,armed,agl_m,alt_m,local_x_m,local_y_m,local_z_m,"
+                "local_vx_mps,local_vy_mps,local_vz_mps,yaw_rad,flow_q,batt_v,"
+                "cmd_vx_mps,cmd_vy_mps,cmd_vz_mps,cmd_yaw_rate_rads,"
+                "vision_read_ms,vision_processing_ms");
+        }
+
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         std::unique_ptr<onboard::vision::FrameSource> frame_source;
         std::unique_ptr<onboard::vision::VisionProcessor> vision_processor;
@@ -2665,6 +2782,11 @@ int main(int argc, char** argv)
         const auto mission_started_at = Clock::now();
         mission.startTakeoff(mission_started_at);
         safety.startMission(mission_started_at);
+        if (flight_log.enabled()) {
+            flight_log.logEvent(
+                "{\"t\":0.000,\"type\":\"run_start\","
+                "\"state\":\"TAKEOFF\",\"program\":\"line_follow_node\"}");
+        }
 
         if (rc_override_backend) {
             std::cout << "[mission] ALT_HOLD_RC_OVERRIDE control start";
@@ -2741,12 +2863,12 @@ int main(int argc, char** argv)
         std::optional<Clock::time_point> rc_marker_hover_started_at;
         bool rc_marker_hover_land_logged = false;
         bool shutdown_land_logged = false;
+        double last_read_frame_ms = 0.0;
+        double last_processing_latency_ms = 0.0;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
         int mission_vision_frames = 0;
         onboard::app::GcsTelemetryPublishStats mission_publish_stats;
         onboard::vision::VisionProcessingMetrics last_vision_metrics;
-        double last_read_frame_ms = 0.0;
-        double last_processing_latency_ms = 0.0;
 #endif
 
         while (mission.state() == onboard::mission::LineFollowMissionState::LineFollow ||
@@ -2872,6 +2994,21 @@ int main(int argc, char** argv)
                 loop_start,
             });
             if (mission.state() != last_state) {
+                if (flight_log.enabled()) {
+                    const double elapsed_s =
+                        std::chrono::duration<double>(loop_start - mission_started_at).count();
+                    char event[320];
+                    std::snprintf(
+                        event,
+                        sizeof(event),
+                        "{\"t\":%.3f,\"type\":\"state\",\"from\":\"%s\","
+                        "\"to\":\"%s\",\"reason\":\"%s\"}",
+                        elapsed_s,
+                        toString(last_state),
+                        toString(mission.state()),
+                        onboard::logging::jsonEscape(mission.landingReason()).c_str());
+                    flight_log.logEvent(event);
+                }
                 std::cout << "[mission] " << toString(mission.state()) << "\n";
                 last_state = mission.state();
             }
@@ -2891,19 +3028,29 @@ int main(int argc, char** argv)
             bool use_marker_stick_scale = false;
             std::string hold_reason;
             if (mission.state() == onboard::mission::LineFollowMissionState::MarkerHover) {
-                if (rc_override_backend && marker_detected) {
-                    setpoint = marker_servo.update(
-                        marker_input,
-                        config.controller,
-                        config.rc_override,
-                        loop_start);
-                    use_marker_stick_scale = true;
-                    hold_reason = "marker_hover_recenter";
+                if (marker_detected) {
+                    // Keep the marker hover visually closed-loop, matching the
+                    // astroquad-onboard MarkerHover path.  Optical-flow
+                    // LOCAL_NED is only a relative, drifting estimate in the
+                    // GPS-denied setup, so it must not replace camera
+                    // re-centering while the marker is visible.
+                    if (rc_override_backend) {
+                        setpoint = marker_servo.update(
+                            marker_input,
+                            config.controller,
+                            config.rc_override,
+                            loop_start);
+                        use_marker_stick_scale = true;
+                    } else {
+                        marker_servo.reset();
+                        setpoint = controller.updateMarker(marker_input, altitude_input);
+                    }
+                    active_hold_anchor.reset();
                 } else {
                     marker_servo.reset();
                     setpoint = controller.stop(altitude_input);
                     use_local_hold = true;
-                    hold_reason = "marker_hover";
+                    hold_reason = "marker_hover_marker_lost";
                 }
             } else if (mission.state() == onboard::mission::LineFollowMissionState::MarkerApproach) {
                 if (marker_detected) {
@@ -2976,6 +3123,57 @@ int main(int argc, char** argv)
                 autopilot.sendBodyVelocity(toAutopilotCommand(setpoint));
             }
 
+            if (flight_log.enabled()) {
+                const double elapsed_s =
+                    std::chrono::duration<double>(loop_start - mission_started_at).count();
+                const auto& ap_state = autopilot.state();
+                char head[384];
+                std::snprintf(
+                    head,
+                    sizeof(head),
+                    "%.3f,%s,%s,%d,%.3f,%.4f,%.4f,%d,%d,%.4f,%.4f,%s,%d,",
+                    elapsed_s,
+                    toString(mission.state()),
+                    command_frame.c_str(),
+                    line_input.line_detected ? 1 : 0,
+                    line_input.confidence,
+                    line_input.center_error_norm,
+                    line_input.angle_error_rad,
+                    marker_detected ? 1 : 0,
+                    marker_is_centered ? 1 : 0,
+                    marker_input.center_error_x_norm,
+                    marker_input.center_error_y_norm,
+                    ap_state.mode_name.c_str(),
+                    ap_state.armed ? 1 : 0);
+                std::string row = head;
+                row += csvOptional(ap_state.distance_sensor_m, 3) + ',';
+                row += csvOptional(altitude_now, 3) + ',';
+                row += csvOptional(ap_state.local_x_m, 3) + ',';
+                row += csvOptional(ap_state.local_y_m, 3) + ',';
+                row += csvOptional(ap_state.local_z_m, 3) + ',';
+                row += csvOptional(ap_state.local_vx_mps, 3) + ',';
+                row += csvOptional(ap_state.local_vy_mps, 3) + ',';
+                row += csvOptional(ap_state.local_vz_mps, 3) + ',';
+                row += csvOptional(ap_state.attitude_yaw_rad, 4) + ',';
+                row += ap_state.optical_flow_quality
+                    ? std::to_string(*ap_state.optical_flow_quality) + ','
+                    : std::string(",");
+                row += csvOptional(ap_state.battery_voltage_v, 2) + ',';
+                char tail[192];
+                std::snprintf(
+                    tail,
+                    sizeof(tail),
+                    "%.4f,%.4f,%.4f,%.4f,%.2f,%.2f",
+                    setpoint.vx_forward_mps,
+                    setpoint.vy_right_mps,
+                    setpoint.vz_down_mps,
+                    setpoint.yaw_rate_rad_s,
+                    last_read_frame_ms,
+                    last_processing_latency_ms);
+                row += tail;
+                flight_log.logFrame(elapsed_s, std::move(row));
+            }
+
             if (loop_start - last_control_log >= std::chrono::seconds(1)) {
                 const auto& ap_state = autopilot.state();
                 std::cout << "[control] state=" << toString(mission.state())
@@ -3028,6 +3226,16 @@ int main(int argc, char** argv)
         if (operator_takeover) {
             std::cerr << "[mission] ABORT reason=" << mission.landingReason() << "\n";
             std::cerr << "[safety] operator takeover detected; not sending LAND or velocity commands\n";
+            if (flight_log.enabled()) {
+                const double elapsed_s = std::chrono::duration<double>(
+                    Clock::now() - mission_started_at).count();
+                flight_log.logEvent(
+                    "{\"t\":" + std::to_string(elapsed_s) +
+                    ",\"type\":\"run_end\",\"reason\":\"operator_takeover\","
+                    "\"final_state\":\"ABORT\",\"dropped_log_lines\":" +
+                    std::to_string(flight_log.droppedLines()) + "}");
+                flight_log.close();
+            }
             if (rc_override_backend) {
                 rc_override_guard.releaseNoThrow();
                 std::cerr << "[safety] RC override release sent\n";
@@ -3087,6 +3295,14 @@ int main(int argc, char** argv)
             autopilot.setLandMode(std::chrono::seconds(10));
         }
         const auto landing_started_at = Clock::now();
+        if (flight_log.enabled()) {
+            const double elapsed_s = std::chrono::duration<double>(
+                landing_started_at - mission_started_at).count();
+            flight_log.logEvent(
+                "{\"t\":" + std::to_string(elapsed_s) +
+                ",\"type\":\"landing_start\",\"reason\":\"" +
+                onboard::logging::jsonEscape(mission.landingReason()) + "\"}");
+        }
         const auto disarm_deadline = landing_started_at + std::chrono::seconds(90);
         bool disarmed = false;
         bool land_mode_requested = !landing_anchor;
@@ -3101,6 +3317,10 @@ int main(int argc, char** argv)
         while (Clock::now() < disarm_deadline) {
             const auto loop_start = Clock::now();
             autopilot.poll(1);
+            std::string landing_command_frame = land_mode_requested
+                ? "land_mode"
+                : "local_descent";
+            float landing_cmd_vz = 0.0f;
 #if defined(ONBOARD_LINE_FOLLOW_HAS_VISION)
             const bool skip_landing_video =
                 land_mode_requested && touchdownLikely(autopilot.state());
@@ -3147,6 +3367,7 @@ int main(int argc, char** argv)
                     descent_mps = 0.10f;
                 }
                 sendAnchoredDescentSetpoint(autopilot, *landing_anchor, descent_mps);
+                landing_cmd_vz = descent_mps;
             } else if (land_mode_requested && touchdownLikely(autopilot.state())) {
                 if (touchdown_stable_since.time_since_epoch().count() == 0) {
                     touchdown_stable_since = loop_start;
@@ -3171,6 +3392,42 @@ int main(int argc, char** argv)
                 }
             } else {
                 touchdown_stable_since = Clock::time_point {};
+            }
+            if (flight_log.enabled()) {
+                const double elapsed_s = std::chrono::duration<double>(
+                    loop_start - mission_started_at).count();
+                const auto& ap_state = autopilot.state();
+                char head[256];
+                std::snprintf(
+                    head,
+                    sizeof(head),
+                    "%.3f,LAND,%s,0,0.000,0.0000,0.0000,0,0,0.0000,0.0000,%s,%d,",
+                    elapsed_s,
+                    landing_command_frame.c_str(),
+                    ap_state.mode_name.c_str(),
+                    ap_state.armed ? 1 : 0);
+                std::string row = head;
+                row += csvOptional(ap_state.distance_sensor_m, 3) + ',';
+                row += csvOptional(autopilot.bestAltitudeM(), 3) + ',';
+                row += csvOptional(ap_state.local_x_m, 3) + ',';
+                row += csvOptional(ap_state.local_y_m, 3) + ',';
+                row += csvOptional(ap_state.local_z_m, 3) + ',';
+                row += csvOptional(ap_state.local_vx_mps, 3) + ',';
+                row += csvOptional(ap_state.local_vy_mps, 3) + ',';
+                row += csvOptional(ap_state.local_vz_mps, 3) + ',';
+                row += csvOptional(ap_state.attitude_yaw_rad, 4) + ',';
+                row += ap_state.optical_flow_quality
+                    ? std::to_string(*ap_state.optical_flow_quality) + ','
+                    : std::string(",");
+                row += csvOptional(ap_state.battery_voltage_v, 2) + ',';
+                char tail[128];
+                std::snprintf(
+                    tail,
+                    sizeof(tail),
+                    "0.0000,0.0000,%.4f,0.0000,0.00,0.00",
+                    landing_cmd_vz);
+                row += tail;
+                flight_log.logFrame(elapsed_s, std::move(row));
             }
             std::this_thread::sleep_until(loop_start + period);
         }
@@ -3206,6 +3463,16 @@ int main(int argc, char** argv)
 #endif
         mission.markComplete();
         std::cout << "[mission] COMPLETE\n";
+        if (flight_log.enabled()) {
+            const double elapsed_s = std::chrono::duration<double>(
+                Clock::now() - mission_started_at).count();
+            flight_log.logEvent(
+                "{\"t\":" + std::to_string(elapsed_s) +
+                ",\"type\":\"run_end\",\"reason\":\"mission_complete\","
+                "\"final_state\":\"COMPLETE\",\"dropped_log_lines\":" +
+                std::to_string(flight_log.droppedLines()) + "}");
+            flight_log.close();
+        }
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "[error] " << error.what() << "\n";
