@@ -1,5 +1,7 @@
 # Astroquad Gazebo Assets
 
+Last verified against the current `astroquad-onboard` runtime: 2026-07-18.
+
 This directory contains Astroquad-owned Gazebo worlds, models, and textures for
 vision, line-follow, and grid-mission SITL testing.
 

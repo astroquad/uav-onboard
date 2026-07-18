@@ -1,5 +1,8 @@
 # astroquad-onboard 아키텍처 개요
 
+> 현재 소스 기준 검토: 2026-07-18. 실비행 운영 절차와 로그 기반 수정 흐름은
+> [`../development-log/REAL_FLIGHT_ONBOARDING.md`](../development-log/REAL_FLIGHT_ONBOARDING.md)를 따른다.
+
 이 문서는 `astroquad-onboard` 실행 파일이 어떻게 구성되어 있고, 한 프레임이
 입력에서 모터 명령까지 어떤 경로로 흘러가는지를 처음 읽는 사람이 한눈에
 파악할 수 있도록 정리한 코드 리딩 가이드다.

@@ -2,6 +2,10 @@
 
 Onboard software for the Astroquad indoor/grid UAV search mission.
 
+Operational documentation verified against the 2026-07-18 source/config
+baseline. For the Korean real-flight handover and log-to-Codex workflow, see
+[`../development-log/REAL_FLIGHT_ONBOARDING.md`](../development-log/REAL_FLIGHT_ONBOARDING.md).
+
 Current target hardware (2026-07 upgrade, ~2.1 kg TOW):
 
 - Airframe: Holybro S500 V2 frame kit + companion mounting plate
@@ -89,23 +93,25 @@ gain = 0.0
 
 [debug_video]
 enabled = false
-send_fps = 0       # 0 = every processed frame; >0 caps the rate
-jpeg_quality = 60
+send_fps = 12      # LTE-sized default; 0 = every processed frame
+jpeg_quality = 55
 chunk_pacing_us = 150
-send_width = 728   # downscale for the GCS link (0 = camera JPEG untouched)
+send_width = 600   # downscale for the GCS link (0 = camera JPEG untouched)
 send_height = 0    # 0 keeps the aspect ratio
+fec_group_size = 4 # XOR parity: recover one lost chunk per group
 ```
 
-Debug video is downscaled to 728x544 and re-encoded at `jpeg_quality` on the
-sender's worker thread (roughly 4-5 Mbit/s at the full ~24 fps processing
-rate); the vision/mission loop never pays for the resize or encode. GCS
+Debug video is downscaled to 600px width and re-encoded at `jpeg_quality` on
+the sender's worker thread. The shipped 12fps/q55/FEC profile plus 6fps
+telemetry measures roughly 2.1-2.2 Mbit/s; the vision/mission loop never pays
+for the resize or encode. GCS
 overlays stay aligned because telemetry coordinates remain in camera pixel
 space and the GCS scales them. Set `send_width`/`send_height` to 0 to forward
 the full-resolution camera JPEG unchanged.
 
-`send_fps = 0` forwards every processed frame (matches the vision rate). Set
-a positive value, or pass `--fps <n>`, to cap the send rate for a constrained
-link. The cap is clamped to the camera FPS (24), so `--fps 30` still sends 24.
+`send_fps = 0` is the LAN-only every-frame mode. The shipped positive value,
+or `--fps <n>`, caps the rate for the real link. The cap is clamped to the
+camera FPS (24), so `--fps 30` still sends 24.
 
 The IMX296 is a mono global-shutter sensor with a fixed-focus CS-mount lens:
 there are no autofocus/AWB controls, frames are decoded grayscale end-to-end,
@@ -518,48 +524,17 @@ fallback disappear briefly, `line_follow_node` captures a LOCAL_NED anchor for
 a short hold; the existing mission timeout then requests LAND if vision does
 not recover.
 
-Line-follow only ALT_HOLD + RC override experiment path:
+### Retired RC-override experiment
 
-```bash
-./build/line_follow_node --config config --target ardupilot_serial \
-  --vision rpicam --line-mode light_on_dark --video \
-  --control-backend alt_hold_rc_override --alt-hold-auto-takeoff \
-  --allow-rc-override --allow-arm-takeoff \
-  --unsafe-assume-rc-present
-```
-
-This backend is intentionally limited to `line_follow_node`. With
-`--alt-hold-auto-takeoff`, it requests ALT_HOLD, arms, climbs with
-`RC_CHANNELS_OVERRIDE` throttle, settles at neutral throttle, then sends small
-roll/pitch/yaw override inputs for line following. The `[rc_override]`
-marker servo settings are only used by this backend; they give marker centering
-separate roll/pitch scaling so line following can stay gentle while marker
-braking is stronger. On exit, takeover, or landing it releases the override.
-Use this no-arm smoke first with props
-removed and Mission Planner's radio view open:
-
-```bash
-./build/line_follow_node --config config --target ardupilot_serial \
-  --rc-override-smoke --allow-rc-override
-```
-
-If the real RC receiver works through ArduPilot but MAVLink `RC_CHANNELS` is
-not visible to onboard, `--unsafe-assume-rc-present` bypasses only the onboard
-RC gate. ArduPilot pre-arm checks still apply, and the transmitter mode switch
-must be verified to take over before using this flag.
-
-For a short video-only line-follow sanity check, omit `--mavlink-smoke` and do
-not pass `--alt-hold-auto-takeoff`; stop with Ctrl+C after confirming frames:
-
-```bash
-./build/line_follow_node --config config --target ardupilot_serial \
-  --vision rpicam --line-mode light_on_dark --video --fps 12 \
-  --control-backend alt_hold_rc_override \
-  --allow-rc-override --unsafe-assume-rc-present
-```
+The former `ALT_HOLD + RC_CHANNELS_OVERRIDE` backend is retired and must not be
+flown on the current 2.1 kg/4S platform. It bypasses EKF position stabilization,
+conflicts with RC failsafe assumptions, and its PWM constants were tuned for
+the retired 1.5 kg/3S airframe. The only supported flight-control path is
+GUIDED body-frame velocity. Old flags remain only as historical code/config
+references while cleanup is completed; they are not an operational recipe.
 
 During `line_follow_node`, Ctrl+C/SIGTERM is handled as a safety land request:
-the node releases RC override, requests LAND mode, and requests disarm only
+the node requests LAND mode and requests disarm only
 after touchdown is likely. Use the transmitter takeover/disarm path first in an
 emergency; Ctrl+C depends on the Raspberry Pi process and MAVLink link still
 being alive.
@@ -570,19 +545,19 @@ serial endpoint with `--autopilot serial:///dev/serial0:115200` if needed:
 
 ```bash
 ./build/astroquad-onboard --config config --target ardupilot_serial \
-  --line-mode light_on_dark --marker-count 4 --revisit-order asc \
+  --line-mode light_on_dark --marker-count 4 --revisit-order desc \
   --video --allow-arm-takeoff
 ```
 
-By default the downscaled stream is sent at the full processing rate
-(~24 fps). Pass `--fps <n>` to cap it (e.g. `--fps 12`) on a constrained
-link; video/telemetry stay strictly best-effort either way.
+The real runtime profile defaults to the LTE-sized 12fps/q55/600px stream and
+6fps telemetry. Lower `--fps` only after observing link saturation; raise it
+only after measuring a faster path. Video/telemetry stay strictly best-effort.
 
 Do not run real serial mission paths until RC takeover, battery telemetry,
 MTF-01 optical-flow/range local estimate, motor order, prop direction, and a
 manual hover have been verified. Both real mission nodes require a fresh
-MAVLink RC signal and optical-flow local estimate before arm/takeoff; use
-`--unsafe-assume-rc-present` only for deliberate RC-gate debugging.
+MAVLink RC signal and optical-flow local estimate before arm/takeoff. Do not
+bypass the RC gate for operational flights.
 
 ## Offline Vision Tools
 

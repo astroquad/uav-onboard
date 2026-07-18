@@ -1,7 +1,8 @@
 # Astroquad Onboard-GCS Protocol
 
 Version: v1.13
-Last updated: 2026-07-07
+Last protocol change: 2026-07-07. Last verified against both repositories:
+2026-07-18.
 This file must stay identical in `uav-onboard/docs/PROTOCOL.md` and `uav-gcs/docs/PROTOCOL.md`.
 
 `protocol_version` in JSON remains integer `1`. The document version changes
